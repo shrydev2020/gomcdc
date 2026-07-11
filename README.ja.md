@@ -40,5 +40,4 @@ go vet ./...
 
 ## ライセンス
 
-このrepositoryにはlicense fileがありません。再配布・改変の条件は、
-repository所有者がlicenseを追加するまで定義されません。
+MIT Licenseです。詳細は [LICENSE](LICENSE) を参照してください。

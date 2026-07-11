@@ -39,5 +39,4 @@ go vet ./...
 
 ## License
 
-No license file is present in this repository. Redistribution and modification
-rights are therefore not defined here.
+MIT. See [LICENSE](LICENSE).
