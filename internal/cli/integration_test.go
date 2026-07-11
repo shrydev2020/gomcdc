@@ -36,10 +36,13 @@ func TestIntegratedFixtureWritesPackageCenteredHTML(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range [][]byte{[]byte("Package navigation"), []byte("example.test/gocoverage-fixture/allow"), []byte("allow/allow.go"), []byte("Allow"), []byte("a &amp;&amp; b"), []byte("UC MC/DC"), []byte("Mask MC/DC"), []byte("Masking witness")} {
+	for _, required := range [][]byte{[]byte("Package navigation"), []byte("example.test/gocoverage-fixture/allow"), []byte("allow/allow.go"), []byte("Allow"), []byte("Original source"), []byte("source-code"), []byte("metric-condition"), []byte("a &amp;&amp; b"), []byte("UC MC/DC"), []byte("Mask MC/DC"), []byte("Masking witness")} {
 		if !bytes.Contains(contents, required) {
 			t.Errorf("HTML missing %q", required)
 		}
+	}
+	if bytes.Contains(contents, []byte("<script")) || bytes.Contains(contents, []byte("src=\"http")) {
+		t.Fatal("HTML report must not execute scripts or load external resources")
 	}
 }
 

@@ -271,7 +271,7 @@ func writeSummary(output *strings.Builder, indent string, summary Summary) {
 func writeMetricInline(output *strings.Builder, metric MetricSummary) {
 	fmt.Fprintf(
 		output,
-		"enabled=%t %d/%d (%s) unsupported=%d unknown=%d possibly-infeasible=%d",
+		"enabled=%t %d/%d (%s) unsupported=%d unknown=%d infeasible=%d",
 		metric.Enabled,
 		metric.Covered,
 		metric.Total,

@@ -264,10 +264,8 @@ func CanonicalKey(metadata cover.DecisionMetadata) string {
 		metadata.ModulePath,
 		metadata.Package,
 		filepath.ToSlash(metadata.Location.File),
-		strconv.Itoa(metadata.Location.Start.Line),
-		strconv.Itoa(metadata.Location.Start.Column),
-		strconv.Itoa(metadata.Location.End.Line),
-		strconv.Itoa(metadata.Location.End.Column),
+		strconv.Itoa(metadata.Location.StartOffset),
+		strconv.Itoa(metadata.Location.EndOffset),
 		string(metadata.Kind),
 	}
 	return strings.Join(fields, "\x00")
@@ -280,10 +278,8 @@ func ClauseCanonicalKey(metadata cover.ClauseMetadata) string {
 		metadata.ModulePath,
 		metadata.Package,
 		filepath.ToSlash(metadata.Location.File),
-		strconv.Itoa(metadata.Location.Start.Line),
-		strconv.Itoa(metadata.Location.Start.Column),
-		strconv.Itoa(metadata.Location.End.Line),
-		strconv.Itoa(metadata.Location.End.Column),
+		strconv.Itoa(metadata.Location.StartOffset),
+		strconv.Itoa(metadata.Location.EndOffset),
 		string(metadata.Kind),
 		string(metadata.Role),
 		strconv.Itoa(int(metadata.Index)),
@@ -412,9 +408,11 @@ func (visitor decisionVisitor) addDecision(kind cover.DecisionKind, condition as
 		ModulePath: visitor.context.modulePath,
 		Package:    visitor.context.packagePath,
 		Location: cover.SourceLocation{
-			File:  visitor.context.relative,
-			Start: cover.Position{Line: start.Line, Column: start.Column},
-			End:   cover.Position{Line: end.Line, Column: end.Column},
+			File:        visitor.context.relative,
+			Start:       cover.Position{Line: start.Line, Column: start.Column},
+			End:         cover.Position{Line: end.Line, Column: end.Column},
+			StartOffset: start.Offset,
+			EndOffset:   end.Offset,
 		},
 		Function:         function,
 		FunctionLocation: visitor.functionLocation,
@@ -475,9 +473,11 @@ func (visitor decisionVisitor) conditions(expression ast.Expr) ([]Condition, *co
 			Index:      index,
 			Expression: formatExpression(visitor.context.fset, current),
 			Location: cover.SourceLocation{
-				File:  visitor.context.relative,
-				Start: cover.Position{Line: position.Line, Column: position.Column},
-				End:   cover.Position{Line: end.Line, Column: end.Column},
+				File:        visitor.context.relative,
+				Start:       cover.Position{Line: position.Line, Column: position.Column},
+				End:         cover.Position{Line: end.Line, Column: end.Column},
+				StartOffset: position.Offset,
+				EndOffset:   end.Offset,
 			},
 		}
 		conditions = append(conditions, Condition{
@@ -593,9 +593,11 @@ func (visitor decisionVisitor) addClause(
 		Role:             role,
 		Index:            index,
 		Location: cover.SourceLocation{
-			File:  visitor.context.relative,
-			Start: cover.Position{Line: start.Line, Column: start.Column},
-			End:   cover.Position{Line: end.Line, Column: end.Column},
+			File:        visitor.context.relative,
+			Start:       cover.Position{Line: start.Line, Column: start.Column},
+			End:         cover.Position{Line: end.Line, Column: end.Column},
+			StartOffset: start.Offset,
+			EndOffset:   end.Offset,
 		},
 	}
 	for _, expression := range expressions {

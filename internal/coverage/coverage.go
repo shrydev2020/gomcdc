@@ -38,6 +38,10 @@ type SourceLocation struct {
 	File  string   `json:"file"`
 	Start Position `json:"start"`
 	End   Position `json:"end"`
+	// Offsets are byte offsets in the original, uninstrumented source. They
+	// are internal identity data; line/column remains the public display form.
+	StartOffset int `json:"-"`
+	EndOffset   int `json:"-"`
 }
 
 // ClauseKind identifies the control construct whose clause body execution is
@@ -195,14 +199,12 @@ type DecisionMetadata struct {
 // retained so callers can detect the extremely unlikely event of a hash
 // collision instead of silently merging unrelated decisions.
 func (d DecisionMetadata) StableKey() string {
-	return fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%d\x00%d\x00%d\x00%s",
+	return fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%d\x00%s",
 		d.ModulePath,
 		d.Package,
 		d.Location.File,
-		d.Location.Start.Line,
-		d.Location.Start.Column,
-		d.Location.End.Line,
-		d.Location.End.Column,
+		d.Location.StartOffset,
+		d.Location.EndOffset,
 		d.Kind,
 	)
 }
@@ -316,11 +318,37 @@ const (
 type CoverageStatus string
 
 const (
-	CoverageCovered            CoverageStatus = "covered"
-	CoverageNotCovered         CoverageStatus = "not covered"
-	CoverageUnsupported        CoverageStatus = "unsupported"
-	CoverageUnknown            CoverageStatus = "unknown"
-	CoveragePossiblyInfeasible CoverageStatus = "possibly infeasible"
+	CoverageCovered     CoverageStatus = "covered"
+	CoverageNotCovered  CoverageStatus = "not covered"
+	CoverageUnsupported CoverageStatus = "unsupported"
+	CoverageUnknown     CoverageStatus = "unknown"
+	CoveragePossiblyInfeasible CoverageStatus = "infeasible"
+)
+
+// CoverageOutcome describes only whether an applicable obligation was
+// observed. It is independent from backend support and analysis completeness.
+type CoverageOutcome string
+
+const (
+	CoverageOutcomeCovered    CoverageOutcome = "covered"
+	CoverageOutcomeNotCovered CoverageOutcome = "not covered"
+	CoverageOutcomeUnknown    CoverageOutcome = "unknown"
+)
+
+type SupportStatus string
+
+const (
+	SupportSupported   SupportStatus = "supported"
+	SupportUnsupported SupportStatus = "unsupported"
+	SupportUnknown     SupportStatus = "unknown"
+)
+
+type AnalysisStatus string
+
+const (
+	AnalysisComplete   AnalysisStatus = "complete"
+	AnalysisIncomplete AnalysisStatus = "incomplete"
+	AnalysisInfeasible AnalysisStatus = "infeasible"
 )
 
 // CoverageCount carries the numerator and denominator plus categories that are
@@ -356,17 +384,23 @@ type MCDCWitness struct {
 
 // MCDCConditionResult records coverage and evidence for one atomic condition.
 type MCDCConditionResult struct {
-	ConditionIndex uint16         `json:"conditionIndex"`
-	Status         CoverageStatus `json:"status"`
-	Witness        *MCDCWitness   `json:"witness,omitempty"`
-	Reason         string         `json:"reason,omitempty"`
+	ConditionIndex uint16          `json:"conditionIndex"`
+	Status         CoverageStatus  `json:"-"`
+	Outcome        CoverageOutcome `json:"outcome"`
+	Support        SupportStatus   `json:"support"`
+	Analysis       AnalysisStatus  `json:"analysis"`
+	Witness        *MCDCWitness    `json:"witness,omitempty"`
+	Reason         string          `json:"reason,omitempty"`
 }
 
 // MCDCResult is a strategy-specific, decision-level analysis result.
 type MCDCResult struct {
 	DecisionID          DecisionID            `json:"decisionId"`
 	Metric              CoverageMetric        `json:"metric"`
-	Status              CoverageStatus        `json:"status"`
+	Status              CoverageStatus        `json:"-"`
+	Outcome             CoverageOutcome       `json:"outcome"`
+	Support             SupportStatus         `json:"support"`
+	Analysis            AnalysisStatus        `json:"analysis"`
 	Conditions          []MCDCConditionResult `json:"conditions"`
 	EvaluationsAnalyzed int                   `json:"evaluationsAnalyzed"`
 	AbortedEvaluations  int                   `json:"abortedEvaluations,omitempty"`

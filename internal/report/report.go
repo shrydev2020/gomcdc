@@ -30,6 +30,7 @@ const (
 // to build an integrated report.
 type Input struct {
 	ModulePath            string
+	SourceFiles           []SourceFileInput
 	Coverage              config.CoverageSet
 	Decisions             []cover.DecisionMetadata
 	Evaluations           []cover.DecisionEvaluation
@@ -100,7 +101,9 @@ type Summary struct {
 	MCDCMasking               MetricSummary `json:"mcdcMasking"`
 }
 
-// MetricSummary contains denominator-based coverage and special states. Unsupported, unknown, aborted, and possibly infeasible states are excluded from Total.
+// MetricSummary contains denominator-based coverage and orthogonal analysis
+// states. Unsupported, unknown, and infeasible obligations are excluded from
+// Total and reported separately.
 type MetricSummary struct {
 	Enabled            bool     `json:"enabled"`
 	Covered            int      `json:"covered"`
@@ -108,7 +111,7 @@ type MetricSummary struct {
 	Percentage         *float64 `json:"percentage"`
 	Unsupported        int      `json:"unsupported"`
 	Unknown            int      `json:"unknown"`
-	PossiblyInfeasible int      `json:"possiblyInfeasible"`
+	PossiblyInfeasible int      `json:"infeasible"`
 }
 
 // PackageReport contains one package's status, evidence marker, and hierarchy.
@@ -125,6 +128,7 @@ type FileReport struct {
 	Path      string           `json:"path"`
 	Summary   Summary          `json:"summary"`
 	Functions []FunctionReport `json:"functions"`
+	Source    *SourceFileView  `json:"-"`
 }
 
 // FunctionReport contains statements, decisions, and selectable clauses.
@@ -186,6 +190,9 @@ type ConditionReport struct {
 type MCDCAnalysisReport struct {
 	Enabled             bool                  `json:"enabled"`
 	Status              string                `json:"status"`
+	Outcome             string                `json:"outcome"`
+	Support             string                `json:"support"`
+	Analysis            string                `json:"analysis"`
 	Metric              MetricSummary         `json:"metric"`
 	EvaluationsAnalyzed int                   `json:"evaluationsAnalyzed"`
 	AbortedEvaluations  int                   `json:"abortedEvaluations"`
@@ -196,10 +203,13 @@ type MCDCAnalysisReport struct {
 
 // MCDCConditionReport is one condition's strategy status and witness.
 type MCDCConditionReport struct {
-	Index   uint16         `json:"index"`
-	Status  string         `json:"status"`
-	Reason  string         `json:"reason"`
-	Witness *WitnessReport `json:"witness"`
+	Index    uint16         `json:"index"`
+	Status   string         `json:"status"`
+	Outcome  string         `json:"outcome"`
+	Support  string         `json:"support"`
+	Analysis string         `json:"analysis"`
+	Reason   string         `json:"reason"`
+	Witness  *WitnessReport `json:"witness"`
 }
 
 // WitnessReport contains the pair and any masking completion evidence.
@@ -352,6 +362,14 @@ func Build(input Input) Report {
 	for packagePath := range input.PackageStatuses {
 		ensurePackageBuilder(builders, packagePath, input)
 	}
+	for _, source := range input.SourceFiles {
+		builder := ensurePackageBuilder(builders, source.PackagePath, input)
+		if _, exists := builder.files[source.Path]; !exists {
+			builder.files[source.Path] = &fileBuilder{
+				path: source.Path, functions: make(map[string]*functionBuilder),
+			}
+		}
+	}
 	if input.C0 != nil {
 		for _, packageReport := range input.C0.Packages {
 			if packageReport.Evidence && !input.C0EvidenceIntegrityUnknown {
@@ -419,6 +437,7 @@ func Build(input Input) Report {
 		report.Packages = append(report.Packages, packageReport)
 		addSummary(&report.Summary, packageReport.Summary)
 	}
+	attachSourceViews(&report, input)
 	return report
 }
 
@@ -785,7 +804,9 @@ func buildMCDCAnalysis(
 			addCoverageStatus(&report.Metric, cover.CoverageStatus(status), 1)
 		}
 		report.Conditions = append(report.Conditions, MCDCConditionReport{
-			Index: condition.Index, Status: status, Reason: reason, Witness: witness,
+			Index: condition.Index, Status: status, Outcome: statusOutcome(status),
+			Support: statusSupport(status), Analysis: statusAnalysis(status),
+			Reason: reason, Witness: witness,
 		})
 	}
 	if enabled {
@@ -799,6 +820,9 @@ func buildMCDCAnalysis(
 		default:
 			report.Status = string(result.Status)
 		}
+		report.Outcome = statusOutcome(report.Status)
+		report.Support = statusSupport(report.Status)
+		report.Analysis = statusAnalysis(report.Status)
 	}
 	return report
 }
@@ -1177,6 +1201,43 @@ func mcdcCondition(analysis MCDCAnalysisReport, index uint16) MCDCConditionRepor
 		}
 	}
 	return MCDCConditionReport{Index: index, Status: statusDisabled}
+}
+
+func statusOutcome(status string) string {
+	switch status {
+	case string(cover.CoverageCovered):
+		return string(cover.CoverageOutcomeCovered)
+	case string(cover.CoverageNotCovered):
+		return string(cover.CoverageOutcomeNotCovered)
+	case string(cover.CoveragePossiblyInfeasible):
+		return string(cover.CoverageOutcomeNotCovered)
+	default:
+		return string(cover.CoverageOutcomeUnknown)
+	}
+}
+
+func statusSupport(status string) string {
+	switch status {
+	case string(cover.CoverageUnsupported):
+		return string(cover.SupportUnsupported)
+	case statusDisabled:
+		return string(cover.SupportUnknown)
+	default:
+		return string(cover.SupportSupported)
+	}
+}
+
+func statusAnalysis(status string) string {
+	switch status {
+	case string(cover.CoveragePossiblyInfeasible):
+		return string(cover.AnalysisInfeasible)
+	case string(cover.CoverageUnknown):
+		return string(cover.AnalysisIncomplete)
+	case statusDisabled:
+		return string(cover.AnalysisIncomplete)
+	default:
+		return string(cover.AnalysisComplete)
+	}
 }
 
 func supportedClause(metadata cover.ClauseMetadata) bool {

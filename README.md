@@ -44,6 +44,11 @@ gocoverage test --format html --output coverage-html ./...
 
 The HTML report entry point is `coverage-html/index.html`.
 
+Each file page shows the original source bytes with byte-range annotations for
+statement, decision, condition, clause, and both MC/DC strategies. The
+Statement, Decision, Condition, and Combined views are CSS-only; the report
+does not load JavaScript or external resources.
+
 The draft specification defines the final CLI.
 
 Until implementation conformance is complete, use `gocoverage test -h` to inspect the behavior of the checked-out revision.

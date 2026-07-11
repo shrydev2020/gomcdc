@@ -369,6 +369,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 
 	input := report.Input{
 		ModulePath:                  loaded.ModulePath,
+		SourceFiles:                 sourceFileInputs(sources),
 		Coverage:                    opts.metrics,
 		Decisions:                   decisions,
 		Evaluations:                 collection.Evaluations,
@@ -429,6 +430,18 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		return ExitCoverageThreshold
 	}
 	return ExitSuccess
+}
+
+func sourceFileInputs(sources []sourceInstrumentation) []report.SourceFileInput {
+	result := make([]report.SourceFileInput, 0, len(sources))
+	for _, source := range sources {
+		result = append(result, report.SourceFileInput{
+			PackagePath: source.loaded.PackagePath,
+			Path:        source.analysis.RelativePath,
+			Source:      append([]byte(nil), source.analysis.Source...),
+		})
+	}
+	return result
 }
 
 type packageInstrumentation struct {
@@ -957,16 +970,34 @@ func writeReport(opts options, input report.Input, workingDir string, stdout io.
 			return fmt.Errorf("create HTML report directory %q: %w", outputDir, err)
 		}
 		outputPath := filepath.Join(outputDir, "index.html")
-		file, err := os.OpenFile(outputPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+		file, err := os.CreateTemp(outputDir, ".index.html-*")
 		if err != nil {
-			return fmt.Errorf("create HTML report %q: %w", outputPath, err)
+			return fmt.Errorf("create temporary HTML report in %q: %w", outputDir, err)
+		}
+		tempPath := file.Name()
+		cleanup := func() {
+			_ = file.Close()
+			_ = os.Remove(tempPath)
 		}
 		if err := report.WriteHTML(file, input); err != nil {
-			_ = file.Close()
+			cleanup()
 			return err
 		}
+		if err := file.Sync(); err != nil {
+			cleanup()
+			return fmt.Errorf("sync HTML report %q: %w", tempPath, err)
+		}
 		if err := file.Close(); err != nil {
+			_ = os.Remove(tempPath)
 			return fmt.Errorf("close HTML report %q: %w", outputPath, err)
+		}
+		if err := os.Chmod(tempPath, 0o644); err != nil {
+			_ = os.Remove(tempPath)
+			return fmt.Errorf("set HTML report permissions %q: %w", tempPath, err)
+		}
+		if err := os.Rename(tempPath, outputPath); err != nil {
+			_ = os.Remove(tempPath)
+			return fmt.Errorf("publish HTML report %q: %w", outputPath, err)
 		}
 		return nil
 	}

@@ -79,6 +79,7 @@ func ValidateCompletedEvaluation(metadata cover.DecisionMetadata, evaluation cov
 func (UniqueCauseStrategy) Analyze(metadata cover.DecisionMetadata, evaluations []cover.DecisionEvaluation) cover.MCDCResult {
 	count, indexes, issue := conditionLayout(metadata, evaluations)
 	result := baseResult(metadata.ID, cover.CoverageMetricMCDCUnique, indexes)
+	defer enrichResult(&result)
 	if issue != nil {
 		applyIssue(&result, issue)
 		return result
@@ -143,6 +144,7 @@ func (UniqueCauseStrategy) Analyze(metadata cover.DecisionMetadata, evaluations 
 func (MaskingStrategy) Analyze(metadata cover.DecisionMetadata, evaluations []cover.DecisionEvaluation) cover.MCDCResult {
 	count, indexes, issue := conditionLayout(metadata, evaluations)
 	result := baseResult(metadata.ID, cover.CoverageMetricMCDCMasking, indexes)
+	defer enrichResult(&result)
 	if issue != nil {
 		applyIssue(&result, issue)
 		return result
@@ -1001,5 +1003,28 @@ func finishResult(result *cover.MCDCResult) {
 		}
 	default:
 		result.Status = cover.CoverageNotCovered
+	}
+}
+
+func enrichResult(result *cover.MCDCResult) {
+	result.Outcome, result.Support, result.Analysis = decomposeStatus(result.Status)
+	for index := range result.Conditions {
+		result.Conditions[index].Outcome, result.Conditions[index].Support, result.Conditions[index].Analysis =
+			decomposeStatus(result.Conditions[index].Status)
+	}
+}
+
+func decomposeStatus(status cover.CoverageStatus) (cover.CoverageOutcome, cover.SupportStatus, cover.AnalysisStatus) {
+	switch status {
+	case cover.CoverageCovered:
+		return cover.CoverageOutcomeCovered, cover.SupportSupported, cover.AnalysisComplete
+	case cover.CoverageNotCovered:
+		return cover.CoverageOutcomeNotCovered, cover.SupportSupported, cover.AnalysisComplete
+	case cover.CoverageUnsupported:
+		return cover.CoverageOutcomeUnknown, cover.SupportUnsupported, cover.AnalysisComplete
+	case cover.CoveragePossiblyInfeasible:
+		return cover.CoverageOutcomeNotCovered, cover.SupportSupported, cover.AnalysisInfeasible
+	default:
+		return cover.CoverageOutcomeUnknown, cover.SupportUnknown, cover.AnalysisIncomplete
 	}
 }

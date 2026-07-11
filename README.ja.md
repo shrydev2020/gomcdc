@@ -44,6 +44,11 @@ gocoverage test --format html --output coverage-html ./...
 
 HTML reportの入口は`coverage-html/index.html`です。
 
+各file pageには、元source bytesへstatement、decision、condition、clause、
+Unique-Cause MC/DC、Masking MC/DCのbyte-range annotationを重ねて表示します。
+Statement、Decision、Condition、Combinedの切替はCSSだけで行い、JavaScriptや
+外部resourceを読み込みません。
+
 最終的なCLIはdraft仕様で定義します。
 
 実装適合が完了するまでは、checkoutしたrevisionの挙動を`gocoverage test -h`で確認してください。
