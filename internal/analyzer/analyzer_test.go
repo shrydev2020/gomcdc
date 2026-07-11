@@ -171,14 +171,14 @@ func Evaluate(a, b, c bool, value any, ch chan int) {
 			}
 		}
 	}
-	if got, want := len(file.Clauses), 10; got != want {
+	if got, want := len(file.Clauses), 8; got != want {
 		t.Fatalf("len(Clauses) = %d, want %d: %#v", got, want, counts)
 	}
-	if counts[cover.ClauseConditionlessSwitch] != 3 || counts[cover.ClauseExpressionSwitch] != 3 || counts[cover.ClauseTypeSwitch] != 2 || counts[cover.ClauseSelect] != 2 {
+	if counts[cover.ClauseConditionlessSwitch] != 3 || counts[cover.ClauseExpressionSwitch] != 2 || counts[cover.ClauseTypeSwitch] != 1 || counts[cover.ClauseSelect] != 2 {
 		t.Errorf("clause kind counts = %#v", counts)
 	}
-	if roles[cover.ClauseNoMatch] != 2 {
-		t.Errorf("no-match selection obligations = %d, want 2", roles[cover.ClauseNoMatch])
+	if got, want := len(file.NoMatches), 2; got != want {
+		t.Errorf("no-match selection obligations = %d, want %d", got, want)
 	}
 	if conditionless == nil || len(conditionless.DecisionIDs) != 2 || len(conditionless.Metadata.DecisionIDs) != 2 {
 		t.Fatalf("conditionless clause = %#v", conditionless)

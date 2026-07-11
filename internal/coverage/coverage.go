@@ -17,6 +17,9 @@ type EvaluationID uint64
 type ClauseID uint64
 type ClauseGroupID uint64
 
+// SwitchID identifies one switch dispatch independently of its source clauses.
+type SwitchID uint64
+
 // DecisionKind identifies a boolean control-flow decision.
 type DecisionKind string
 
@@ -55,15 +58,27 @@ const (
 	ClauseConditionlessSwitch ClauseKind = "conditionless-switch"
 )
 
-// ClauseRole distinguishes an explicit case, explicit default, and a
-// synthetic no-match outcome. The AST backend does not create no-match clauses.
+// ClauseRole distinguishes explicit source clauses. A no-match selection is
+// represented by NoMatchMetadata and never by a synthetic ClauseMetadata.
 type ClauseRole string
 
 const (
 	ClauseCase    ClauseRole = "case"
 	ClauseDefault ClauseRole = "default"
-	ClauseNoMatch ClauseRole = "no-match"
 )
+
+// NoMatchMetadata is the selection obligation for a switch without default.
+// It has a SwitchID and source location, but no ClauseID because no source
+// clause was selected.
+type NoMatchMetadata struct {
+	SwitchID         SwitchID       `json:"switchId"`
+	ModulePath       string         `json:"modulePath"`
+	Package          string         `json:"package"`
+	Function         string         `json:"function"`
+	FunctionLocation SourceLocation `json:"functionLocation"`
+	Kind             ClauseKind     `json:"kind"`
+	Location         SourceLocation `json:"location"`
+}
 
 // ClauseMetadata describes one switch/type-switch/select source clause.
 // Expressions preserves the individual case expressions for future finer
@@ -73,6 +88,7 @@ const (
 type ClauseMetadata struct {
 	ID               ClauseID       `json:"id"`
 	GroupID          ClauseGroupID  `json:"groupId"`
+	SwitchID         SwitchID       `json:"switchId"`
 	ModulePath       string         `json:"modulePath"`
 	Package          string         `json:"package"`
 	Function         string         `json:"function"`
@@ -94,12 +110,14 @@ type ClauseEventKind string
 const (
 	ClauseDirectSelection ClauseEventKind = "direct-selection"
 	ClauseBodyExecution   ClauseEventKind = "body-execution"
+	ClauseNoMatchSelection ClauseEventKind = "no-match-selection"
 )
 
 // ClauseObservation is one runtime clause event. The formal AST metric uses
 // only body executions.
 type ClauseObservation struct {
-	ClauseID ClauseID        `json:"clauseId"`
+	SwitchID SwitchID        `json:"switchId,omitempty"`
+	ClauseID ClauseID        `json:"clauseId,omitempty"`
 	Event    ClauseEventKind `json:"event"`
 }
 
@@ -318,10 +336,10 @@ const (
 type CoverageStatus string
 
 const (
-	CoverageCovered     CoverageStatus = "covered"
-	CoverageNotCovered  CoverageStatus = "not covered"
-	CoverageUnsupported CoverageStatus = "unsupported"
-	CoverageUnknown     CoverageStatus = "unknown"
+	CoverageCovered            CoverageStatus = "covered"
+	CoverageNotCovered         CoverageStatus = "not covered"
+	CoverageUnsupported        CoverageStatus = "unsupported"
+	CoverageUnknown            CoverageStatus = "unknown"
 	CoveragePossiblyInfeasible CoverageStatus = "infeasible"
 )
 

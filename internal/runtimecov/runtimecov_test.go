@@ -127,6 +127,7 @@ func TestCollectDetailedRetainsValidEvidenceAndSynthesizesAbort(t *testing.T) {
 		`{"type":"begin","runId":"run-a","packagePath":"example.test/p","processId":101,"evaluationId":2,"decisionId":7,"conditionCount":2,"testId":"unknown"}`,
 		`{"type":"clause","runId":"run-a","packagePath":"example.test/p","processId":101,"clauseId":55,"event":"direct-selection"}`,
 		`{"type":"clause","runId":"run-a","packagePath":"example.test/p","processId":101,"clauseId":55,"event":"body-execution"}`,
+		`{"type":"clause","runId":"run-a","packagePath":"example.test/p","processId":101,"switchId":77,"event":"no-match-selection"}`,
 		`{"type":"terminal","unknown":1}`,
 	}, "\n") + "\n" + `{"type":"terminal"`
 	writeEventFile(t, dataDir, "fixture.jsonl", content)
@@ -146,7 +147,7 @@ func TestCollectDetailedRetainsValidEvidenceAndSynthesizesAbort(t *testing.T) {
 	if aborted.Status != cover.EvaluationAborted || aborted.Result {
 		t.Errorf("aborted = %#v", aborted)
 	}
-	if got := len(collected.Clauses); got != 2 || collected.Clauses[0].ClauseID != 55 || collected.Clauses[0].Event != cover.ClauseBodyExecution || collected.Clauses[1].Event != cover.ClauseDirectSelection {
+	if got := len(collected.Clauses); got != 3 || collected.Clauses[0].SwitchID != 77 || collected.Clauses[0].ClauseID != 0 || collected.Clauses[0].Event != cover.ClauseNoMatchSelection || collected.Clauses[1].ClauseID != 55 || collected.Clauses[1].Event != cover.ClauseBodyExecution || collected.Clauses[2].Event != cover.ClauseDirectSelection {
 		t.Errorf("clauses = %#v", collected.Clauses)
 	}
 	if got := collected.NotEvaluatedDecisions; len(got) != 1 || got[0].DecisionID != 8 || got[0].CauseDecisionID != 7 || got[0].CauseEvaluationID != 1 {

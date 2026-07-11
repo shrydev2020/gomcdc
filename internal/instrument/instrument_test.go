@@ -363,7 +363,7 @@ func (Hooks) Condition(_ uint64, _ uint16, value bool) bool { return value }
 func (Hooks) End(_ uint64, value bool) bool { return value }
 func (Hooks) EndSelect(_ uint64, value bool, _ ...uint64) bool { return value }
 func (Hooks) AbortSlots([]uint64) {}
-func (Hooks) SelectClause(uint64) {}
+func (Hooks) SelectClause(uint64, ...uint64) {}
 `)
 	analysis := analyze(t, originalPath, originalRoot, "example.com/fixture", "example.com/fixture/logic")
 	result, err := InstrumentPackage(PackageOptions{

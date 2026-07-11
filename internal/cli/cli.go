@@ -212,6 +212,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 
 	var decisions []cover.DecisionMetadata
 	var clauses []cover.ClauseMetadata
+	var noMatches []cover.NoMatchMetadata
 	for _, item := range sources {
 		for _, decision := range item.analysis.Decisions {
 			decisions = append(decisions, decision.Metadata)
@@ -219,6 +220,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		for _, clause := range item.analysis.Clauses {
 			clauses = append(clauses, clause.Metadata)
 		}
+		noMatches = append(noMatches, item.analysis.NoMatches...)
 	}
 
 	jsonMode := goTestJSONEnabled(opts.goTestArgs)
@@ -293,7 +295,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		integrityFailure = true
 		astEvidenceIntegrityUnknown = true
 	}
-	validatedCollection, validationErr := validateObservations(decisions, clauses, collection, runID)
+	validatedCollection, validationErr := validateObservations(decisions, clauses, collection, runID, noMatches)
 	collection = validatedCollection
 	if validationErr != nil {
 		fmt.Fprintf(stderr, "gocoverage: runtime coverage validation failed: %v\n", validationErr)
@@ -375,6 +377,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		Evaluations:                 collection.Evaluations,
 		NotEvaluatedDecisions:       collection.NotEvaluatedDecisions,
 		Clauses:                     clauses,
+		NoMatches:                   noMatches,
 		ClauseObservations:          collection.Clauses,
 		C0:                          c0Report,
 		RunStatus:                   overallStatus,
@@ -704,6 +707,7 @@ func validateObservations(
 	clauses []cover.ClauseMetadata,
 	collection runtimecov.Collection,
 	runID string,
+	noMatches []cover.NoMatchMetadata,
 ) (runtimecov.Collection, error) {
 	knownDecisions := make(map[cover.DecisionID]cover.DecisionMetadata, len(decisions))
 	for _, decision := range decisions {
@@ -712,6 +716,10 @@ func validateObservations(
 	knownClauses := make(map[cover.ClauseID]struct{}, len(clauses))
 	for _, clause := range clauses {
 		knownClauses[clause.ID] = struct{}{}
+	}
+	knownNoMatches := make(map[cover.SwitchID]struct{})
+	for _, noMatch := range noMatches {
+		knownNoMatches[noMatch.SwitchID] = struct{}{}
 	}
 	switchDecisions := conditionlessSwitchDecisionOrder(clauses)
 	validated := runtimecov.Collection{
@@ -838,6 +846,14 @@ func validateObservations(
 		}
 	}
 	for _, observation := range collection.Clauses {
+		if observation.Event == cover.ClauseNoMatchSelection {
+			if _, exists := knownNoMatches[observation.SwitchID]; !exists {
+				validationErrors = append(validationErrors, fmt.Errorf("event contains unknown no-match switch ID 0x%016x", uint64(observation.SwitchID)))
+				continue
+			}
+			validated.Clauses = append(validated.Clauses, observation)
+			continue
+		}
 		if _, exists := knownClauses[observation.ClauseID]; !exists {
 			validationErrors = append(validationErrors, fmt.Errorf("event contains unknown clause ID 0x%016x", uint64(observation.ClauseID)))
 			continue

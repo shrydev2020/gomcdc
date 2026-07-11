@@ -36,6 +36,7 @@ type Input struct {
 	Evaluations           []cover.DecisionEvaluation
 	NotEvaluatedDecisions []cover.DecisionNotEvaluatedObservation
 	Clauses               []cover.ClauseMetadata
+	NoMatches             []cover.NoMatchMetadata
 	ClauseObservations    []cover.ClauseObservation
 	C0                    *c0.Report
 	RunStatus             cover.RunStatus
@@ -139,6 +140,7 @@ type FunctionReport struct {
 	Statements []StatementReport     `json:"statements"`
 	Decisions  []DecisionReport      `json:"decisions"`
 	Clauses    []ClauseReport        `json:"clauses"`
+	NoMatches  []NoMatchReport       `json:"noMatchSelections,omitempty"`
 }
 
 // StatementReport is one original-source Go cover block.
@@ -241,6 +243,7 @@ type EvaluationReport struct {
 type ClauseReport struct {
 	ClauseID          string               `json:"clauseId"`
 	GroupID           string               `json:"groupId"`
+	SwitchID          string               `json:"switchId"`
 	Kind              cover.ClauseKind     `json:"kind"`
 	Role              cover.ClauseRole     `json:"role"`
 	Index             uint16               `json:"index"`
@@ -250,6 +253,14 @@ type ClauseReport struct {
 	DecisionIDs       []string             `json:"decisionIds"`
 	BodyExecutions    int                  `json:"bodyExecutions"`
 	BodyCoverage      MetricSummary        `json:"bodyCoverage"`
+	SelectionCoverage MetricSummary        `json:"selectionCoverage"`
+}
+
+// NoMatchReport is a switch-selection obligation without a source ClauseID.
+type NoMatchReport struct {
+	SwitchID          string               `json:"switchId"`
+	Kind              cover.ClauseKind     `json:"kind"`
+	Location          cover.SourceLocation `json:"location"`
 	SelectionCoverage MetricSummary        `json:"selectionCoverage"`
 }
 
@@ -347,7 +358,12 @@ func Build(input Input) Report {
 	}
 
 	observationCounts := make(map[cover.ClauseID]map[cover.ClauseEventKind]int)
+	noMatchObservations := make(map[cover.SwitchID]int)
 	for _, observation := range input.ClauseObservations {
+		if observation.Event == cover.ClauseNoMatchSelection {
+			noMatchObservations[observation.SwitchID]++
+			continue
+		}
 		if observationCounts[observation.ClauseID] == nil {
 			observationCounts[observation.ClauseID] = make(map[cover.ClauseEventKind]int)
 		}
@@ -408,6 +424,14 @@ func Build(input Input) Report {
 		clauseReport := buildClauseReport(clause, observationCounts[clause.ID], unknown, input.Coverage)
 		function.report.Clauses = append(function.report.Clauses, clauseReport)
 		addClauseMetrics(&function.report.Summary, clause.Kind, clauseReport.BodyCoverage, clauseReport.SelectionCoverage)
+	}
+	for _, noMatch := range input.NoMatches {
+		builder := ensurePackageBuilder(builders, noMatch.Package, input)
+		function := ensureFunctionBuilder(builder, noMatch.Location.File, displayFunctionName(noMatch.Function), optionalLocation(noMatch.FunctionLocation), input.Coverage)
+		unknown := input.ASTEvidenceIntegrityUnknown || packageUnknown(astPackageStatus(input, noMatch.Package, builder.status), astPackageEvidence[noMatch.Package])
+		noMatchReport := buildNoMatchReport(noMatch, noMatchObservations[noMatch.SwitchID] > 0, unknown, input.Coverage)
+		function.report.NoMatches = append(function.report.NoMatches, noMatchReport)
+		addNoMatchMetric(&function.report.Summary, noMatch.Kind, noMatchReport.SelectionCoverage)
 	}
 
 	packagePaths := make([]string, 0, len(builders))
@@ -506,7 +530,6 @@ func buildInstrumentationReport(input Input, capabilities backend.CapabilitySet)
 
 	for _, clause := range input.Clauses {
 		bodyMetric, bodyEnabled := clauseBodyMetric(clause.Kind, input.Coverage)
-		bodyEnabled = bodyEnabled && clause.Role != cover.ClauseNoMatch
 		if bodyEnabled {
 			status := clauseBodyInstrumentationStatus(capabilities, clause)
 			add(string(bodyMetric), status, 1, status == backend.CapabilitySupported)
@@ -514,6 +537,13 @@ func buildInstrumentationReport(input Input, capabilities backend.CapabilitySet)
 		selectionMetric, selectionEnabled := clauseSelectionMetric(clause.Kind, input.Coverage)
 		if selectionEnabled {
 			status := clauseSelectionInstrumentationStatus(capabilities, clause)
+			add(string(selectionMetric), status, 1, false)
+		}
+	}
+	for _, noMatch := range input.NoMatches {
+		selectionMetric, selectionEnabled := clauseSelectionMetric(noMatch.Kind, input.Coverage)
+		if selectionEnabled {
+			status := clauseSelectionInstrumentationStatus(capabilities, cover.ClauseMetadata{Kind: noMatch.Kind})
 			add(string(selectionMetric), status, 1, false)
 		}
 	}
@@ -583,9 +613,6 @@ func decisionInstrumentationStatus(capabilities backend.CapabilitySet, kind cove
 }
 
 func clauseBodyInstrumentationStatus(capabilities backend.CapabilitySet, clause cover.ClauseMetadata) backend.CapabilityStatus {
-	if clause.Role == cover.ClauseNoMatch {
-		return backend.CapabilityUnsupportedByBackend
-	}
 	if clause.Role != cover.ClauseCase && clause.Role != cover.ClauseDefault {
 		return backend.CapabilityUnknown
 	}
@@ -835,7 +862,6 @@ func buildClauseReport(
 ) ClauseReport {
 	bodyExecutions := observations[cover.ClauseBodyExecution]
 	_, bodyEnabled := clauseBodyMetric(metadata.Kind, coverage)
-	bodyEnabled = bodyEnabled && metadata.Role != cover.ClauseNoMatch
 	bodyCoverage := newMetric(bodyEnabled)
 	if bodyCoverage.Enabled {
 		switch {
@@ -868,10 +894,36 @@ func buildClauseReport(
 	sort.Strings(decisionIDs)
 	return ClauseReport{
 		ClauseID: formatID(uint64(metadata.ID)), GroupID: formatID(uint64(metadata.GroupID)),
-		Kind: metadata.Kind, Role: metadata.Role, Index: metadata.Index, Location: metadata.Location,
+		SwitchID: formatID(uint64(metadata.SwitchID)),
+		Kind:     metadata.Kind, Role: metadata.Role, Index: metadata.Index, Location: metadata.Location,
 		Expressions: append([]string{}, metadata.Expressions...), Types: append([]string{}, metadata.Types...),
 		DecisionIDs: decisionIDs, BodyExecutions: bodyExecutions,
 		BodyCoverage: bodyCoverage, SelectionCoverage: selectionCoverage,
+	}
+}
+
+func buildNoMatchReport(metadata cover.NoMatchMetadata, observed, unknown bool, coverage config.CoverageSet) NoMatchReport {
+	enabled := metadata.Kind == cover.ClauseExpressionSwitch && coverage.Enabled(config.MetricSwitchClauseSelection) ||
+		metadata.Kind == cover.ClauseTypeSwitch && coverage.Enabled(config.MetricTypeSwitchClauseSelection)
+	metric := newMetric(enabled)
+	if enabled {
+		switch {
+		case unknown:
+			metric.Unknown = 1
+		case observed:
+			metric.Covered = 1
+			metric.Total = 1
+		default:
+			// The current AST backend cannot prove dispatch selection. This is
+			// unsupported evidence, not an ordinary uncovered result.
+			metric.Unsupported = 1
+		}
+		metric.recalculate()
+	}
+	return NoMatchReport{
+		SwitchID: formatID(uint64(metadata.SwitchID)),
+		Kind:     metadata.Kind, Location: metadata.Location,
+		SelectionCoverage: metric,
 	}
 }
 
@@ -887,6 +939,10 @@ func finalizeFile(builder *fileBuilder, coverage config.CoverageSet) FileReport 
 		})
 		sort.Slice(function.report.Clauses, func(i, j int) bool {
 			return lessLocation(function.report.Clauses[i].Location, function.report.Clauses[j].Location) || (function.report.Clauses[i].Location == function.report.Clauses[j].Location && function.report.Clauses[i].ClauseID < function.report.Clauses[j].ClauseID)
+		})
+		sort.Slice(function.report.NoMatches, func(i, j int) bool {
+			return lessLocation(function.report.NoMatches[i].Location, function.report.NoMatches[j].Location) ||
+				(function.report.NoMatches[i].Location == function.report.NoMatches[j].Location && function.report.NoMatches[i].SwitchID < function.report.NoMatches[j].SwitchID)
 		})
 		functions = append(functions, function.report)
 	}
@@ -1259,6 +1315,15 @@ func addClauseMetrics(summary *Summary, kind cover.ClauseKind, body, selection M
 		addMetric(&summary.TypeSwitchClauseSelection, selection)
 	case cover.ClauseSelect:
 		addMetric(&summary.SelectClauseBody, body)
+	}
+}
+
+func addNoMatchMetric(summary *Summary, kind cover.ClauseKind, selection MetricSummary) {
+	switch kind {
+	case cover.ClauseExpressionSwitch:
+		addMetric(&summary.SwitchClauseSelection, selection)
+	case cover.ClauseTypeSwitch:
+		addMetric(&summary.TypeSwitchClauseSelection, selection)
 	}
 }
 

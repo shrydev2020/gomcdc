@@ -85,6 +85,7 @@ type File struct {
 	Identifiers  []string
 	Decisions    []Decision
 	Clauses      []Clause
+	NoMatches    []cover.NoMatchMetadata
 	LineMappings []LineMapping
 }
 
@@ -215,6 +216,7 @@ func AnalyzeFile(options FileOptions) (File, error) {
 	})
 	result.Decisions = context.decisions
 	result.Clauses = context.clauses
+	result.NoMatches = context.noMatches
 	return result, nil
 }
 
@@ -347,6 +349,7 @@ type analysisContext struct {
 	relative    string
 	decisions   []Decision
 	clauses     []Clause
+	noMatches   []cover.NoMatchMetadata
 	err         error
 }
 
@@ -546,8 +549,32 @@ func (visitor decisionVisitor) addSwitchClauses(kind cover.ClauseKind, switchNod
 			visitor.context.err = fmt.Errorf("%s has too many clauses to represent no-match", kind)
 			return
 		}
-		visitor.addClause(groupID, kind, cover.ClauseNoMatch, uint16(len(statements)), switchNode, nil)
+		visitor.addNoMatch(groupID, kind, switchNode)
 	}
+}
+
+func (visitor decisionVisitor) addNoMatch(groupID cover.ClauseGroupID, kind cover.ClauseKind, node ast.Node) {
+	start := visitor.context.fset.PositionFor(node.Pos(), false)
+	end := visitor.context.fset.PositionFor(node.End(), false)
+	function := visitor.function
+	if function == "" {
+		function = "<package>"
+	}
+	visitor.context.noMatches = append(visitor.context.noMatches, cover.NoMatchMetadata{
+		SwitchID:         cover.SwitchID(groupID),
+		ModulePath:       visitor.context.modulePath,
+		Package:          visitor.context.packagePath,
+		Function:         function,
+		FunctionLocation: visitor.functionLocation,
+		Kind:             kind,
+		Location: cover.SourceLocation{
+			File:        visitor.context.relative,
+			Start:       cover.Position{Line: start.Line, Column: start.Column},
+			End:         cover.Position{Line: end.Line, Column: end.Column},
+			StartOffset: start.Offset,
+			EndOffset:   end.Offset,
+		},
+	})
 }
 
 func (visitor decisionVisitor) addSelectClauses(statement *ast.SelectStmt) {
@@ -587,6 +614,7 @@ func (visitor decisionVisitor) addClause(
 		ModulePath:       visitor.context.modulePath,
 		Package:          visitor.context.packagePath,
 		GroupID:          groupID,
+		SwitchID:         cover.SwitchID(groupID),
 		Function:         function,
 		FunctionLocation: visitor.functionLocation,
 		Kind:             kind,

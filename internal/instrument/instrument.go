@@ -479,9 +479,6 @@ func newFileTransformer(fset *token.FileSet, helperName string, analysis analyze
 		transformer.decisions[key] = decision
 	}
 	for _, clause := range analysis.Clauses {
-		if clause.Metadata.Role == cover.ClauseNoMatch {
-			continue
-		}
 		key := clauseLocation{kind: clause.Metadata.Kind, role: clause.Metadata.Role, start: clause.Span.Start, end: clause.Span.End}
 		if _, exists := transformer.clauses[key]; exists {
 			return nil, fmt.Errorf("duplicate analyzed %s clause at bytes %d:%d", clause.Metadata.Role, key.start, key.end)
@@ -705,7 +702,7 @@ func (state *functionState) transformCaseClauses(kind cover.ClauseKind, statemen
 		if err != nil {
 			return nil, err
 		}
-		entry := &ast.ExprStmt{X: state.call("SelectClause", idLiteral(uint64(metadata.ID)))}
+		entry := &ast.ExprStmt{X: state.call("SelectClause", idLiteral(uint64(metadata.ID)), idLiteral(uint64(metadata.SwitchID)))}
 		state.transformer.recordGenerated("switch-clause-probe", clause, 1)
 		clause.Body = append([]ast.Stmt{entry}, body...)
 	}
@@ -730,7 +727,7 @@ func (state *functionState) transformSelect(statement *ast.SelectStmt) ([]ast.St
 		if err != nil {
 			return nil, err
 		}
-		clause.Body = append([]ast.Stmt{&ast.ExprStmt{X: state.call("SelectClause", idLiteral(uint64(metadata.ID)))}}, body...)
+		clause.Body = append([]ast.Stmt{&ast.ExprStmt{X: state.call("SelectClause", idLiteral(uint64(metadata.ID)), idLiteral(uint64(metadata.SwitchID)))}}, body...)
 		state.transformer.recordGenerated("select-clause-probe", clause, 1)
 	}
 	return []ast.Stmt{statement}, nil

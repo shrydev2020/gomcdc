@@ -110,6 +110,17 @@ func renderText(report Report) string {
 					writeMetricInline(&output, clause.SelectionCoverage)
 					output.WriteByte('\n')
 				}
+				for _, noMatch := range function.NoMatches {
+					fmt.Fprintf(
+						&output,
+						"      No-match selection %s (%s) at %s: ",
+						noMatch.SwitchID,
+						noMatch.Kind,
+						formatLocation(noMatch.Location),
+					)
+					writeMetricInline(&output, noMatch.SelectionCoverage)
+					output.WriteByte('\n')
+				}
 			}
 		}
 	}

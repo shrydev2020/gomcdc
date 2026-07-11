@@ -324,18 +324,17 @@ func TestClauseCoverageUsesBodyEvidenceAndNeverInfersSelection(t *testing.T) {
 	t.Parallel()
 
 	clauses := []cover.ClauseMetadata{
-		{ID: 3, Package: "p", Function: "Switch", Kind: cover.ClauseExpressionSwitch, Role: cover.ClauseNoMatch, Index: 2, Location: location("p.go", 30)},
 		{ID: 1, Package: "p", Function: "Switch", Kind: cover.ClauseExpressionSwitch, Role: cover.ClauseCase, Index: 0, Location: location("p.go", 10)},
 		{ID: 2, Package: "p", Function: "Switch", Kind: cover.ClauseSelect, Role: cover.ClauseDefault, Index: 1, Location: location("p.go", 20)},
 	}
 	input := report.Input{
 		ModulePath: "m", Coverage: config.AllCoverage(), RunStatus: cover.RunPassed, Complete: true,
-		Clauses: clauses,
+		Clauses:   clauses,
+		NoMatches: []cover.NoMatchMetadata{{SwitchID: 3, Package: "p", Function: "Switch", Kind: cover.ClauseExpressionSwitch, Location: location("p.go", 30)}},
 		ClauseObservations: []cover.ClauseObservation{
 			{ClauseID: 1, Event: cover.ClauseBodyExecution},
 			{ClauseID: 2, Event: cover.ClauseDirectSelection},
 			{ClauseID: 2, Event: cover.ClauseBodyExecution},
-			{ClauseID: 3, Event: cover.ClauseDirectSelection},
 		},
 	}
 	built := report.Build(input)
@@ -346,7 +345,7 @@ func TestClauseCoverageUsesBodyEvidenceAndNeverInfersSelection(t *testing.T) {
 	if got[0].Role != cover.ClauseCase || got[0].BodyExecutions != 1 || got[0].BodyCoverage.Covered != 1 {
 		t.Fatalf("fallthrough case = %#v", got[0])
 	}
-	if got[1].Role != cover.ClauseDefault || got[2].Role != cover.ClauseNoMatch {
+	if got[1].Role != cover.ClauseDefault {
 		t.Fatalf("clause roles/order = %#v", got)
 	}
 	if text := report.RenderText(input); !strings.Contains(text, "Select Clause Body Coverage") || strings.Contains(text, "direct-selection=") {
@@ -412,8 +411,8 @@ func TestInstrumentationCoverageAccountsForUnsupportedAndUnknownEntities(t *test
 		Decisions: []cover.DecisionMetadata{supportedDecision, unknownDecision},
 		Clauses: []cover.ClauseMetadata{
 			{ID: 1, Kind: cover.ClauseSelect, Role: cover.ClauseCase},
-			{ID: 2, Kind: cover.ClauseExpressionSwitch, Role: cover.ClauseNoMatch},
 		},
+		NoMatches:              []cover.NoMatchMetadata{{SwitchID: 2, Kind: cover.ClauseExpressionSwitch}},
 		InstrumentationUnknown: 1,
 	})
 
@@ -432,7 +431,7 @@ func TestInstrumentationCoverageAccountsForUnsupportedAndUnknownEntities(t *test
 	text := report.RenderText(report.Input{
 		Coverage: config.CoverageSet{config.MetricSelectClauseBody: true,
 			config.MetricSwitchClauseSelection: true},
-		Clauses: []cover.ClauseMetadata{{ID: 2, Kind: cover.ClauseExpressionSwitch, Role: cover.ClauseNoMatch}},
+		NoMatches: []cover.NoMatchMetadata{{SwitchID: 2, Kind: cover.ClauseExpressionSwitch}},
 	})
 	for _, required := range []string{
 		"Backend capabilities:",

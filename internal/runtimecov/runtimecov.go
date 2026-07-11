@@ -177,6 +177,7 @@ type wireRecord struct {
 	Conditions         []uint8  `json:"conditions,omitempty"`
 	Result             bool     `json:"result,omitempty"`
 	Status             uint8    `json:"status,omitempty"`
+	SwitchID           uint64   `json:"switchId,omitempty"`
 	ClauseID           uint64   `json:"clauseId,omitempty"`
 	Event              string   `json:"event,omitempty"`
 	SkippedDecisionIDs []uint64 `json:"skippedDecisionIds,omitempty"`
@@ -349,11 +350,14 @@ func (collector *eventCollector) consume(path string, line int, record wireRecor
 		collector.finished[identity] = struct{}{}
 	case "clause":
 		event := cover.ClauseEventKind(record.Event)
-		if record.ClauseID == 0 || (event != cover.ClauseDirectSelection && event != cover.ClauseBodyExecution) {
+		if (event == cover.ClauseNoMatchSelection && (record.SwitchID == 0 || record.ClauseID != 0)) ||
+			(event != cover.ClauseDirectSelection && event != cover.ClauseBodyExecution && event != cover.ClauseNoMatchSelection) ||
+			(event != cover.ClauseNoMatchSelection && record.ClauseID == 0) {
 			collector.diagnostic(path, line, false, "invalid clause record")
 			return
 		}
 		collector.addClause(cover.ClauseObservation{
+			SwitchID: cover.SwitchID(record.SwitchID),
 			ClauseID: cover.ClauseID(record.ClauseID),
 			Event:    event,
 		})
@@ -674,6 +678,7 @@ type record struct {
 	Conditions []uint8 ` + "`json:\"conditions,omitempty\"`" + `
 	Result bool ` + "`json:\"result,omitempty\"`" + `
 	Status uint8 ` + "`json:\"status,omitempty\"`" + `
+	SwitchID uint64 ` + "`json:\"switchId,omitempty\"`" + `
 	ClauseID uint64 ` + "`json:\"clauseId,omitempty\"`" + `
 	Event string ` + "`json:\"event,omitempty\"`" + `
 	SkippedDecisionIDs []uint64 ` + "`json:\"skippedDecisionIds,omitempty\"`" + `
@@ -768,9 +773,18 @@ func (hooks Hooks) AbortSlots(slots []uint64) {
 	for _, id := range slots { abort(id) }
 }
 
-func (hooks Hooks) SelectClause(clauseID uint64) {
+func (hooks Hooks) SelectClause(clauseID uint64, switchIDs ...uint64) {
 	defer func() { _ = recover() }()
-	recordClause(hooks.packagePath, clauseID, "body-execution")
+	var switchID uint64
+	if len(switchIDs) > 0 {
+		switchID = switchIDs[0]
+	}
+	recordClause(hooks.packagePath, switchID, clauseID, "body-execution")
+}
+
+func (hooks Hooks) NoMatch(switchID uint64) {
+	defer func() { _ = recover() }()
+	recordClause(hooks.packagePath, switchID, 0, "no-match-selection")
 }
 
 func finish(id uint64, result bool, status uint8, skippedDecisionIDs []uint64) {
@@ -792,13 +806,13 @@ func abort(id uint64) {
 	writeLocked(item.packagePath, record{Type:"terminal", EvaluationID:id, DecisionID:item.decisionID, TestID:item.testID, Conditions:append([]uint8(nil), item.conditions...), Status:statusAborted})
 }
 
-func recordClause(packagePath string, clauseID uint64, event string) {
+func recordClause(packagePath string, switchID, clauseID uint64, event string) {
 	recordMu.Lock()
 	defer recordMu.Unlock()
-	key := packagePath + "\x00" + strconv.FormatUint(clauseID, 10) + "\x00" + event
+	key := packagePath + "\x00" + strconv.FormatUint(switchID, 10) + "\x00" + strconv.FormatUint(clauseID, 10) + "\x00" + event
 	if _, exists := seenClauses[key]; exists { return }
 	seenClauses[key] = struct{}{}
-	writeLocked(packagePath, record{Type:"clause", ClauseID:clauseID, Event:event})
+	writeLocked(packagePath, record{Type:"clause", SwitchID: switchID, ClauseID:clauseID, Event:event})
 }
 
 func writeLocked(packagePath string, event record) {
@@ -833,7 +847,7 @@ func writeLocked(packagePath string, event record) {
 		key := evaluationRecordKey(snapshot)
 		if _, exists := state.evaluations[key]; !exists { state.evaluations[key] = snapshot }
 	case "clause":
-		key := strconv.FormatUint(event.ClauseID, 10) + "\x00" + event.Event
+		key := strconv.FormatUint(event.SwitchID, 10) + "\x00" + strconv.FormatUint(event.ClauseID, 10) + "\x00" + event.Event
 		if _, exists := state.clauses[key]; !exists { state.clauses[key] = event }
 	}
 	if err := writeRecord(state.file, event); err != nil {

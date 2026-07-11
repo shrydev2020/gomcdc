@@ -112,6 +112,15 @@ func sourceAnnotations(file FileReport, source []byte) []SourceAnnotation {
 				})
 			}
 		}
+		for _, noMatch := range function.NoMatches {
+			start, end := sourceRangeOffsets(noMatch.Location, source)
+			state := metricState(noMatch.SelectionCoverage)
+			annotations = append(annotations, SourceAnnotation{
+				StartOffset: start, EndOffset: end, Metric: "clause-selection",
+				EntityID: noMatch.SwitchID, State: state,
+				Tooltip: "No-match selection: " + state,
+			})
+		}
 	}
 	return normalizeAnnotations(annotations, len(source))
 }
