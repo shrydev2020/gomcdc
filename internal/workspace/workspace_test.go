@@ -102,9 +102,9 @@ func TestCreateRewritesRelativeModuleReplacementsOnlyInCopy(t *testing.T) {
 	if err := os.MkdirAll(dependency, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	original := "module example.test/source\n\ngo 1.24\n\nrequire example.test/dependency v0.0.0\nreplace example.test/dependency => ../dependency\n"
+	original := "module example.test/source\n\ngo 1.26\n\nrequire example.test/dependency v0.0.0\nreplace example.test/dependency => ../dependency\n"
 	writeFile(t, filepath.Join(source, "go.mod"), original, 0o644)
-	writeFile(t, filepath.Join(dependency, "go.mod"), "module example.test/dependency\n\ngo 1.24\n", 0o644)
+	writeFile(t, filepath.Join(dependency, "go.mod"), "module example.test/dependency\n\ngo 1.26\n", 0o644)
 
 	work, err := Create(Options{SourceDir: source, TempParent: t.TempDir()})
 	if err != nil {

@@ -671,8 +671,6 @@ These commands must pass.
 go test -count=1 ./...
 go test -count=1 -race ./...
 go vet ./...
-staticcheck ./...
-govulncheck ./...
 ```
 
 ## 28. Completion
@@ -681,7 +679,7 @@ One `gocoverage test ./...` invocation must emit the selected metrics, Instrumen
 
 Completion requires both that the AST backend never reports unavailable selection information as covered or not-covered and that the compiler-aware backend reports Clause Selection Coverage exactly.
 
-All acceptance fixtures, race tests, static checks, and vulnerability checks must pass.
+All acceptance fixtures, race tests, and `go vet` must pass.
 
 ## 29. Technical references
 

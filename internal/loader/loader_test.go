@@ -12,7 +12,7 @@ import (
 func TestLoadModulePackages(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	writeLoaderFile(t, filepath.Join(root, "go.mod"), "module example.test/fixture\n\ngo 1.24\n")
+	writeLoaderFile(t, filepath.Join(root, "go.mod"), "module example.test/fixture\n\ngo 1.26\n")
 	writeLoaderFile(t, filepath.Join(root, "alpha", "alpha.go"), "package alpha\nfunc Value() bool { return true }\n")
 	writeLoaderFile(t, filepath.Join(root, "alpha", "alpha_test.go"), "package alpha\n")
 	writeLoaderFile(t, filepath.Join(root, "beta", "beta.go"), "package beta\n")
@@ -43,7 +43,7 @@ func TestLoadModulePackages(t *testing.T) {
 func TestLoadHonorsBuildTags(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	writeLoaderFile(t, filepath.Join(root, "go.mod"), "module example.test/tags\n\ngo 1.24\n")
+	writeLoaderFile(t, filepath.Join(root, "go.mod"), "module example.test/tags\n\ngo 1.26\n")
 	writeLoaderFile(t, filepath.Join(root, "base.go"), "package tags\n")
 	writeLoaderFile(t, filepath.Join(root, "custom.go"), "//go:build customtag\n\npackage tags\n")
 	writeLoaderFile(t, filepath.Join(root, "other.go"), "//go:build !customtag\n\npackage tags\n")
@@ -64,9 +64,9 @@ func TestLoadRejectsActiveMultiModuleWorkspace(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	module := filepath.Join(root, "module")
-	writeLoaderFile(t, filepath.Join(module, "go.mod"), "module example.test/workmodule\n\ngo 1.24\n")
+	writeLoaderFile(t, filepath.Join(module, "go.mod"), "module example.test/workmodule\n\ngo 1.26\n")
 	writeLoaderFile(t, filepath.Join(module, "value.go"), "package workmodule\n")
-	writeLoaderFile(t, filepath.Join(root, "go.work"), "go 1.24\n\nuse ./module\n")
+	writeLoaderFile(t, filepath.Join(root, "go.work"), "go 1.26\n\nuse ./module\n")
 	_, err := Load(context.Background(), Options{Dir: module, Patterns: []string{"."}})
 	if err == nil || !strings.Contains(err.Error(), "active go.work") {
 		t.Fatalf("Load() error = %v, want explicit go.work rejection", err)
@@ -76,7 +76,7 @@ func TestLoadRejectsActiveMultiModuleWorkspace(t *testing.T) {
 func TestLoadDoesNotExposeSyntheticExternalTestPackageAsTarget(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	writeLoaderFile(t, filepath.Join(root, "go.mod"), "module example.test/external\n\ngo 1.24\n")
+	writeLoaderFile(t, filepath.Join(root, "go.mod"), "module example.test/external\n\ngo 1.26\n")
 	writeLoaderFile(t, filepath.Join(root, "value.go"), "package external\n")
 	writeLoaderFile(t, filepath.Join(root, "value_test.go"), "package external_test\n")
 	result, err := Load(context.Background(), Options{Dir: root, Patterns: []string{"."}, IncludeTests: true})
@@ -94,7 +94,7 @@ func TestLoadDoesNotExposeSyntheticExternalTestPackageAsTarget(t *testing.T) {
 func TestLoadRetainsProductionFilesWithTypeErrorsForPartialGoTestRun(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	writeLoaderFile(t, filepath.Join(root, "go.mod"), "module example.test/broken\n\ngo 1.24\n")
+	writeLoaderFile(t, filepath.Join(root, "go.mod"), "module example.test/broken\n\ngo 1.26\n")
 	writeLoaderFile(t, filepath.Join(root, "broken.go"), "package broken\nvar Value string = 42\n")
 	result, err := Load(context.Background(), Options{Dir: root, Patterns: []string{"."}})
 	if err != nil {

@@ -1,3 +1,3 @@
 module example.test/gocoverage-fixture
 
-go 1.24
+go 1.26

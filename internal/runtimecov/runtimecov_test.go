@@ -239,7 +239,7 @@ func TestCollectDetailedAggregatesJournalAndCompactedEvaluationRecords(t *testin
 
 func TestInjectedRuntimeConcurrentEvaluationsHaveUniqueIDsAndProvenance(t *testing.T) {
 	moduleDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte("module example.test/probe\n\ngo 1.24.0\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte("module example.test/probe\n\ngo 1.26.0\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	injected, err := Inject(moduleDir, "example.test/probe")
@@ -352,7 +352,7 @@ func main() {
 
 func TestInjectedRuntimeCompactsDuplicateHistoryWithoutDroppingUniqueVectorsOrActiveBegins(t *testing.T) {
 	moduleDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte("module example.test/compactprobe\n\ngo 1.24.0\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte("module example.test/compactprobe\n\ngo 1.26.0\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	injected, err := Inject(moduleDir, "example.test/compactprobe")
@@ -436,7 +436,7 @@ func main() {
 
 func TestInjectedRuntimeSwallowsRecorderFailuresAndPreservesValues(t *testing.T) {
 	moduleDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte("module example.test/failureprobe\n\ngo 1.24.0\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte("module example.test/failureprobe\n\ngo 1.26.0\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	injected, err := Inject(moduleDir, "example.test/failureprobe")

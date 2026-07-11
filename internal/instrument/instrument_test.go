@@ -353,7 +353,7 @@ func TestLabeledSwitch(t *testing.T) {
 	originalPath := writeFile(t, originalRoot, "logic/logic.go", logicSource)
 	copyPath := writeFile(t, workspace, "logic/logic.go", logicSource)
 	testPath := writeFile(t, workspace, "logic/logic_test.go", testSource)
-	writeFile(t, workspace, "go.mod", "module example.com/fixture\n\ngo 1.24.0\n")
+	writeFile(t, workspace, "go.mod", "module example.com/fixture\n\ngo 1.26.0\n")
 	writeFile(t, workspace, "runtimecov/runtime.go", `package runtimecov
 type EvaluationID = uint64
 type Hooks struct{}
@@ -557,7 +557,7 @@ func TestCoverageFixture(t *testing.T) {
 	originalPath := writeFile(t, originalRoot, "logic/logic.go", source)
 	copyPath := writeFile(t, workspace, "logic/logic.go", source)
 	testPath := writeFile(t, workspace, "logic/logic_test.go", tests)
-	writeFile(t, workspace, "go.mod", "module example.com/fixture\n\ngo 1.24.0\n")
+	writeFile(t, workspace, "go.mod", "module example.com/fixture\n\ngo 1.26.0\n")
 	analysis := analyze(t, originalPath, originalRoot, "example.com/fixture", "example.com/fixture/logic")
 	injected, err := runtimecov.Inject(workspace, "example.com/fixture")
 	if err != nil {
