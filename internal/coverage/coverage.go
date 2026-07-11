@@ -1,0 +1,430 @@
+// Package coverage defines the shared source, runtime-evidence, and result
+// vocabulary used by every measurement backend.
+package coverage
+
+import "fmt"
+
+// DecisionID identifies a decision within one source revision.
+type DecisionID uint64
+
+// EvaluationID identifies one dynamic evaluation of a decision. Producers
+// should make it unique within a coverage run. EvaluationIdentity also carries
+// process provenance so separately produced package data cannot be merged by a
+// bare counter accidentally.
+type EvaluationID uint64
+
+// ClauseID and ClauseGroupID are deterministic within one source revision.
+type ClauseID uint64
+type ClauseGroupID uint64
+
+// DecisionKind identifies a boolean control-flow decision.
+type DecisionKind string
+
+const (
+	DecisionIf         DecisionKind = "if"
+	DecisionFor        DecisionKind = "for"
+	DecisionSwitchCase DecisionKind = "switch-case"
+)
+
+// Position is a one-based source position.
+type Position struct {
+	Line   int `json:"line"`
+	Column int `json:"column"`
+}
+
+// SourceLocation is a half-open range in an original (un-instrumented) file.
+// Instrumentation locations must be normalized before constructing this type.
+type SourceLocation struct {
+	File  string   `json:"file"`
+	Start Position `json:"start"`
+	End   Position `json:"end"`
+}
+
+// ClauseKind identifies the control construct whose clause body execution is
+// measured. It is intentionally separate from DecisionKind.
+type ClauseKind string
+
+const (
+	ClauseExpressionSwitch    ClauseKind = "expression-switch"
+	ClauseTypeSwitch          ClauseKind = "type-switch"
+	ClauseSelect              ClauseKind = "select"
+	ClauseConditionlessSwitch ClauseKind = "conditionless-switch"
+)
+
+// ClauseRole distinguishes an explicit case, explicit default, and the legacy
+// synthetic no-match outcome. The AST backend does not create no-match clauses.
+type ClauseRole string
+
+const (
+	ClauseCase    ClauseRole = "case"
+	ClauseDefault ClauseRole = "default"
+	ClauseNoMatch ClauseRole = "no-match"
+)
+
+// ClauseMetadata describes one switch/type-switch/select source clause.
+// Expressions preserves the individual case expressions for future finer
+// reporting even though v1 aggregates at clause granularity. DecisionIDs are
+// set for conditionless-switch case expressions, each of which is also its own
+// boolean decision.
+type ClauseMetadata struct {
+	ID               ClauseID       `json:"id"`
+	GroupID          ClauseGroupID  `json:"groupId"`
+	ModulePath       string         `json:"modulePath"`
+	Package          string         `json:"package"`
+	Function         string         `json:"function"`
+	FunctionLocation SourceLocation `json:"functionLocation"`
+	Kind             ClauseKind     `json:"kind"`
+	Role             ClauseRole     `json:"role"`
+	Index            uint16         `json:"index"`
+	Location         SourceLocation `json:"location"`
+	Expressions      []string       `json:"expressions,omitempty"`
+	Types            []string       `json:"types,omitempty"`
+	DecisionIDs      []DecisionID   `json:"decisionIds,omitempty"`
+}
+
+// ClauseEventKind keeps body execution distinct from exact case selection.
+// The AST backend emits only ClauseBodyExecution; ClauseDirectSelection is
+// reserved for a future compiler-aware backend that can prove selection.
+type ClauseEventKind string
+
+const (
+	ClauseDirectSelection ClauseEventKind = "direct-selection"
+	ClauseBodyExecution   ClauseEventKind = "body-execution"
+)
+
+// ClauseObservation is one runtime clause event. The formal AST metric uses
+// only body executions.
+type ClauseObservation struct {
+	ClauseID ClauseID        `json:"clauseId"`
+	Event    ClauseEventKind `json:"event"`
+}
+
+// DecisionNotEvaluatedObservation records that a source decision was skipped
+// because an earlier conditionless-switch case expression evaluated true.
+// CauseEvaluationID and its provenance identify the completed evaluation that
+// caused the skip; no decision result is invented for the skipped expression.
+type DecisionNotEvaluatedObservation struct {
+	DecisionID        DecisionID   `json:"decisionId"`
+	CauseDecisionID   DecisionID   `json:"causeDecisionId"`
+	CauseEvaluationID EvaluationID `json:"causeEvaluationId"`
+	RunID             string       `json:"runId,omitempty"`
+	PackagePath       string       `json:"packagePath,omitempty"`
+	ProcessID         int          `json:"processId,omitempty"`
+}
+
+// ConditionMetadata describes one atomic condition in a decision. Index is
+// the stable, zero-based position used by runtime evaluation vectors.
+type ConditionMetadata struct {
+	Index      uint16         `json:"index"`
+	Expression string         `json:"expression"`
+	Location   SourceLocation `json:"location"`
+}
+
+// BooleanExpressionKind identifies the supported logical structure used to
+// prove masking. Predicates and other indivisible boolean expressions are
+// represented by BooleanExpressionCondition leaves.
+type BooleanExpressionKind string
+
+const (
+	BooleanExpressionCondition BooleanExpressionKind = "condition"
+	BooleanExpressionConstant  BooleanExpressionKind = "constant"
+	BooleanExpressionNot       BooleanExpressionKind = "not"
+	BooleanExpressionAnd       BooleanExpressionKind = "and"
+	BooleanExpressionOr        BooleanExpressionKind = "or"
+)
+
+// BooleanExpression is a read-once expression tree over condition indexes.
+//
+//   - condition: ConditionIndex is used; Left and Right must be nil.
+//   - constant: Constant is used; Left and Right must be nil.
+//   - not: Left is the operand; Right must be nil.
+//   - and/or: Left and Right are the operands.
+//
+// Each atomic occurrence has its own condition index, including repeated
+// source text. This preserves actual evaluation order and avoids inferring
+// value coupling for expressions that may contain calls or side effects.
+type BooleanExpression struct {
+	Kind           BooleanExpressionKind `json:"kind"`
+	ConditionIndex uint16                `json:"conditionIndex,omitempty"`
+	Constant       bool                  `json:"constant,omitempty"`
+	Left           *BooleanExpression    `json:"left,omitempty"`
+	Right          *BooleanExpression    `json:"right,omitempty"`
+}
+
+// NewConditionExpression constructs an atomic-condition expression node.
+func NewConditionExpression(index uint16) *BooleanExpression {
+	return &BooleanExpression{Kind: BooleanExpressionCondition, ConditionIndex: index}
+}
+
+// NewConstantExpression constructs a boolean constant expression node.
+func NewConstantExpression(value bool) *BooleanExpression {
+	return &BooleanExpression{Kind: BooleanExpressionConstant, Constant: value}
+}
+
+// NewNotExpression constructs a logical negation expression node.
+func NewNotExpression(operand *BooleanExpression) *BooleanExpression {
+	return &BooleanExpression{Kind: BooleanExpressionNot, Left: operand}
+}
+
+// NewAndExpression constructs a short-circuit conjunction expression node.
+func NewAndExpression(left, right *BooleanExpression) *BooleanExpression {
+	return &BooleanExpression{Kind: BooleanExpressionAnd, Left: left, Right: right}
+}
+
+// NewOrExpression constructs a short-circuit disjunction expression node.
+func NewOrExpression(left, right *BooleanExpression) *BooleanExpression {
+	return &BooleanExpression{Kind: BooleanExpressionOr, Left: left, Right: right}
+}
+
+// DecisionMetadata describes one stable decision occurrence in the original
+// (un-instrumented) source tree. File, Start, and End remain first-class fields
+// for stable serialization; SourceLocation returns their normalized view.
+type DecisionMetadata struct {
+	ID               DecisionID
+	ModulePath       string
+	Package          string
+	File             string
+	Function         string
+	FunctionLocation SourceLocation
+	Kind             DecisionKind
+	Start            Position
+	End              Position
+	Expression       string
+	Conditions       []ConditionMetadata
+	ExpressionTree   *BooleanExpression
+}
+
+// SourceLocation returns the original-source range for this decision.
+func (d DecisionMetadata) SourceLocation() SourceLocation {
+	return SourceLocation{File: d.File, Start: d.Start, End: d.End}
+}
+
+// StableKey contains every field that contributes to a decision ID. It is
+// retained so callers can detect the extremely unlikely event of a hash
+// collision instead of silently merging unrelated decisions.
+func (d DecisionMetadata) StableKey() string {
+	return fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%d\x00%d\x00%d\x00%s",
+		d.ModulePath,
+		d.Package,
+		d.File,
+		d.Start.Line,
+		d.Start.Column,
+		d.End.Line,
+		d.End.Column,
+		d.Kind,
+	)
+}
+
+// Outcome records whether each side of a boolean decision was observed.
+type Outcome struct {
+	True  bool
+	False bool
+}
+
+func (o Outcome) Covered() int {
+	covered := 0
+	if o.True {
+		covered++
+	}
+	if o.False {
+		covered++
+	}
+	return covered
+}
+
+// ConditionState records whether an atomic condition was evaluated and, when
+// it was, its result. Not evaluated is distinct from false by construction.
+type ConditionState uint8
+
+const (
+	ConditionNotEvaluated ConditionState = iota
+	ConditionFalse
+	ConditionTrue
+)
+
+// IsEvaluated reports whether this state contains a boolean result.
+func (s ConditionState) IsEvaluated() bool {
+	return s == ConditionFalse || s == ConditionTrue
+}
+
+// Bool returns the condition result and whether the state was evaluated.
+func (s ConditionState) Bool() (value bool, evaluated bool) {
+	switch s {
+	case ConditionFalse:
+		return false, true
+	case ConditionTrue:
+		return true, true
+	default:
+		return false, false
+	}
+}
+
+func (s ConditionState) String() string {
+	switch s {
+	case ConditionNotEvaluated:
+		return "not evaluated"
+	case ConditionFalse:
+		return "false"
+	case ConditionTrue:
+		return "true"
+	default:
+		return fmt.Sprintf("ConditionState(%d)", s)
+	}
+}
+
+// EvaluationStatus distinguishes completed decisions from evaluations that
+// exited through panic or another interruption before EndDecision.
+type EvaluationStatus uint8
+
+const (
+	EvaluationCompleted EvaluationStatus = iota
+	EvaluationAborted
+)
+
+// UnknownTestID is used when a runtime cannot reliably associate an
+// evaluation with a test or subtest.
+const UnknownTestID = "unknown"
+
+// DecisionEvaluation is the complete runtime evidence for one decision
+// evaluation. Aborted evaluations are retained for diagnostics but cannot
+// establish any coverage metric.
+type DecisionEvaluation struct {
+	DecisionID   DecisionID       `json:"decisionId"`
+	EvaluationID EvaluationID     `json:"evaluationId"`
+	RunID        string           `json:"runId,omitempty"`
+	PackagePath  string           `json:"packagePath,omitempty"`
+	ProcessID    int              `json:"processId,omitempty"`
+	TestID       string           `json:"testId"`
+	Conditions   []ConditionState `json:"conditions"`
+	Result       bool             `json:"result"`
+	Status       EvaluationStatus `json:"status"`
+}
+
+// EvaluationIdentity is the collision-free key used when data from separate
+// package test processes is merged.
+type EvaluationIdentity struct {
+	RunID        string       `json:"runId"`
+	PackagePath  string       `json:"packagePath"`
+	ProcessID    int          `json:"processId"`
+	EvaluationID EvaluationID `json:"evaluationId"`
+}
+
+// Identity returns the merge-safe identity for this evaluation.
+func (e DecisionEvaluation) Identity() EvaluationIdentity {
+	return EvaluationIdentity{
+		RunID:        e.RunID,
+		PackagePath:  e.PackagePath,
+		ProcessID:    e.ProcessID,
+		EvaluationID: e.EvaluationID,
+	}
+}
+
+// CoverageMetric names an independently aggregated coverage measure.
+type CoverageMetric string
+
+const (
+	CoverageMetricStatement   CoverageMetric = "statement"
+	CoverageMetricFunction    CoverageMetric = "function"
+	CoverageMetricDecision    CoverageMetric = "decision"
+	CoverageMetricClause      CoverageMetric = "clause"
+	CoverageMetricCondition   CoverageMetric = "condition"
+	CoverageMetricMCDCUnique  CoverageMetric = "mcdc-unique"
+	CoverageMetricMCDCMasking CoverageMetric = "mcdc-masking"
+)
+
+// CoverageStatus keeps evidence-backed results distinct from unsupported,
+// unknown, aborted, and potentially infeasible cases.
+type CoverageStatus string
+
+const (
+	CoverageCovered            CoverageStatus = "covered"
+	CoverageNotCovered         CoverageStatus = "not covered"
+	CoverageUnsupported        CoverageStatus = "unsupported"
+	CoverageUnknown            CoverageStatus = "unknown"
+	CoverageAborted            CoverageStatus = "aborted"
+	CoveragePossiblyInfeasible CoverageStatus = "possibly infeasible"
+)
+
+// CoverageCount carries the numerator and denominator plus categories that are
+// excluded from the denominator by the default reporting policy.
+type CoverageCount struct {
+	Covered            int `json:"covered"`
+	Total              int `json:"total"`
+	Unsupported        int `json:"unsupported,omitempty"`
+	Unknown            int `json:"unknown,omitempty"`
+	Aborted            int `json:"aborted,omitempty"`
+	PossiblyInfeasible int `json:"possiblyInfeasible,omitempty"`
+}
+
+// Percentage returns a stable zero value for an empty denominator.
+func (c CoverageCount) Percentage() float64 {
+	if c.Total == 0 {
+		return 0
+	}
+	return float64(c.Covered) * 100 / float64(c.Total)
+}
+
+// MCDCWitness is the evidence pair for one condition. The completion vectors
+// are populated by masking analysis when not-evaluated states had to be given
+// counterfactual values; they contain only ConditionFalse/ConditionTrue.
+type MCDCWitness struct {
+	First                DecisionEvaluation `json:"first"`
+	Second               DecisionEvaluation `json:"second"`
+	FirstCompletion      []ConditionState   `json:"firstCompletion,omitempty"`
+	SecondCompletion     []ConditionState   `json:"secondCompletion,omitempty"`
+	UnobservedConditions []uint16           `json:"unobservedConditions,omitempty"`
+	MaskedConditions     []uint16           `json:"maskedConditions,omitempty"`
+}
+
+// MCDCConditionResult records coverage and evidence for one atomic condition.
+type MCDCConditionResult struct {
+	ConditionIndex uint16         `json:"conditionIndex"`
+	Status         CoverageStatus `json:"status"`
+	Witness        *MCDCWitness   `json:"witness,omitempty"`
+	Reason         string         `json:"reason,omitempty"`
+}
+
+// MCDCResult is a strategy-specific, decision-level analysis result.
+type MCDCResult struct {
+	DecisionID          DecisionID            `json:"decisionId"`
+	Metric              CoverageMetric        `json:"metric"`
+	Status              CoverageStatus        `json:"status"`
+	Conditions          []MCDCConditionResult `json:"conditions"`
+	EvaluationsAnalyzed int                   `json:"evaluationsAnalyzed"`
+	AbortedEvaluations  int                   `json:"abortedEvaluations,omitempty"`
+	InvalidEvaluations  int                   `json:"invalidEvaluations,omitempty"`
+	Reason              string                `json:"reason,omitempty"`
+}
+
+// CoveredConditions returns the MCDC numerator for this decision.
+func (r MCDCResult) CoveredConditions() int {
+	covered := 0
+	for _, condition := range r.Conditions {
+		if condition.Status == CoverageCovered {
+			covered++
+		}
+	}
+	return covered
+}
+
+// RunStatus describes the go test subprocess independently from coverage.
+type RunStatus string
+
+const (
+	RunPassed  RunStatus = "passed"
+	RunFailed  RunStatus = "failed"
+	RunTimeout RunStatus = "timeout"
+)
+
+// RunFailureKind distinguishes build/tool failures from executed test
+// failures while RunStatus retains the coarse passed/failed/timeout state.
+type RunFailureKind string
+
+const (
+	RunFailureNone    RunFailureKind = "none"
+	RunFailureBuild   RunFailureKind = "build"
+	RunFailureTest    RunFailureKind = "test"
+	RunFailureMixed   RunFailureKind = "mixed"
+	RunFailureCommand RunFailureKind = "command"
+	RunFailureTimeout RunFailureKind = "timeout"
+)

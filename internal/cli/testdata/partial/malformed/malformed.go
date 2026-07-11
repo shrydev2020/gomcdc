@@ -1,0 +1,3 @@
+package malformed
+
+func InvalidSyntax( {
