@@ -3,7 +3,7 @@ package routing_test
 import (
 	"testing"
 
-	"example.test/gocoverage-fixture/routing"
+	"example.test/gomcdc-fixture/routing"
 )
 
 func externalHelper(value bool) bool {

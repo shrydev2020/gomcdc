@@ -1,6 +1,6 @@
 package consumer
 
-import "example.test/gocoverage-fixture/shared"
+import "example.test/gomcdc-fixture/shared"
 
 func Read(value bool) bool {
 	return shared.Enabled(value)

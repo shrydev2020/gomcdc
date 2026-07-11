@@ -184,7 +184,7 @@ func commonMainModule(pkgs []*packages.Package) (modulePath, moduleRoot string, 
 			continue
 		}
 		if pkg.Module.Path != modulePath || root != moduleRoot {
-			return "", "", errors.New("multiple main modules matched; run gocoverage once per main module")
+			return "", "", errors.New("multiple main modules matched; run gomcdc once per main module")
 		}
 	}
 	if modulePath == "" || moduleRoot == "" {

@@ -80,7 +80,7 @@ func Allow(a, b bool) bool {
 	if strings.Contains(text, filepath.ToSlash(copyRoot)) {
 		t.Fatalf("temporary copy path leaked into SourcePos output:\n%s", text)
 	}
-	if !strings.Contains(text, "//line .gocoverage/generated/") {
+	if !strings.Contains(text, "//line .gomcdc/generated/") {
 		t.Fatalf("synthetic statements were not mapped to a generated file:\n%s", text)
 	}
 	if _, err := parser.ParseFile(token.NewFileSet(), copyPath, transformed, parser.ParseComments|parser.AllErrors); err != nil {
@@ -116,17 +116,17 @@ func TestSelectHelperNameScansTestsAndToleratesMalformedSyntax(t *testing.T) {
 
 	directory := t.TempDir()
 	production := writeFile(t, directory, "p.go", `package p
-var __gocoverageHooks = 1
+var __gomcdcHooks = 1
 `)
 	brokenTest := writeFile(t, directory, "p_test.go", `package p
 func TestBroken( {
-	__gocoverageHooks_1 := 2
+	__gomcdcHooks_1 := 2
 `)
 	name, err := SelectHelperName([]string{brokenTest, production})
 	if err != nil {
 		t.Fatalf("SelectHelperName() error = %v", err)
 	}
-	if name != "__gocoverageHooks_2" {
+	if name != "__gomcdcHooks_2" {
 		t.Fatalf("helper name = %q", name)
 	}
 }
@@ -209,7 +209,7 @@ func TestWriteBridgeDoesNotOverwriteUserFileWithCandidateName(t *testing.T) {
 	t.Parallel()
 
 	directory := t.TempDir()
-	existing := filepath.Join(directory, "zz_gocoverage_bridge_0.go")
+	existing := filepath.Join(directory, "zz_gomcdc_bridge_0.go")
 	const sentinel = "package p\n\nconst userOwned = true\n"
 	if err := os.WriteFile(existing, []byte(sentinel), 0o644); err != nil {
 		t.Fatal(err)
@@ -574,7 +574,7 @@ func TestCoverageFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.SourceMaps) != 1 || !strings.HasPrefix(result.SourceMaps[0].GeneratedFile, ".gocoverage/generated/") || len(result.SourceMaps[0].GeneratedRegions) == 0 {
+	if len(result.SourceMaps) != 1 || !strings.HasPrefix(result.SourceMaps[0].GeneratedFile, ".gomcdc/generated/") || len(result.SourceMaps[0].GeneratedRegions) == 0 {
 		t.Fatalf("SourceMaps = %#v", result.SourceMaps)
 	}
 	if len(result.GeneratedFiles) != 1 || result.GeneratedFiles[0] != result.BridgePath {

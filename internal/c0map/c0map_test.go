@@ -12,13 +12,13 @@ func TestBuildMapsLogicalAbsoluteAndGeneratedPaths(t *testing.T) {
 	profile := c0.Profile{Mode: c0.ModeSet, Files: []c0.ProfileFile{
 		{Path: "/tmp/work/module/internal/p/p.go"},
 		{Path: "example.test/project/root.go"},
-		{Path: "gocoverage-generated/internal_p_p.go"},
+		{Path: "gomcdc-generated/internal_p_p.go"},
 		{Path: "external.test/dependency/value.go"},
 	}}
 	result, err := Build(profile, "example.test/project", []Source{
 		{PackagePath: "example.test/project/internal/p", RelativePath: "internal/p/p.go", OriginalSource: []byte("package p\n")},
 		{PackagePath: "example.test/project", RelativePath: "root.go", OriginalSource: []byte("package project\n")},
-	}, []GeneratedFile{{Path: "gocoverage-generated/internal_p_p.go"}})
+	}, []GeneratedFile{{Path: "gomcdc-generated/internal_p_p.go"}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -16,7 +16,7 @@ import (
 
 func TestRunForcesFreshTestAndSeparatesOutput(t *testing.T) {
 	bin := t.TempDir()
-	writeExecutable(t, filepath.Join(bin, "go"), "#!/bin/sh\nprintf 'data=%s args=%s\\n' \"$GOCOVERAGE_DATA_DIR\" \"$*\"\n")
+	writeExecutable(t, filepath.Join(bin, "go"), "#!/bin/sh\nprintf 'data=%s args=%s\\n' \"$GOMCDC_DATA_DIR\" \"$*\"\n")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	var output bytes.Buffer
@@ -24,7 +24,7 @@ func TestRunForcesFreshTestAndSeparatesOutput(t *testing.T) {
 		Dir:        t.TempDir(),
 		Patterns:   []string{"./..."},
 		Args:       []string{"-run", "TestOne"},
-		DataDirEnv: "GOCOVERAGE_DATA_DIR",
+		DataDirEnv: "GOMCDC_DATA_DIR",
 		DataDir:    "/tmp/events with spaces",
 		Output:     &output,
 	})
@@ -239,7 +239,7 @@ func TestEventWriterStreamsOutputAndTracksPackages(t *testing.T) {
 	writer := &eventWriter{output: &output, packages: make(map[string]PackageStatus)}
 	first := `{"Action":"start","Package":"example.test/a"}` + "\n" +
 		`{"Action":"output","Package":"example.test/a","Output":"hello\n"}` + "\n" +
-		`{"Action":"output","Package":"example.test/a","Output":"gocoverage runtime diagnostic: disk unavailable\n"}` + "\n" +
+		`{"Action":"output","Package":"example.test/a","Output":"gomcdc runtime diagnostic: disk unavailable\n"}` + "\n" +
 		`{"Action":"pass","Package":"example.test/a"}` + "\n" +
 		`{"Action":"fail","Package":"example.test/b"}`
 	for _, chunk := range []string{first[:17], first[17:61], first[61:]} {
@@ -248,7 +248,7 @@ func TestEventWriterStreamsOutputAndTracksPackages(t *testing.T) {
 		}
 	}
 	writer.Flush()
-	if got := output.String(); got != "hello\ngocoverage runtime diagnostic: disk unavailable\n" {
+	if got := output.String(); got != "hello\ngomcdc runtime diagnostic: disk unavailable\n" {
 		t.Fatalf("output = %q", got)
 	}
 	if got := writer.packages["example.test/a"]; got != PackagePassed {

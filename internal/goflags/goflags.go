@@ -130,7 +130,7 @@ func Without(value string, owned map[string]bool) (string, error) {
 }
 
 // WithoutMeasurementFlags removes flags whose semantics are owned by a
-// gocoverage measurement. Unrelated build flags such as tags are preserved.
+// gomcdc measurement. Unrelated build flags such as tags are preserved.
 func WithoutMeasurementFlags(value string) (string, error) {
 	return Without(value, map[string]bool{
 		"count":        true,

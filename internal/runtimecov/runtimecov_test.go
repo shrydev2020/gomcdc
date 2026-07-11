@@ -466,7 +466,7 @@ func main() {
 	command.Env = environmentWith(DataDirEnv, notDirectory)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("recorder failure changed behavior: %v\n%s", err, output)
-	} else if !strings.Contains(string(output), "gocoverage runtime diagnostic") {
+	} else if !strings.Contains(string(output), "gomcdc runtime diagnostic") {
 		t.Fatalf("recorder failure was not detectable: %s", output)
 	}
 }

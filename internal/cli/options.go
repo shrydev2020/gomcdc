@@ -71,7 +71,7 @@ func (f *optionalFloat) Set(value string) error {
 func parseOptions(args []string, errOut io.Writer) (options, error) {
 	toolArgs, goTestArgs := splitGoTestArgs(args)
 	var opts options
-	fs := flag.NewFlagSet("gocoverage test", flag.ContinueOnError)
+	fs := flag.NewFlagSet("gomcdc test", flag.ContinueOnError)
 	fs.SetOutput(errOut)
 	fs.StringVar(&opts.coverage, "coverage", "all", "coverage metrics: all,statement,function,decision,switch-clause-body,type-switch-clause-body,select-clause-body,switch-clause-selection,type-switch-clause-selection,condition,mcdc-unique,mcdc-masking")
 	fs.StringVar(&opts.format, "format", "text", "report format: text, json, or html")
@@ -174,12 +174,12 @@ func validateThreshold(name string, value optionalFloat) error {
 }
 
 func writeTopUsage(w io.Writer) {
-	fmt.Fprintln(w, "Usage: gocoverage test [options] [package patterns] [-- go test arguments]")
+	fmt.Fprintln(w, "Usage: gomcdc test [options] [package patterns] [-- go test arguments]")
 	fmt.Fprintln(w, "\nBy default all canonical coverage metrics are measured.")
 }
 
 func writeTestUsage(w io.Writer, fs *flag.FlagSet) {
-	fmt.Fprintln(w, "Usage: gocoverage test [options] [package patterns] [-- go test arguments]")
+	fmt.Fprintln(w, "Usage: gomcdc test [options] [package patterns] [-- go test arguments]")
 	fmt.Fprintln(w, "\nOptions:")
 	fs.PrintDefaults()
 }

@@ -36,7 +36,7 @@ func TestIntegratedFixtureWritesPackageCenteredHTML(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range [][]byte{[]byte("Package navigation"), []byte("example.test/gocoverage-fixture/allow"), []byte("allow/allow.go"), []byte("Allow"), []byte("Original source"), []byte("source-code"), []byte("metric-condition"), []byte("No-match selection"), []byte("a &amp;&amp; b"), []byte("UC MC/DC"), []byte("Mask MC/DC"), []byte("Masking witness")} {
+	for _, required := range [][]byte{[]byte("Package navigation"), []byte("example.test/gomcdc-fixture/allow"), []byte("allow/allow.go"), []byte("Allow"), []byte("Original source"), []byte("source-code"), []byte("metric-condition"), []byte("No-match selection"), []byte("a &amp;&amp; b"), []byte("UC MC/DC"), []byte("Mask MC/DC"), []byte("Masking witness")} {
 		if !bytes.Contains(contents, required) {
 			t.Errorf("HTML missing %q", required)
 		}
@@ -55,7 +55,7 @@ func TestIntegratedFixtureReportsAllMetricsAcrossPackages(t *testing.T) {
 	if code != ExitSuccess {
 		t.Fatalf("all-metric exit = %d\nstderr:\n%s", code, allStderr)
 	}
-	if all.Version != report.SchemaVersion || all.Module != "example.test/gocoverage-fixture" {
+	if all.Version != report.SchemaVersion || all.Module != "example.test/gomcdc-fixture" {
 		t.Fatalf("report identity = version %q module %q", all.Version, all.Module)
 	}
 	if all.Run.Status != cover.RunPassed || !all.Run.Complete {
@@ -68,7 +68,7 @@ func TestIntegratedFixtureReportsAllMetricsAcrossPackages(t *testing.T) {
 		if len(measurement.Packages) != 4 {
 			t.Fatalf("measurement %q package statuses = %#v, want 4 packages", measurement.Name, measurement.Packages)
 		}
-		if got := measurement.Packages["example.test/gocoverage-fixture/shared"]; got != string(gotest.PackageSkipped) {
+		if got := measurement.Packages["example.test/gomcdc-fixture/shared"]; got != string(gotest.PackageSkipped) {
 			t.Fatalf("measurement %q shared package status = %q, want %q", measurement.Name, got, gotest.PackageSkipped)
 		}
 	}
@@ -91,7 +91,7 @@ func TestIntegratedFixtureReportsAllMetricsAcrossPackages(t *testing.T) {
 		}
 	}
 	assertPackageSums(t, all)
-	shared := findPackage(t, all, "example.test/gocoverage-fixture/shared")
+	shared := findPackage(t, all, "example.test/gomcdc-fixture/shared")
 	if shared.Summary.Statement.Covered == 0 || shared.Summary.Function.Covered == 0 || shared.Summary.Decision.Covered != shared.Summary.Decision.Total {
 		t.Fatalf("cross-package calls did not align C0 and AST scope: %#v", shared.Summary)
 	}
@@ -144,7 +144,7 @@ func TestIntegratedFixtureReportsAllMetricsAcrossPackages(t *testing.T) {
 	}
 	for _, packageReport := range all.Packages {
 		for _, file := range packageReport.Files {
-			if filepath.IsAbs(file.Path) || strings.Contains(file.Path, ".gocoverage") || strings.Contains(file.Path, "gocoverage-") {
+			if filepath.IsAbs(file.Path) || strings.Contains(file.Path, ".gomcdc") || strings.Contains(file.Path, "gomcdc-") {
 				t.Fatalf("report leaked a generated/temporary file path %q", file.Path)
 			}
 			for _, function := range file.Functions {
@@ -221,17 +221,17 @@ func TestBuildFailureStillProducesPartialMultiPackageReport(t *testing.T) {
 	if built.Run.Status != cover.RunFailed || built.Run.FailureKind != cover.RunFailureBuild || built.Run.Complete {
 		t.Fatalf("partial run = %#v", built.Run)
 	}
-	good := findPackage(t, built, "example.test/gocoverage-partial/good")
+	good := findPackage(t, built, "example.test/gomcdc-partial/good")
 	if !good.Evidence || good.Summary.Decision.Covered != good.Summary.Decision.Total {
 		t.Fatalf("good package evidence/decision = %#v", good)
 	}
-	broken := findPackage(t, built, "example.test/gocoverage-partial/broken")
+	broken := findPackage(t, built, "example.test/gomcdc-partial/broken")
 	if broken.Status != "build-failed" || broken.Evidence ||
 		broken.Summary.Statement.Unknown == 0 || broken.Summary.Function.Unknown == 0 ||
 		broken.Summary.Decision.Unknown != 2 || broken.Summary.Decision.Total != 0 {
 		t.Fatalf("broken package = %#v", broken)
 	}
-	malformed := findPackage(t, built, "example.test/gocoverage-partial/malformed")
+	malformed := findPackage(t, built, "example.test/gomcdc-partial/malformed")
 	if malformed.Status != "build-failed" || malformed.Evidence {
 		t.Fatalf("malformed package = %#v", malformed)
 	}

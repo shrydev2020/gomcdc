@@ -1,3 +1,3 @@
-module example.test/gocoverage-partial
+module example.test/gomcdc-partial
 
 go 1.26

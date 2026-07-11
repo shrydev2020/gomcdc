@@ -283,7 +283,7 @@ func TestGeneratedFileRemainsInCoverageAndIdentifiersAreAvailable(t *testing.T) 
 
 package p
 
-func __gocoverageHooks(value bool) {
+func __gomcdcHooks(value bool) {
 	if value {}
 }
 `)
@@ -302,7 +302,7 @@ func __gocoverageHooks(value bool) {
 	if len(file.Decisions) != 1 {
 		t.Fatalf("len(Decisions) = %d, want 1", len(file.Decisions))
 	}
-	if !slices.Contains(file.Identifiers, "__gocoverageHooks") {
+	if !slices.Contains(file.Identifiers, "__gomcdcHooks") {
 		t.Fatalf("Identifiers = %v", file.Identifiers)
 	}
 }

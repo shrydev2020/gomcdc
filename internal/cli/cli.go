@@ -1,4 +1,4 @@
-// Package cli implements the gocoverage command-line workflow.
+// Package cli implements the gomcdc command-line workflow.
 package cli
 
 import (
@@ -42,7 +42,7 @@ const (
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	workingDir, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintf(stderr, "gocoverage: determine working directory: %v\n", err)
+		fmt.Fprintf(stderr, "gomcdc: determine working directory: %v\n", err)
 		return ExitInternalError
 	}
 	return runAt(ctx, workingDir, args, stdout, stderr)
@@ -60,12 +60,12 @@ func runAt(ctx context.Context, workingDir string, args []string, stdout, stderr
 		return ExitSuccess
 	}
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "gocoverage: a subcommand is required")
+		fmt.Fprintln(stderr, "gomcdc: a subcommand is required")
 		writeTopUsage(stderr)
 		return ExitInvalidUsage
 	}
 	if args[0] != "test" {
-		fmt.Fprintf(stderr, "gocoverage: unknown subcommand %q\n", args[0])
+		fmt.Fprintf(stderr, "gomcdc: unknown subcommand %q\n", args[0])
 		writeTopUsage(stderr)
 		return ExitInvalidUsage
 	}
@@ -75,7 +75,7 @@ func runAt(ctx context.Context, workingDir string, args []string, stdout, stderr
 		if errors.Is(err, flag.ErrHelp) {
 			return ExitSuccess
 		}
-		fmt.Fprintf(stderr, "gocoverage: %v\n", err)
+		fmt.Fprintf(stderr, "gomcdc: %v\n", err)
 		return ExitInvalidUsage
 	}
 	return runCoverage(ctx, workingDir, opts, stdout, stderr)
@@ -89,27 +89,27 @@ type sourceInstrumentation struct {
 func runCoverage(ctx context.Context, workingDir string, opts options, stdout, stderr io.Writer) (exitCode int) {
 	excludes, err := config.CompileExcludes(opts.excludes)
 	if err != nil {
-		fmt.Fprintf(stderr, "gocoverage: %v\n", err)
+		fmt.Fprintf(stderr, "gomcdc: %v\n", err)
 		return ExitInvalidUsage
 	}
 	buildFlags, err := loader.BuildFlags(opts.goTestArgs)
 	if err != nil {
-		fmt.Fprintf(stderr, "gocoverage: %v\n", err)
+		fmt.Fprintf(stderr, "gomcdc: %v\n", err)
 		return ExitInvalidUsage
 	}
 	rawGOFLAGS := os.Getenv("GOFLAGS")
 	goFlagsOverlay, goFlagsErr := goflags.Contains(rawGOFLAGS, "overlay")
 	if goFlagsErr != nil {
-		fmt.Fprintf(stderr, "gocoverage: parse GOFLAGS: %v\n", goFlagsErr)
+		fmt.Fprintf(stderr, "gomcdc: parse GOFLAGS: %v\n", goFlagsErr)
 		return ExitInvalidUsage
 	}
 	filteredGOFLAGS, goFlagsErr := goflags.WithoutMeasurementFlags(rawGOFLAGS)
 	if goFlagsErr != nil {
-		fmt.Fprintf(stderr, "gocoverage: parse GOFLAGS: %v\n", goFlagsErr)
+		fmt.Fprintf(stderr, "gomcdc: parse GOFLAGS: %v\n", goFlagsErr)
 		return ExitInvalidUsage
 	}
 	if usesOverlay(buildFlags) || goFlagsOverlay {
-		fmt.Fprintln(stderr, "gocoverage: go test -overlay is unsupported because it prevents reliable original-source mapping")
+		fmt.Fprintln(stderr, "gomcdc: go test -overlay is unsupported because it prevents reliable original-source mapping")
 		return ExitInvalidUsage
 	}
 	loaded, err := loader.Load(ctx, loader.Options{
@@ -120,7 +120,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		GOFLAGS:      &filteredGOFLAGS,
 	})
 	if err != nil {
-		fmt.Fprintf(stderr, "gocoverage: package load failed: %v\n", err)
+		fmt.Fprintf(stderr, "gomcdc: package load failed: %v\n", err)
 		return ExitInstrumentationFailed
 	}
 
@@ -130,7 +130,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	for _, file := range loaded.Files {
 		relative, relErr := filepath.Rel(loaded.ModuleRoot, file.Path)
 		if relErr != nil {
-			fmt.Fprintf(stderr, "gocoverage: resolve source path %q: %v\n", file.Path, relErr)
+			fmt.Fprintf(stderr, "gomcdc: resolve source path %q: %v\n", file.Path, relErr)
 			return ExitInstrumentationFailed
 		}
 		if excludes.Match(relative) {
@@ -146,7 +146,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 			// Invalid source in one package is ultimately a go test build failure.
 			// Keep other packages reportable instead of failing before their tests
 			// can run and emit partial evidence.
-			fmt.Fprintf(stderr, "gocoverage: source analysis skipped %q: %v\n", relative, analysisErr)
+			fmt.Fprintf(stderr, "gomcdc: source analysis skipped %q: %v\n", relative, analysisErr)
 			analysisIncomplete = true
 			analysisUnknown++
 			continue
@@ -158,7 +158,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		analyses = append(analyses, source.analysis)
 	}
 	if err := analyzer.DetectCollisions(analyses); err != nil {
-		fmt.Fprintf(stderr, "gocoverage: source analysis failed: %v\n", err)
+		fmt.Fprintf(stderr, "gomcdc: source analysis failed: %v\n", err)
 		return ExitInstrumentationFailed
 	}
 
@@ -170,7 +170,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		Keep:       opts.keepWorkDir,
 	})
 	if err != nil {
-		fmt.Fprintf(stderr, "gocoverage: temporary workspace creation failed: %v\n", err)
+		fmt.Fprintf(stderr, "gomcdc: temporary workspace creation failed: %v\n", err)
 		return ExitInstrumentationFailed
 	}
 	type namedWorkspace struct {
@@ -189,11 +189,11 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	defer func() {
 		for _, item := range workspaces {
 			if cleanupErr := item.workspace.Cleanup(); cleanupErr != nil {
-				fmt.Fprintf(stderr, "gocoverage: %s workspace cleanup failed: %v\n", item.measurement, cleanupErr)
+				fmt.Fprintf(stderr, "gomcdc: %s workspace cleanup failed: %v\n", item.measurement, cleanupErr)
 				exitCode = ExitInternalError
 			}
 			if item.workspace.IsKept() {
-				fmt.Fprintf(stderr, "gocoverage: kept %s workspace: %s\n", item.measurement, item.workspace.RootDir)
+				fmt.Fprintf(stderr, "gomcdc: kept %s workspace: %s\n", item.measurement, item.workspace.RootDir)
 			}
 		}
 	}()
@@ -204,7 +204,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 			Keep:       opts.keepWorkDir,
 		})
 		if err != nil {
-			fmt.Fprintf(stderr, "gocoverage: standard-cover workspace creation failed: %v\n", err)
+			fmt.Fprintf(stderr, "gomcdc: standard-cover workspace creation failed: %v\n", err)
 			return ExitInstrumentationFailed
 		}
 		workspaces = append(workspaces, namedWorkspace{measurement: "standard-cover", workspace: standardWork})
@@ -231,7 +231,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 
 	var standardResult *gotest.Result
 	if needsC0 {
-		fmt.Fprintln(stderr, "gocoverage: measurement standard-cover (original source)")
+		fmt.Fprintln(stderr, "gomcdc: measurement standard-cover (original source)")
 		result := runGoTest(ctx, opts.timeout, gotest.Options{
 			Dir:           filepath.Join(standardWork.ModuleDir, loaded.RelativeWorkDir),
 			Patterns:      loaded.PackageImportSet,
@@ -248,11 +248,11 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	if needsASTRun && (len(decisions) > 0 || len(clauses) > 0) {
 		injected, injectErr := runtimecov.Inject(astWork.ModuleDir, loaded.ModulePath)
 		if injectErr != nil {
-			fmt.Fprintf(stderr, "gocoverage: runtime instrumentation failed: %v\n", injectErr)
+			fmt.Fprintf(stderr, "gomcdc: runtime instrumentation failed: %v\n", injectErr)
 			return ExitInstrumentationFailed
 		}
 		if _, instrumentErr := instrumentPackages(astWork.ModuleDir, sources, injected.ImportPath); instrumentErr != nil {
-			fmt.Fprintf(stderr, "gocoverage: source instrumentation failed: %v\n", instrumentErr)
+			fmt.Fprintf(stderr, "gomcdc: source instrumentation failed: %v\n", instrumentErr)
 			return ExitInstrumentationFailed
 		}
 	}
@@ -262,10 +262,10 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	if needsASTRun {
 		runID, err = newRunID()
 		if err != nil {
-			fmt.Fprintf(stderr, "gocoverage: create coverage run ID: %v\n", err)
+			fmt.Fprintf(stderr, "gomcdc: create coverage run ID: %v\n", err)
 			return ExitInternalError
 		}
-		fmt.Fprintln(stderr, "gocoverage: measurement ast")
+		fmt.Fprintln(stderr, "gomcdc: measurement ast")
 		result := runGoTest(ctx, opts.timeout, gotest.Options{
 			Dir:        filepath.Join(astWork.ModuleDir, loaded.RelativeWorkDir),
 			Patterns:   loaded.PackageImportSet,
@@ -291,19 +291,19 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	integrityFailure := false
 	astEvidenceIntegrityUnknown := false
 	if collectionErr != nil {
-		fmt.Fprintf(stderr, "gocoverage: runtime coverage collection failed: %v\n", collectionErr)
+		fmt.Fprintf(stderr, "gomcdc: runtime coverage collection failed: %v\n", collectionErr)
 		integrityFailure = true
 		astEvidenceIntegrityUnknown = true
 	}
 	validatedCollection, validationErr := validateObservations(decisions, clauses, collection, runID, noMatches)
 	collection = validatedCollection
 	if validationErr != nil {
-		fmt.Fprintf(stderr, "gocoverage: runtime coverage validation failed: %v\n", validationErr)
+		fmt.Fprintf(stderr, "gomcdc: runtime coverage validation failed: %v\n", validationErr)
 		integrityFailure = true
 		astEvidenceIntegrityUnknown = true
 	}
 	for _, diagnostic := range collection.Diagnostics {
-		fmt.Fprintf(stderr, "gocoverage: runtime coverage diagnostic: %s\n", formatRuntimeDiagnostic(diagnostic))
+		fmt.Fprintf(stderr, "gomcdc: runtime coverage diagnostic: %s\n", formatRuntimeDiagnostic(diagnostic))
 	}
 	if runtimeDiagnosticsInvalidate(collection.Diagnostics, astResult) {
 		integrityFailure = true
@@ -318,14 +318,14 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 			c0EvidenceIntegrityUnknown = true
 			standardPassed := standardResult != nil && standardResult.Status == cover.RunPassed
 			if standardPassed {
-				fmt.Fprintf(stderr, "gocoverage: C0 coverage collection failed: %v\n", c0Err)
+				fmt.Fprintf(stderr, "gomcdc: C0 coverage collection failed: %v\n", c0Err)
 				integrityFailure = true
 			}
 			// Build the source inventory so the partial report records the affected
 			// statement and function entities as unknown.
 			partialInventory, inventoryErr := buildC0Report(c0.Profile{Mode: c0.ModeSet}, loaded, sources, nil)
 			if inventoryErr != nil {
-				fmt.Fprintf(stderr, "gocoverage: C0 inventory recovery failed after %v: %v\n", c0Err, inventoryErr)
+				fmt.Fprintf(stderr, "gomcdc: C0 inventory recovery failed after %v: %v\n", c0Err, inventoryErr)
 			} else {
 				c0Report = partialInventory
 			}
@@ -395,7 +395,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	}
 	built := report.Build(input)
 	if err := writeReport(opts, input, workingDir, stdout); err != nil {
-		fmt.Fprintf(stderr, "gocoverage: report generation failed: %v\n", err)
+		fmt.Fprintf(stderr, "gomcdc: report generation failed: %v\n", err)
 		return ExitInternalError
 	}
 	if integrityFailure {
@@ -403,10 +403,10 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	}
 	if testRunsFailed(standardResult, astResult) {
 		if standardResult != nil && standardResult.Err != nil {
-			fmt.Fprintf(stderr, "gocoverage: standard-cover measurement: %v\n", standardResult.Err)
+			fmt.Fprintf(stderr, "gomcdc: standard-cover measurement: %v\n", standardResult.Err)
 		}
 		if astResult != nil && astResult.Err != nil {
-			fmt.Fprintf(stderr, "gocoverage: ast measurement: %v\n", astResult.Err)
+			fmt.Fprintf(stderr, "gomcdc: ast measurement: %v\n", astResult.Err)
 		}
 		return ExitTestsFailed
 	}
@@ -414,7 +414,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		coverage := built.Instrumentation.Total
 		fmt.Fprintf(
 			stderr,
-			"gocoverage: strict instrumentation coverage failed: discovered=%d supported=%d instrumented=%d unsupported=%d unknown=%d\n",
+			"gomcdc: strict instrumentation coverage failed: discovered=%d supported=%d instrumented=%d unsupported=%d unknown=%d\n",
 			coverage.Discovered,
 			coverage.Supported,
 			coverage.Instrumented,
@@ -947,7 +947,7 @@ func thresholdFailures(opts options, summary report.Summary) []string {
 	for _, check := range checks {
 		if check.threshold.set && belowThreshold(check.metric, check.threshold.value) {
 			failures = append(failures, fmt.Sprintf(
-				"gocoverage: %s %.2f%% (%d/%d) is below %.2f%%",
+				"gomcdc: %s %.2f%% (%d/%d) is below %.2f%%",
 				check.name,
 				metricPercentage(check.metric),
 				check.metric.Covered,

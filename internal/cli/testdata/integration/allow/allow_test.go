@@ -41,7 +41,7 @@ func TestMeasurementWorkspacesAreIsolated(t *testing.T) {
 		return
 	}
 	const marker = ".standard-run-marker"
-	if os.Getenv("GOCOVERAGE_DATA_DIR") == "" {
+	if os.Getenv("GOMCDC_DATA_DIR") == "" {
 		if err := os.WriteFile(marker, []byte("standard-cover"), 0o600); err != nil {
 			t.Fatal(err)
 		}

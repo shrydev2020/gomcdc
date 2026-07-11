@@ -14,7 +14,7 @@ import (
 	"golang.org/x/mod/modfile"
 )
 
-const tempPrefix = "gocoverage-"
+const tempPrefix = "gomcdc-"
 
 // Options controls creation and lifetime of a Workspace.
 type Options struct {

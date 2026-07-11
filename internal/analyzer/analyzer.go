@@ -25,9 +25,9 @@ import (
 // StableIDVersion is part of every decision key. Changing the key schema must
 // use a new version so IDs never silently change meaning.
 const (
-	StableIDVersion       = "gocoverage-decision/v2"
-	ClauseStableIDVersion = "gocoverage-clause/v1"
-	ClauseGroupIDVersion  = "gocoverage-clause-group/v1"
+	StableIDVersion       = "gomcdc-decision/v2"
+	ClauseStableIDVersion = "gomcdc-clause/v1"
+	ClauseGroupIDVersion  = "gomcdc-clause-group/v1"
 )
 
 // FileOptions identifies an original source file in its module and package.

@@ -25,7 +25,7 @@ func WriteText(writer io.Writer, input Input) error {
 
 func renderText(report Report) string {
 	var output strings.Builder
-	fmt.Fprintf(&output, "gocoverage report v%s\n", report.Version)
+	fmt.Fprintf(&output, "gomcdc report v%s\n", report.Version)
 	fmt.Fprintf(&output, "Module: %s\n", report.Module)
 	fmt.Fprintf(&output, "Run: %s failure-kind=%s (%s)\n", report.Run.Status, report.Run.FailureKind, completeness(report.Run.Complete))
 	fmt.Fprintf(&output, "Measurement mode: %s\n", report.MeasurementMode)

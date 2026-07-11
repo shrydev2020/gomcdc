@@ -363,7 +363,7 @@ func (w *eventWriter) inspectOutput(line string) {
 	if strings.Contains(line, "panic: test timed out after ") || strings.Contains(line, "test timed out after ") {
 		w.goTestTimedOut = true
 	}
-	const prefix = "gocoverage runtime diagnostic:"
+	const prefix = "gomcdc runtime diagnostic:"
 	if index := strings.Index(line, prefix); index >= 0 {
 		message := strings.TrimSpace(line[index+len(prefix):])
 		if message != "" {
