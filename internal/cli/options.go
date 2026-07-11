@@ -14,21 +14,17 @@ import (
 )
 
 type options struct {
-	coverage      string
-	metrics       config.CoverageSet
-	format        string
-	output        string
-	excludes      stringList
-	includeTests  bool
-	keepWorkDir   bool
-	strict        bool
-	workDirParent string
-	timeout       time.Duration
-	specialDenom  string
-	failUnderC1   optionalFloat
-	failUnderC2   optionalFloat
-	failUnderMCDC optionalFloat
-
+	coverage             string
+	metrics              config.CoverageSet
+	format               string
+	output               string
+	excludes             stringList
+	includeTests         bool
+	keepWorkDir          bool
+	strict               bool
+	workDirParent        string
+	timeout              time.Duration
+	specialDenom         string
 	failUnderStatement   optionalFloat
 	failUnderFunction    optionalFloat
 	failUnderDecision    optionalFloat
@@ -84,9 +80,6 @@ func parseOptions(args []string, errOut io.Writer) (options, error) {
 	fs.StringVar(&opts.workDirParent, "workdir", "", "parent directory for the temporary workspace")
 	fs.DurationVar(&opts.timeout, "timeout", 10*time.Minute, "maximum duration of the go test subprocess (0 disables)")
 	fs.StringVar(&opts.specialDenom, "special-denominator", "exclude", "special-state denominator policy: exclude or include")
-	fs.Var(&opts.failUnderC1, "fail-under-c1", "fail if complete C1 percentage is below this value")
-	fs.Var(&opts.failUnderC2, "fail-under-c2", "alias for --fail-under-condition")
-	fs.Var(&opts.failUnderMCDC, "fail-under-mcdc", "deprecated alias for both MC/DC thresholds")
 	fs.Var(&opts.failUnderStatement, "fail-under-statement", "minimum statement coverage percentage")
 	fs.Var(&opts.failUnderFunction, "fail-under-function", "minimum function coverage percentage")
 	fs.Var(&opts.failUnderDecision, "fail-under-decision", "minimum decision coverage percentage")
@@ -114,7 +107,6 @@ func parseOptions(args []string, errOut io.Writer) (options, error) {
 		return options{}, err
 	}
 	opts.metrics = metrics
-	applyThresholdAliases(&opts)
 	enableThresholdMetrics(&opts)
 	if err := validateOptions(opts); err != nil {
 		return options{}, err
@@ -159,23 +151,6 @@ func validateOptions(opts options) error {
 		}
 	}
 	return nil
-}
-
-func applyThresholdAliases(opts *options) {
-	if opts.failUnderC1.set && !opts.failUnderDecision.set {
-		opts.failUnderDecision = opts.failUnderC1
-	}
-	if opts.failUnderC2.set && !opts.failUnderCondition.set {
-		opts.failUnderCondition = opts.failUnderC2
-	}
-	if opts.failUnderMCDC.set {
-		if !opts.failUnderMCDCUnique.set {
-			opts.failUnderMCDCUnique = opts.failUnderMCDC
-		}
-		if !opts.failUnderMCDCMasking.set {
-			opts.failUnderMCDCMasking = opts.failUnderMCDC
-		}
-	}
 }
 
 func enableThresholdMetrics(opts *options) {

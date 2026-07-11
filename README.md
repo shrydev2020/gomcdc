@@ -103,7 +103,7 @@ gocoverage test \
   ./...
 ```
 
-旧名の `--fail-under-c1` / `--fail-under-c2` はそれぞれ decision / condition の alias です。曖昧な `--fail-under-mcdc` は後方互換用で、明示指定されていない両 MC/DC 閾値へ適用されます。
+`--fail-under-c1`、`--fail-under-c2`、`--fail-under-mcdc` は提供しません。Decision、Condition、Unique-Cause MC/DC、Masking MC/DC の閾値を明示的に指定してください。
 
 `unsupported`、`unknown`、`aborted`、`possibly infeasible` は別件数として保持します。`possibly infeasible` は、式木から対象条件を pivotal にできないこと、または短絡状態を同一に保つ Unique-Cause ペアを構成できないことを証明できた場合に使用し、単なるテスト不足には使用しません。デフォルトの `--special-denominator=exclude` では分母から除外します。未達として分母へ含める場合は `--special-denominator=include` を指定します。
 
@@ -124,7 +124,7 @@ gocoverage test \
 
 ## レポートとソース位置
 
-`--format=text` と `--format=json` を提供します。JSON schema version は `1` です。すべての割合に分子・分母があり、module / package / file / function / decision / condition / clause の階層を保持します。Clause の集計名は `clauseBody`、`switchClauseBody`、`typeSwitchClauseBody`、`selectClauseBody` です。
+`--format=text` と `--format=json` を提供します。JSON schema version は `1` です。すべての割合に分子・分母があり、module / package / file / function / decision / condition / clause の階層を保持します。Clause の集計名は `clause`、`switchClauseBody`、`typeSwitchClauseBody`、`selectClauseBody` です。JSON に `clauseBody` という別名は出力しません。
 
 C0 は元ソースを対象にした標準 cover profile から取得します。AST metadata と runtime evidence は、計装後の一時行ではなく元の module-relative file、行、列へ正規化されます。本ツールが生成した bridge/runtime/probe だけを分母から除外し、ユーザーmoduleに元から存在する `// Code generated ... DO NOT EDIT.` ソースは通常どおり計測します。ユーザーの作業ツリーは変更せず、module の複製だけを計装します。
 

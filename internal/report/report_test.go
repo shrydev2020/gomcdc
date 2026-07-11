@@ -385,7 +385,7 @@ func TestZeroMetricsAndDisabledMetricsStayPresent(t *testing.T) {
 	}
 	if bytes.Contains(jsonValue, []byte(`"percentage": null`)) ||
 		!bytes.Contains(jsonValue, []byte(`"clause"`)) ||
-		!bytes.Contains(jsonValue, []byte(`"clauseBody"`)) ||
+		bytes.Contains(jsonValue, []byte(`"clauseBody"`)) ||
 		!bytes.Contains(jsonValue, []byte(`"mcdcMasking"`)) ||
 		jsonValue[len(jsonValue)-1] != '\n' {
 		t.Fatalf("zero JSON schema/newline mismatch:\n%s", jsonValue)
@@ -596,7 +596,7 @@ func packagePaths(value report.Report) []string {
 func metrics(summary report.Summary) map[string]report.MetricSummary {
 	return map[string]report.MetricSummary{
 		"statement": summary.Statement, "function": summary.Function, "decision": summary.Decision,
-		"clauseBody": summary.Clause, "switchClauseBody": summary.SwitchClauseBody,
+		"clause": summary.Clause, "switchClauseBody": summary.SwitchClauseBody,
 		"typeSwitchClauseBody": summary.TypeSwitchClauseBody, "selectClauseBody": summary.SelectClauseBody,
 		"condition":  summary.Condition,
 		"mcdcUnique": summary.MCDCUnique, "mcdcMasking": summary.MCDCMasking,

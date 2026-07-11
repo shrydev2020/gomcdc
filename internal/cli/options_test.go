@@ -55,17 +55,12 @@ func TestParseOptionsStrictMode(t *testing.T) {
 	}
 }
 
-func TestParseOptionsRejectsLaterPhase(t *testing.T) {
+func TestParseOptionsRejectsAmbiguousThresholdAliases(t *testing.T) {
 	t.Parallel()
-	opts, err := parseOptions([]string{"--coverage=c0,c1,c2,mcdc", "--fail-under-c2=70", "./..."}, &bytes.Buffer{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !opts.metrics.Enabled(config.MetricStatement) || !opts.metrics.Enabled(config.MetricMCDCMasking) {
-		t.Fatalf("alias metrics = %v", opts.metrics.Names())
-	}
-	if !opts.failUnderCondition.set || opts.failUnderCondition.value != 70 {
-		t.Fatalf("C2 threshold alias = %#v", opts.failUnderCondition)
+	for _, name := range []string{"--fail-under-c1=70", "--fail-under-c2=70", "--fail-under-mcdc=70"} {
+		if _, err := parseOptions([]string{name, "./..."}, &bytes.Buffer{}); err == nil {
+			t.Errorf("ambiguous threshold option %q was accepted", name)
+		}
 	}
 }
 

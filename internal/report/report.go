@@ -2,7 +2,6 @@
 package report
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -115,38 +114,6 @@ type Summary struct {
 	Condition            MetricSummary `json:"condition"`
 	MCDCUnique           MetricSummary `json:"mcdcUnique"`
 	MCDCMasking          MetricSummary `json:"mcdcMasking"`
-}
-
-// MarshalJSON retains the schema-v1 "clause" key while also exposing the
-// corrected formal name "clauseBody". Both are the same aggregate body metric;
-// the subtype fields remain authoritative for switch/type-switch/select.
-func (summary Summary) MarshalJSON() ([]byte, error) {
-	type serializedSummary struct {
-		Statement            MetricSummary `json:"statement"`
-		Function             MetricSummary `json:"function"`
-		Decision             MetricSummary `json:"decision"`
-		Clause               MetricSummary `json:"clause"`
-		ClauseBody           MetricSummary `json:"clauseBody"`
-		SwitchClauseBody     MetricSummary `json:"switchClauseBody"`
-		TypeSwitchClauseBody MetricSummary `json:"typeSwitchClauseBody"`
-		SelectClauseBody     MetricSummary `json:"selectClauseBody"`
-		Condition            MetricSummary `json:"condition"`
-		MCDCUnique           MetricSummary `json:"mcdcUnique"`
-		MCDCMasking          MetricSummary `json:"mcdcMasking"`
-	}
-	return json.Marshal(serializedSummary{
-		Statement:            summary.Statement,
-		Function:             summary.Function,
-		Decision:             summary.Decision,
-		Clause:               summary.Clause,
-		ClauseBody:           summary.Clause,
-		SwitchClauseBody:     summary.SwitchClauseBody,
-		TypeSwitchClauseBody: summary.TypeSwitchClauseBody,
-		SelectClauseBody:     summary.SelectClauseBody,
-		Condition:            summary.Condition,
-		MCDCUnique:           summary.MCDCUnique,
-		MCDCMasking:          summary.MCDCMasking,
-	})
 }
 
 // MetricSummary contains denominator-based coverage and special states. The
@@ -580,7 +547,7 @@ func clauseInstrumentationMetricName(kind cover.ClauseKind) string {
 	case cover.ClauseSelect:
 		return "selectClauseBody"
 	default:
-		return "clauseBody"
+		return "clause"
 	}
 }
 
