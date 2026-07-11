@@ -2,26 +2,31 @@
 
 [English](README.md)
 
-`gomcdc`は、Statement、Function、Decision、Condition、Clause Body、Clause Selection、Unique-Cause MC/DC、Masking MC/DCを解析するGo向けカバレッジツールです。
+gomcdcは、statement、function、decision、condition、clause body、
+clause selection、Unique-Cause MC/DC、Masking MC/DCを計測するGo向け
+カバレッジツールです。
 
-インストールされるコマンド名は`gocoverage`です。
+インストールされるコマンドは gocoverage です。
 
 ## 仕様
 
-- [日本語の規範仕様](docs/specification.ja.md)
-- [英語翻訳](docs/specification.md)
+- 日本語の規範仕様: docs/specification.ja.md
+- 英語の参考訳: docs/specification.md
 
-日本語仕様を規範版とします。
-
-定義、指標名、JSON field、閾値、完成条件は規範仕様だけに置き、READMEへ重複記載しません。
+指標の定義、JSON field、閾値、完成条件は仕様書を正とします。
+READMEでは、現在のcheckoutを使うために必要な情報だけを説明します。
 
 ## 開発状況
 
-本リポジトリは開発中であり、`1.0-draft`仕様の全要件にはまだ適合していません。
+これはまだ1.0リリースではありません。現在の実装はrepositoryのtest、
+race、vetを通過していますが、次の2つの仕様上の完了条件が残っています。
 
-未完成の主な領域は、compiler-aware Clause Selection backendと最終JSON schemaです。
+- expression switch / type switchのcase選択を正確に記録するbackend
+- report schemaを1.0-draftから最終versionへ移行すること
 
-現在の出力を安全認証または規格適合の根拠として使用しないでください。
+完成とは、規範仕様24節の全項目を実装し、fixture integration suiteで
+検証できる状態です。それまではreportを認証や規格適合の証拠として
+扱わず、開発時の診断情報として利用してください。
 
 ## 動作要件
 
@@ -42,26 +47,23 @@ gocoverage test ./...
 gocoverage test --format html --output coverage-html ./...
 ```
 
-HTML reportの入口は`coverage-html/index.html`です。
+HTML reportは coverage-html/index.html に出力されます。
 
 各file pageには、元source bytesへstatement、decision、condition、clause、
-Unique-Cause MC/DC、Masking MC/DCのbyte-range annotationを重ねて表示します。
-Statement、Decision、Condition、Combinedの切替はCSSだけで行い、JavaScriptや
-外部resourceを読み込みません。
+両MC/DCのbyte-range annotationを重ねて表示します。Statement、Decision、
+Condition、Combinedの切替はCSSだけで行い、JavaScriptや外部resourceを
+読み込みません。
 
-最終的なCLIはdraft仕様で定義します。
+このcheckoutのコマンドは gocoverage test です。利用可能なoptionは
+gocoverage test -h で確認できます。
 
-実装適合が完了するまでは、checkoutしたrevisionの挙動を`gocoverage test -h`で確認してください。
+## セキュリティ
 
-## 信頼境界
+gocoverageは現在のユーザー権限で対象moduleをbuildし、そのtestを実行します。
 
-`gocoverage`は、現在のユーザー権限で対象moduleをbuildし、そのtestを実行します。
-
-一時workspaceは計装境界であり、security sandboxではありません。
-
-信頼できるcodeだけを実行し、信頼できないtestへproduction credentialを与えないでください。
-
-reportにはmodule-relative path、source expression、package名、test outputが含まれる場合があります。
+一時workspaceはsecurity sandboxではありません。信頼できるcodeだけを
+実行し、testへsecretを渡さないでください。reportにはmodule-relative path、
+source expression、package名、test outputが含まれる場合があります。
 
 ## 開発時の確認
 
@@ -73,12 +75,11 @@ go vet ./...
 
 ## package境界
 
-本リポジトリはGo library APIを公開していないため、実装packageを`internal/`配下に置きます。
-
-仕様適合後の公開契約は、`gocoverage`コマンドとversioned report schemaです。
+このrepositoryが公開するのはcommandであり、Go library APIではありません。
+そのため実装packageは internal/ 配下に置いています。公開interfaceは
+gocoverage commandとreport schemaです。
 
 ## ライセンス
 
-現時点ではライセンスを追加していません。
-
-リポジトリ所有者がライセンスを追加するまで、再配布または改変の権利があると仮定しないでください。
+このrepositoryにはlicense fileがありません。再配布・改変の条件は、
+repository所有者がlicenseを追加するまで定義されません。

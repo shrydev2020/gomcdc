@@ -2,26 +2,31 @@
 
 [日本語](README.ja.md)
 
-`gomcdc` is a Go coverage tool for statement, function, decision, condition, clause body, clause selection, Unique-Cause MC/DC, and Masking MC/DC analysis.
+gomcdc is a Go coverage tool for statement, function, decision, condition,
+clause body, clause selection, Unique-Cause MC/DC, and Masking MC/DC analysis.
 
-The installed command is `gocoverage`.
+The installed command is gocoverage.
 
 ## Specification
 
-- [Normative specification in Japanese](docs/specification.ja.md)
-- [English translation](docs/specification.md)
+- Normative specification in Japanese: docs/specification.ja.md
+- English reference translation: docs/specification.md
 
-The Japanese specification is authoritative.
+The specification is the source of truth for metric definitions, JSON fields,
+thresholds, and completion criteria. This README only describes how to use the
+current checkout.
 
-Definitions, metric names, JSON fields, thresholds, and completion criteria belong to the specification and are not duplicated in this README.
+## Status
 
-## Project status
+This repository is not a 1.0 release yet. The current implementation passes the
+repository test, race, and vet suites, but two specification gates remain:
 
-The repository is under active development and does not yet conform to every requirement in the `1.0-draft` specification.
+- exact case-selection evidence for expression and type switches;
+- promotion of the report schema from 1.0-draft to the final version.
 
-Known incomplete areas include the compiler-aware Clause Selection backend and the final JSON schema.
-
-Do not use the current output as a certification or safety-compliance claim.
+Completion means that every item in section 24 of the normative specification is
+implemented and covered by the fixture integration suite. Until then, treat
+reports as engineering diagnostics, not as certification evidence.
 
 ## Requirements
 
@@ -42,26 +47,25 @@ gocoverage test ./...
 gocoverage test --format html --output coverage-html ./...
 ```
 
-The HTML report entry point is `coverage-html/index.html`.
+The HTML report is written to coverage-html/index.html.
 
 Each file page shows the original source bytes with byte-range annotations for
 statement, decision, condition, clause, and both MC/DC strategies. The
 Statement, Decision, Condition, and Combined views are CSS-only; the report
 does not load JavaScript or external resources.
 
-The draft specification defines the final CLI.
+The command for this checkout is gocoverage test. Run gocoverage test -h to see
+the options supported by the installed revision.
 
-Until implementation conformance is complete, use `gocoverage test -h` to inspect the behavior of the checked-out revision.
+## Security
 
-## Trust boundary
+gocoverage builds and runs the target module's tests with the current user's
+permissions.
 
-`gocoverage` builds and runs the target module's tests with the current user's permissions.
-
-The temporary workspace is an instrumentation boundary, not a security sandbox.
-
-Run the tool only on code you trust, and do not expose production credentials to untrusted tests.
-
-Reports may contain module-relative paths, source expressions, package names, and test output.
+The temporary workspace is not a security sandbox. Run the tool only on code
+you trust, do not expose secrets to its tests, and remember that reports may
+contain module-relative paths, source expressions, package names, and test
+output.
 
 ## Development
 
@@ -73,12 +77,11 @@ go vet ./...
 
 ## Package boundary
 
-Implementation packages remain under `internal/` because this repository does not publish a supported Go library API.
-
-The intended public contracts are the `gocoverage` command and the versioned report schema after specification conformance.
+Implementation packages remain under internal/ because this repository
+publishes a command, not a supported Go library API. The public interfaces are
+the gocoverage command and its report schema.
 
 ## License
 
-No license has been added yet.
-
-Do not assume redistribution or modification rights until the repository owner adds a license.
+No license file is present in this repository. Redistribution and modification
+rights are therefore not defined here.
