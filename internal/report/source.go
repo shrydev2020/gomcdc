@@ -88,10 +88,11 @@ func sourceAnnotations(file FileReport, source []byte) []SourceAnnotation {
 			for _, condition := range decision.Conditions {
 				cstart, cend := sourceRangeOffsets(condition.Location, source)
 				conditionState := conditionCoverageState(condition)
+				conditionID := fmt.Sprintf("%s:condition:%d", decision.DecisionID, condition.Index)
 				annotations = append(annotations,
-					SourceAnnotation{StartOffset: cstart, EndOffset: cend, Metric: "condition", EntityID: decision.DecisionID, State: conditionState, Tooltip: "Condition: " + conditionState},
-					SourceAnnotation{StartOffset: cstart, EndOffset: cend, Metric: "mcdc-unique", EntityID: decision.DecisionID, State: condition.MCDCUnique.Status, Tooltip: "Unique-Cause MC/DC: " + condition.MCDCUnique.Status},
-					SourceAnnotation{StartOffset: cstart, EndOffset: cend, Metric: "mcdc-masking", EntityID: decision.DecisionID, State: condition.MCDCMasking.Status, Tooltip: "Masking MC/DC: " + condition.MCDCMasking.Status},
+					SourceAnnotation{StartOffset: cstart, EndOffset: cend, Metric: "condition", EntityID: conditionID, State: conditionState, Tooltip: fmt.Sprintf("Condition #%d: %s", condition.Index, conditionState)},
+					SourceAnnotation{StartOffset: cstart, EndOffset: cend, Metric: "mcdc-unique", EntityID: conditionID + ":mcdc-unique", State: condition.MCDCUnique.Status, Tooltip: fmt.Sprintf("Condition #%d Unique-Cause MC/DC: %s", condition.Index, condition.MCDCUnique.Status)},
+					SourceAnnotation{StartOffset: cstart, EndOffset: cend, Metric: "mcdc-masking", EntityID: conditionID + ":mcdc-masking", State: condition.MCDCMasking.Status, Tooltip: fmt.Sprintf("Condition #%d Masking MC/DC: %s", condition.Index, condition.MCDCMasking.Status)},
 				)
 			}
 		}

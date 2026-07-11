@@ -1,6 +1,7 @@
 package report
 
 import (
+	"strings"
 	"testing"
 
 	cover "github.com/shrydev2020/gomcdc/internal/coverage"
@@ -48,8 +49,62 @@ func TestHTMLSourceSegmentsEscapeTextThroughTemplate(t *testing.T) {
 			{StartOffset: 0, EndOffset: 3, Metric: "statement", State: "covered", Tooltip: "safe"},
 		},
 	}
-	segments := htmlSourceSegments(&view)
+	segments := htmlSourceSegments(&view, "")
 	if len(segments) != 2 || segments[0].Text != "<x>" || segments[0].Class == "" {
 		t.Fatalf("segments = %#v", segments)
+	}
+}
+
+func TestHTMLSourceSegmentsFilterMetricProjection(t *testing.T) {
+	view := SourceFileView{
+		Source: "abcdef",
+		Annotations: []SourceAnnotation{
+			{StartOffset: 0, EndOffset: 2, Metric: "statement", State: "covered"},
+			{StartOffset: 0, EndOffset: 2, Metric: "decision", State: "not-covered"},
+			{StartOffset: 1, EndOffset: 3, Metric: "condition", State: "true-only"},
+		},
+	}
+	segments := htmlSourceSegments(&view, "statement")
+	for _, segment := range segments {
+		if strings.Contains(segment.Class, "decision") || strings.Contains(segment.Class, "condition") {
+			t.Fatalf("statement projection leaked another metric: %#v", segments)
+		}
+	}
+	if len(htmlSourceSegments(&view, "decision")) == 0 || len(htmlSourceSegments(&view, "condition")) == 0 {
+		t.Fatal("metric projections lost their own annotations")
+	}
+}
+
+func TestSourceAnnotationsUseConditionOccurrenceIDs(t *testing.T) {
+	location := cover.SourceLocation{File: "p.go", StartOffset: 0, EndOffset: 1}
+	file := FileReport{Functions: []FunctionReport{{Decisions: []DecisionReport{{
+		DecisionID: "decision-1",
+		Conditions: []ConditionReport{
+			{Index: 0, Location: location},
+			{Index: 1, Location: location},
+		},
+	}}}}}
+	annotations := sourceAnnotations(file, []byte("ab"))
+	ids := make(map[string]bool)
+	for _, annotation := range annotations {
+		if annotation.Metric != "condition" && annotation.Metric != "mcdc-unique" && annotation.Metric != "mcdc-masking" {
+			continue
+		}
+		if ids[annotation.EntityID] {
+			t.Fatalf("duplicate condition annotation ID %q", annotation.EntityID)
+		}
+		ids[annotation.EntityID] = true
+	}
+	for _, want := range []string{
+		"decision-1:condition:0",
+		"decision-1:condition:0:mcdc-unique",
+		"decision-1:condition:0:mcdc-masking",
+		"decision-1:condition:1",
+		"decision-1:condition:1:mcdc-unique",
+		"decision-1:condition:1:mcdc-masking",
+	} {
+		if !ids[want] {
+			t.Errorf("missing annotation ID %q", want)
+		}
 	}
 }

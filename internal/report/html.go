@@ -17,7 +17,9 @@ type htmlMetric struct {
 
 // WriteHTML writes one self-contained static HTML report.
 func WriteHTML(w io.Writer, input Input) error {
-	return writeHTMLReport(w, Build(input))
+	report := Build(input)
+	attachSourceViews(&report, input)
+	return writeHTMLReport(w, report)
 }
 
 func writeHTMLReport(w io.Writer, value Report) error {
@@ -41,12 +43,19 @@ type htmlSourceSegment struct {
 	Metrics string
 }
 
-func htmlSourceSegments(view *SourceFileView) []htmlSourceSegment {
+func htmlSourceSegments(view *SourceFileView, metric string) []htmlSourceSegment {
 	if view == nil {
 		return nil
 	}
+	filtered := *view
+	filtered.Annotations = make([]SourceAnnotation, 0, len(view.Annotations))
+	for _, annotation := range view.Annotations {
+		if sourceMetricMatches(annotation.Metric, metric) {
+			filtered.Annotations = append(filtered.Annotations, annotation)
+		}
+	}
 	segments := make([]htmlSourceSegment, 0)
-	for _, interval := range sourceIntervals(*view) {
+	for _, interval := range sourceIntervals(filtered) {
 		annotations := interval.anns
 		var tooltipParts []string
 		var metrics []string
@@ -70,6 +79,19 @@ func htmlSourceSegments(view *SourceFileView) []htmlSourceSegment {
 		})
 	}
 	return segments
+}
+
+func sourceMetricMatches(annotationMetric, viewMetric string) bool {
+	switch viewMetric {
+	case "":
+		return true
+	case "mcdc":
+		return annotationMetric == "mcdc-unique" || annotationMetric == "mcdc-masking"
+	case "clause":
+		return annotationMetric == "clause-body" || annotationMetric == "clause-selection"
+	default:
+		return annotationMetric == viewMetric
+	}
 }
 
 func htmlMetrics(s Summary) []htmlMetric {

@@ -36,6 +36,38 @@ func TestBuildWeightedAggregationAndMergesC0Function(t *testing.T) {
 	assertMetric(t, "merged function decision", function.Summary.Decision, true, 2, 4, 50, 0, 0, 0, 0)
 }
 
+func TestBuildLeavesHTMLSourceProjectionToWriteHTML(t *testing.T) {
+	t.Parallel()
+	input := report.Input{
+		ModulePath: "example.com/m",
+		SourceFiles: []report.SourceFileInput{{
+			PackagePath: "example.com/m/p",
+			Path:        "p.go",
+			Source:      []byte("package p\n"),
+		}},
+		PackageStatuses: map[string]string{"example.com/m/p": "passed"},
+	}
+	built := report.Build(input)
+	if source := built.Packages[0].Files[0].Source; source != nil {
+		t.Fatal("Build attached an HTML-only source projection")
+	}
+	var html bytes.Buffer
+	if err := report.WriteHTML(&html, input); err != nil {
+		t.Fatalf("WriteHTML: %v", err)
+	}
+	if !strings.Contains(html.String(), "package p") {
+		t.Fatal("WriteHTML omitted the source projection")
+	}
+	for _, required := range []string{"name=\"source-view-0-0\"", "source-view-combined", "source-view-mcdc", "source-view-clause"} {
+		if !strings.Contains(html.String(), required) {
+			t.Errorf("WriteHTML missing source view %q", required)
+		}
+	}
+	if strings.Contains(html.String(), "source-view-$pi-$fi") {
+		t.Fatal("WriteHTML leaked unexpanded template variables into radio names")
+	}
+}
+
 func TestANDShortCircuitDistinguishesUniqueAndMasking(t *testing.T) {
 	t.Parallel()
 

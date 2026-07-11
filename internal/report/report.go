@@ -461,7 +461,6 @@ func Build(input Input) Report {
 		report.Packages = append(report.Packages, packageReport)
 		addSummary(&report.Summary, packageReport.Summary)
 	}
-	attachSourceViews(&report, input)
 	return report
 }
 
