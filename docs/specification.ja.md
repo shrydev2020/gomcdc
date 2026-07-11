@@ -1,549 +1,227 @@
 # gomcdc 規範仕様
 
-本書は `gomcdc` の唯一の規範仕様である。
+本書は `gomcdc` 1.0 の意味論と適合条件を定める。日本語版を規範版とし、英語版は同じ定義番号を持つ参考訳とする。仕様バージョンは `1.0-draft` である。
 
-以前の要件定義、追加要件、緊急訂正は、本書へ統合した時点で規範性を失う。
+## 1. 適用範囲
 
-本書の日本語版を規範版とし、英語版は等価な翻訳とする。
+`gomcdc test` は Go module の一回の論理的計測要求から、Statement、Function、Decision、Switch Clause Body、Type Switch Clause Body、Select Clause Body、Switch Clause Selection、Type Switch Clause Selection、Condition、Unique-Cause MC/DC、Masking MC/DC の11指標を一つの source model 上へ集約する。
 
-仕様バージョンは `1.0-draft` である。
+対象は Go 1.26、Go Modules、Linux、macOS とする。対象 source は package pattern を `go list` して得た main module 内の package である。標準 library、外部 module、vendor、本ツール生成source、Go標準形式のgenerated-code commentを持つsourceは対象集合に含めない。`_test.go` は `--include-tests` 指定時だけ AST 系指標へ含め、このflagはStatement/Functionへ影響しない。
 
-`1.0` 公開前のJSON schemaとCLIには互換性保証を設けない。
+## 2. 基本領域
 
-## 1. 目的
+### D1. Source location
 
-`gomcdc` は、Go moduleのテスト実行から次の指標を計測し、一つのレポートへ統合する。
+`Location = (file, startLine, startColumn, endLine, endColumn)` とする。`file` は module root からの物理相対 path、行と列は1始まりである。公開位置は計装前 source の `Location` へ正規化する。
 
-- Statement Coverage
-- Function Coverage
-- Decision Coverage
-- Switch Clause Body Coverage
-- Type Switch Clause Body Coverage
-- Select Clause Body Coverage
-- Switch Clause Selection Coverage
-- Type Switch Clause Selection Coverage
-- Condition Coverage
-- Unique-Cause MC/DC
-- Masking MC/DC
-- 指標ごとのInstrumentation Coverage
+### D2. 識別子
 
-取得不能な事実を推測してcoveredまたはnot-coveredとして報告してはならない。
+`DecisionID`、`ConditionID`、`ClauseID` は同一 source revision に対して決定論的である。生成関数は module path、package import path、相対 file path、node kind、開始 offset、終了 offset、condition index だけを入力にできる。
 
-## 2. 対象環境
+`EvaluationID` は process 内で decision 評価開始ごとに一意である。複数 process を含む評価 identity は `(runID, packagePath, PID, evaluationID)` である。
 
-moduleの言語バージョンはGo 1.26とする。
+### D3. 状態
 
-開発とCIはGo 1.26系列の最新セキュリティ修正版を使用する。
-
-Go Modules、Linux、macOS、GitHub Actionsを対象とする。
-
-compiler-aware backendは対応するGo compiler versionを明示し、未対応versionを推測で処理せずunsupported-by-backendとする。
-
-Windows、assembly、cgo内部、compiler IR、path coverage、distributed test executionはバージョン1の対象外とする。
-
-## 3. 用語
-
-**Condition** は、`&&`、`||`、`!`を含まない、bool型の原子的ソース式である。
-
-比較、関数呼出し、field selection、map lookupのbool結果は、それ以上論理分解しない。
-
-**Condition occurrence** は、ソース上の一つのcondition出現である。
-
-同じテキストが複数回現れても、各出現へ別indexを割り当てる。
-
-**Decision** は、制御フローを選択するbool式全体である。
-
-**Clause body** は、switch、type switch、selectのcaseまたはdefaultに属するstatement列である。
-
-**Evaluation trace** は、一回のdecision評価で観測したcondition state列とdecision resultである。
-
-condition stateは`true`、`false`、`not-evaluated`のいずれかである。
-
-## 4. 対象ソース
-
-Go package patternから`go list`で得た、main module内のpackageだけを対象にする。
-
-標準library、外部module、vendor、本ツールが生成したソースは対象外とする。
-
-Go標準形式の生成コードコメントを持つユーザーソースは、デフォルトで対象外とする。
-
-`_test.go`は、`--include-tests`を指定した場合だけAST系指標の分母へ含める。
-
-Go標準coverがtest sourceをstatement分母へ含めないため、`--include-tests`はStatement CoverageとFunction Coverageへ影響しない。
-
-解析と`go test`は、同じGOOS、GOARCH、build tags、CGO設定、module設定を使用しなければならない。
-
-## 5. Statement Coverage
-
-Statement Coverageは、元ソースへ実行したGo標準cover profileから取得する。
-
-計測単位はGo cover profileのblockが持つstatement countである。
-
-blockのcounterが0より大きい場合、そのblockの全statement unitをcoveredとする。
-
-分子はcoveredなstatement unit数である。
-
-分母は対象blockのstatement count合計である。
-
-詳細レポートでは、個別AST statementを捏造せず、元ソース範囲、statement count、counterを持つstatement regionとして表示する。
-
-## 6. Function Coverage
-
-Function Coverageの対象は、関数、method、function literalである。
-
-対象function内のstatement unitが一つ以上coveredなら、そのfunctionをcoveredとする。
-
-statement unitを持たないfunctionは分母から除外する。
-
-複数の`init` functionとfunction literalは、元ソース位置で区別する。
-
-## 7. Decision Coverage
-
-バージョン1のdecisionは次に限定する。
-
-- `if`のcondition
-- conditionを持つ`for`のcondition
-- conditionless switchの各case expression
-
-assignment、return value、call argumentだけに現れるbool式はdecisionではない。
-
-conditionless switchの一つのcase clauseに複数expressionがある場合、各expressionを独立decisionとする。
-
-先行expressionがtrueとなった後のcase expressionはfalseではなく`not-evaluated`とする。
-
-Decision CoverageをCFG Edge Coverageと呼んではならない。
-
-`goto`、labeled break、labeled continue、return、panic、recover、fallthroughのedgeはDecision Coverageへ含めない。
-
-一つのdecisionにつき、true outcomeとfalse outcomeの二つをcoverage obligationとする。
-
-分子は観測済みoutcome数である。
-
-分母は二である。
-
-completed evaluationだけを証拠として使用する。
-
-## 8. Condition式木
-
-decisionを次の式木へ正規化する。
-
-```go
-type DecisionExpr interface { isDecisionExpr() }
-type AtomExpr struct { ConditionIndex uint16 }
-type NotExpr struct { Operand DecisionExpr }
-type AndExpr struct { Left, Right DecisionExpr }
-type OrExpr struct { Left, Right DecisionExpr }
+```text
+ConditionState  = true | false | not-evaluated
+EvaluationStatus = completed | aborted
+CoverageStatus  = covered | not-covered | infeasible | analysis-incomplete
+SupportStatus   = supported | unsupported-by-backend | unknown
 ```
 
-parenthesesは木構造だけに影響し、conditionを追加しない。
+`not-evaluated` は condition が実行されなかった観測であり boolean 値ではない。`aborted` は evaluation status にだけ属する。
 
-`!a`のconditionは`a`であり、式木は`NotExpr(AtomExpr(a))`である。
+### D4. Coverage count
 
-`a && (b || c)`のcondition indexは、左から右のソース出現順に`a=0`、`b=1`、`c=2`とする。
+指標 `m` の obligation 集合を `O_m`、covered obligation 集合を `C_m ⊆ O_m` とする。
 
-condition indexは、ファイル解析順、map iteration、並列処理へ依存してはならない。
+```text
+covered(m) = |C_m|
+total(m)   = |O_m|
+ratio(m)   = |C_m| / |O_m|   if |O_m| > 0
+ratio(m)   = undefined       if |O_m| = 0
+```
 
-## 9. Condition Coverage
+`unsupported-by-backend`、`unknown`、`infeasible`、`analysis-incomplete` の entity は `O_m` から除き、件数を別集計する。undefined は text で `n/a`、JSON で `null` とする。
 
-一つのcondition occurrenceにつき、trueとfalseの二つをcoverage obligationとする。
+## 3. Source model
 
-短絡により評価されなかったconditionは`not-evaluated`として記録する。
+### D5. Function
 
-`not-evaluated`をfalseとして扱ってはならない。
+Function は function declaration、method declaration、function literal のいずれかである。複数の `init` と function literal は Location で区別する。
 
-`not-evaluated`はCondition Coverageの分母を増やさない。
+### D6. Decision
 
-completed evaluationで実際に観測したtrueとfalseだけを証拠として使用する。
+v1 の Decision は `if` の condition 全体、condition を持つ `for` の condition 全体、conditionless switch の各 case expression である。一つの case に複数 expression がある場合、各 expression を独立 Decision とする。
 
-## 10. Evaluation lifecycle
+### D7. Boolean expression tree
 
-一回の動的decision評価ごとにEvaluationIDを発行する。
+Decision expression を次の木へ変換する。
 
-EvaluationIDは一つのtest process内で一意でなければならない。
+```text
+Expr ::= Atom(conditionIndex) | Not(Expr) | And(Expr, Expr) | Or(Expr, Expr)
+```
 
-module全体で使用するidentityは次とする。
+Atom は `&&`、`||`、`!` を含まない bool 型 source expression occurrence である。比較、call、selection、map lookup の bool 結果は一つの Atom とする。index は source の左から右への構文順で `0..n-1` を割り当てる。`!a` の Atom は `a` であり、否定は `Not` node が表す。
+
+### D8. Clause
+
+Clause は expression switch、type switch、conditionless switch、select の case または default 節である。同一 switch の `case A, B` は一つの Clause とする。
+
+`ClauseRole = case | default` とする。Switch dispatchは `SwitchID` を持つ。defaultを持たないexpression switchとtype switchにはsource Clauseとは別の `NoMatch(SwitchID)` selection obligationを一つ置く。
+
+## 4. 観測意味論
+
+### D9. Decision evaluation
+
+condition 数 `n` の一回の評価は次で表す。
 
 ```go
-type EvaluationIdentity struct {
-    RunID        string
-    PackagePath  string
-    ProcessID    int
-    EvaluationID uint64
+type DecisionEvaluation struct {
+    DecisionID DecisionID
+    EvaluationID EvaluationID
+    TestID string
+    Conditions [n]ConditionState
+    Result bool
+    Status EvaluationStatus
 }
 ```
 
-runtime APIは、Begin、condition記録、End、Abortを明示的に表現する。
+開始時に全 condition state を `not-evaluated` とする。実際に評価した Atom だけを true または false へ更新する。`EndDecision` に到達した評価だけを completed とし、panic、`runtime.Goexit`、process interruption 等で到達しなかった評価を aborted とする。TestID は補助情報であり、取得不能時は `unknown` とする。
 
-Endへ到達した評価だけをcompletedとする。
+### D10. 評価関数
 
-panic、`runtime.Goexit`、process interruptionなどでEndへ到達しなかった評価はabortedとする。
+完全 assignment `x ∈ {false,true}^n` に対する Decision tree の値を `eval(E,x)` とする。観測 vector `v` と整合する完全 assignment の集合を `Comp(v)` とする。
 
-aborted evaluationはDecision、Condition、MC/DCの証拠に使用しない。
-
-再帰、loop反復、nested decision、複数goroutine、複数processのevaluationを混同してはならない。
-
-## 11. MC/DC共通規則
-
-本ツールのMC/DC percentageは、condition occurrenceごとの独立影響obligation達成率である。
-
-完全なMC/DC主張には、対応するDecision CoverageとCondition Coverageの達成も必要である。
-
-本ツールはentryとexitの完全な呼出しをMC/DC percentageへ含めず、DO-178C適合、tool qualification、安全認証を主張しない。
-
-### 11.1 Unique-Cause MC/DC
-
-対象condition `i`について、二つのcompleted evaluation `p`と`q`が次を全て満たす場合にcoveredとする。
-
-1. `p[i]`と`q[i]`は実際に評価されている。
-2. `p[i] != q[i]`である。
-3. `p.result != q.result`である。
-4. 全ての`j != i`について`p[j] == q[j]`である。
-5. `not-evaluated`はtrueまたはfalseと等しくない。
-
-条件4はcondition stateの一致であり、推測した入力値の一致ではない。
-
-短絡により条件4を満たすpairが構成不能な場合は、式木だけでUnique-Cause witness pairの不存在を証明できるとき`infeasible`とする。
-
-`infeasible`はprogram path全般の到達不能を意味しない。
-
-証明できない場合は`not-covered`とする。
-
-`a && b`に対して次の三traceだけがある場合、Unique-Causeは`a=infeasible`、`b=covered`となる。
+### D11. Clause event
 
 ```text
-[false, not-evaluated] -> false
-[true,  true]          -> true
-[true,  false]         -> false
+body-execution   : clause body の先頭へ制御が到達した
+direct-selection : dispatch がその clause を直接選択した
+no-match         : default のない dispatch がどの case も選択しなかった
 ```
 
-## 12. Masking MC/DC
+fallthrough による後続 body 到達は body-execution であり、後続 clause の direct-selection ではない。
 
-Masking MC/DCはcondition occurrenceごとに解析する。
+## 5. 指標
 
-解析はDecisionExprとcompleted evaluationだけを入力にするpure functionでなければならない。
+### D12. Statement Coverage
 
-全conditionへtrueまたはfalseを割り当てたvectorをcomplete assignmentと呼ぶ。
+Go cover profile block の statement count の各 unit を obligation とする。block counter が0より大きいとき、その block の全 unit を covered とする。詳細単位は元 source range、statement count、counter を持つ statement region である。
 
-観測trace `p`のcompletionは、評価済みconditionの値と一致し、式木をGoの左から右の短絡規則で評価した結果が`p.result`となり、同じconditionがnot-evaluatedとなるcomplete assignmentである。
+### D13. Function Coverage
 
-complete assignment `x`でcondition `j`がmaskedであるとは、`j`だけを反転したassignment `flip(x,j)`について次が成立することをいう。
+一つ以上の statement unit を持つ Function を obligation とする。その Function に属する statement unit が一つ以上 covered なら covered とする。statement unit を持たない Function は対象集合外である。
+
+### D14. Decision Coverage
+
+各 Decision `d` に `(d,true)` と `(d,false)` を obligation として置く。completed evaluation の Result に現れた outcome を covered とする。
+
+### D15. Condition Coverage
+
+各 condition occurrence `c` に `(c,true)` と `(c,false)` を obligation として置く。completed evaluation で実際に評価された値だけを covered とする。not-evaluated は追加 obligation も証拠も生成しない。
+
+### D16. Clause Body Coverage
+
+各 case/default Clause body を一つの obligation とする。expression switch と conditionless switch は Switch Clause Body、type switch は Type Switch Clause Body、select は Select Clause Body に属する。対応する body-execution event があれば covered とする。
+
+### D17. Clause Selection Coverage
+
+expression switch の各 case/default Clauseと `NoMatch(SwitchID)` を Switch Clause Selection の obligation とする。type switchも同様にType Switch Clause Selectionのobligationを持つ。direct-selection eventはSwitchIDとClauseID、no-match eventはSwitchIDとno-match roleを持つ。case alternative indexは証拠として保持するがv1分母へ追加しない。fallthrough eventはsource/destination ClauseIDを持ち、selection eventではない。
+
+### D18. Unique-Cause MC/DC
+
+condition `i` は、completed evaluation pair `(p,q)` が次をすべて満たすとき covered である。
+
+1. `p[i]` と `q[i]` は boolean 値である。
+2. `p[i] ≠ q[i]`。
+3. `p.result ≠ q.result`。
+4. すべての `j ≠ i` について `p[j] = q[j]`。
+
+not-evaluated は boolean 値と等しくない。成立 pair を witness として保存する。構造上成立しない obligation は infeasible とする。
+
+### D19. Masking MC/DC
+
+完全 assignment `z` の condition `j` を反転した assignment を `flip(z,j)` とし、`masked(E,z,j) := eval(E,z) = eval(E,flip(z,j))` と定義する。
+
+condition `i` は、completed evaluation pair `(p,q)` と completion `(x,y) ∈ Comp(p) × Comp(q)` が存在し、次をすべて満たすとき covered である。
+
+1. `p[i]` と `q[i]` は boolean 値である。
+2. `x[i] ≠ y[i]`。
+3. `eval(E,x) ≠ eval(E,y)`。
+4. 各 `j ≠ i` について、`x[j] = y[j]` または `masked(E,x,j) ∧ masked(E,y,j)`。
+
+観測 pair、completion、masked condition index を witness として保存する。
+
+MC/DC percentageはcondition occurrenceの独立影響obligation達成率である。完全なMC/DC達成には対応するDecision CoverageとCondition Coverageも必要である。同じsource textのcondition occurrence間に値の同一性を仮定しない。witnessが未証明のoccurrence couplingを必要とする場合、または正確な探索がresource limitで完了しない場合はanalysis-incompleteとする。
+
+MC/DC 解析は strategy ごとの pure function とする。
+
+```go
+type MCDCStrategy interface {
+    Analyze(DecisionMetadata, []DecisionEvaluation) MCDCResult
+}
+```
+
+## 6. 集約と証拠
+
+### D20. 集約
+
+module、package、file、function、decision、condition、clause の各階層で obligation の整数和を取る。上位 percentage は covered 合計と total 合計から計算する。
+
+### D21. Evidence authority
+
+Statement と Function の証拠は元 source を対象とした Go standard cover が生成する。Decision、Condition、MC/DC、3種の Clause Body は AST backend、2種の Clause Selection は compiler-aware backend が生成する。
+
+backend は entity ごとに SupportStatus を出力する。Instrumentation Coverage は指標ごとに `discovered`、`supported`、`instrumented`、`unsupported`、`unknown` を持つ。
+
+`--strict` は、要求指標に unsupported-by-backend、unknown、analysis-incomplete、または未計装 entity が一つでもあれば失敗する。
+
+### D22. Measurement
+
+MeasurementMode は `standard-cover`、`single-run`、`dual-run-standard-cover` である。Statement/Function だけなら standard-cover、非standard-cover指標だけなら single-run、両方なら dual-run-standard-cover とする。dual-run は元source runと計装runを一回ずつ実行する。各runのstatus、failure kind、package statusを独立して保持し、run間でevaluationを対応付けない。同一指標を得るためにtest suiteを指標別に反復しない。
+
+## 7. 実行モデル
+
+### D23. Runtime
+
+```go
+BeginDecision(decisionID, conditionCount) EvaluationID
+EvalCondition(evaluationID, conditionIndex, value) bool
+EndDecision(evaluationID, result) bool
+AbortDecision(evaluationID)
+```
+
+runtime は EvaluationID を衝突させず、package-global な current evaluation を持たない。再帰、nest、loop、複数 goroutine、複数 process を identity で分離する。共有状態は race-free である。
+
+### D24. 意味保存
+
+計装変換は Go の評価順序、短絡、評価回数、call 回数、panic 条件、defer 順序、副作用順序、return value、error、ユーザーから観測可能な状態を保存する。probe は受け取った値を一度だけ記録し、同じ値を返す。実行時間、allocation、stack trace、inlining、scheduling、CPU、memory は同値条件に含めない。
+
+### D25. Process と回収
+
+各 test process は package import path の衝突不能なencoding、PID、run ID、nonceを含む固有 file へ evidence を書く。CLI は完全に検証できたrecordを収集しmodule reportへmergeする。DecisionID、EvaluationIdentity、condition count、state、result、statusと短絡規則の整合性を検証する。test failure、build failure、timeout、panic、truncated tail、異常終了時も取得済み evidence と静的 inventory から partial report を構成する。
+
+### D26. go test
+
+package pattern は一つ以上必須とする。CLI は `go test -count=1` を使用する。ユーザーまたはGOFLAGSによる `-count`、`-cover`、`-coverprofile`、`-covermode`、`-coverpkg`、`-json`、`-overlay` はCLI errorとする。`--`以降の非競合引数は解析と全runへ同じ意味で適用する。解析とtestは同じGOOS、GOARCH、build tags、CGO、module設定を使用する。activeな複数main moduleを持つgo.workは対象外とする。
+
+## 8. 外部形式
+
+### D27. CLI
+
+`--coverage` の正式値は次の11個と `all` である。default は `all` とする。
 
 ```text
-eval(tree, x) == eval(tree, flip(x, j))
+statement, function, decision,
+switch-clause-body, type-switch-clause-body, select-clause-body,
+switch-clause-selection, type-switch-clause-selection,
+condition, mcdc-unique, mcdc-masking, all
 ```
 
-対象condition `i`について、completed evaluation `p`と`q`およびそのcompletion `x`と`y`が次を全て満たす場合にcoveredとする。
+閾値 flag は各指標に一対一で対応する `--fail-under-<metric>` とする。選択されていない指標への閾値は CLI error、total が0の指標への閾値は未達とする。比較は丸め前の整数比で行う。
 
-1. `p[i]`と`q[i]`は実際に評価されている。
-2. `x[i] != y[i]`である。
-3. `eval(tree, x) != eval(tree, y)`である。
-4. 全ての`j != i`について、`x[j] == y[j]`であるか、`j`が`x`と`y`の両方でmaskedである。
-5. `x`と`y`はそれぞれ`p`と`q`の有効なcompletionである。
-
-成立したwitnessには、観測trace、completion、target condition、masked conditionを保存する。
-
-同じsource expressionが複数condition occurrenceとして現れる場合、値の同一性を仮定してはならない。
-
-未観測値の補完が、複数occurrence間の意味的couplingを仮定しなければ成立しない場合は`analysis-incomplete`とする。
-
-実装がresource limitにより正確な探索を完了できない場合も`analysis-incomplete`とし、推測scoreを返してはならない。
-
-上記`a && b`の三traceでは、Masking MC/DCは`a=covered`、`b=covered`となる。
-
-## 13. Clause Body Coverage
-
-AST backendはcase selectionではなくbody entryを計測する。
-
-次の三指標を独立に集計する。
-
-- Switch Clause Body Coverage
-- Type Switch Clause Body Coverage
-- Select Clause Body Coverage
-
-一つのcaseまたはdefault bodyにつき、一つのcoverage obligationを持つ。
-
-実行がbodyへ入った場合にcoveredとする。
-
-元のbodyが空でも、明示されたcaseまたはdefaultは分母へ含める。
-
-fallthroughで到達したbodyもbody coverageではcoveredとする。
-
-body executionをdirect case selectionと呼んではならない。
-
-conditionless switchのcase expressionはDecision Coverageの対象でもあり、そのcase bodyはSwitch Clause Body Coverageの対象でもある。
-
-### 13.1 Clause Selection Coverage
-
-compiler-aware backendは、Switch Clause Selection CoverageとType Switch Clause Selection Coverageを計測する。
-
-各明示case、default、defaultがない場合のno-matchを一つのselection obligationとする。
-
-直接選択されたclauseだけをcoveredとする。
-
-fallthroughでbodyへ到達したclauseを直接選択coveredとしてはならない。
-
-`case A, B`はバージョン1では一つのclause selection obligationとする。
-
-compiler eventは、matched case expressionまたはmatched type alternativeを区別できる情報を保持する。
-
-selection eventは`SwitchID`と直接選択した`ClauseID`を持ち、case alternativeが存在する場合だけmatched alternative indexを持つ。
-
-no-match eventは`SwitchID`とno-match roleを持ち、存在しないClauseIDを捏造しない。
-
-fallthrough eventはsourceとdestinationのClauseIDを持つ。
-
-matched alternativeはバージョン1のcoverage分母へ含めないが、取得した証拠をreportから捨ててはならない。
-
-fallthrough edgeはselectionとbody entryのどちらにも混ぜず、独立eventとして保持する。
-
-Switch Clause Selection CoverageとType Switch Clause Selection Coverageはバージョン1の完成条件に含める。
-
-汎用的な`Clause Coverage`集約値は定義しない。
-
-## 14. Instrumentation Coverage
-
-coverage scoreと計装対応率を分離する。
-
-各指標について次を出力する。
-
-```text
-discovered
-supported
-instrumented
-unsupported
-unknown
-```
-
-`discovered`は、対象sourceから静的に識別したentity数である。
-
-`supported`は、選択backendがそのentityへ正確な証拠を生成できる数である。
-
-`instrumented`は、必要なprobeまたはcompiler eventを実際に生成した数である。
-
-`unsupported`は、backendの能力外であると確定した数である。
-
-`unknown`は、解析または整合性検証を完了できず能力判定も確定できない数である。
-
-単位は各指標のcoverage obligationを持つsource entityとする。
-
-Statementはstatement unit数、Functionはfunction数、Decisionはdecision数、Conditionと各MC/DCはcondition occurrence数、Clause Bodyはclause body数、Clause Selectionはselection obligation数を単位とする。
-
-Instrumentation Coverageの分母はdiscovered、分子はinstrumentedとする。
-
-support statusは`supported`、`unsupported-by-backend`、`unknown`のいずれかとする。
-
-coverage statusは`covered`、`not-covered`、`infeasible`、`analysis-incomplete`のいずれかとする。
-
-`aborted`はevaluation statusであり、coverage entity statusへ変換しない。
-
-unsupported-by-backendとunknownはcoverage percentageの分母へ含めない。
-
-coverage percentageへunsupportedやunknownを混ぜる設定は提供しない。
-
-`--strict`は、要求指標にunsupported-by-backend、unknown、analysis-incomplete、未計装entityが一つでもあれば失敗する。
-
-## 15. 計装による意味保存
-
-計装後も次を保存する。
-
-- Go仕様上の評価順序
-- `&&`と`||`の短絡
-- 式と関数呼出しの評価回数
-- panicの発生条件
-- deferの順序
-- 副作用の順序
-- return valueとerror
-- ユーザーコードから観測可能な状態変更
-
-実行時間、allocation数、stack trace、inlining、goroutine scheduling、CPU使用量、memory使用量の一致は保証しない。
-
-計測runtimeはユーザー式の値を一度だけ受け取り、同じ値を返す。
-
-計測runtime自身の失敗をユーザーコードへpanicとして伝播させてはならない。
-
-計測失敗はdiagnosticとintegrity statusへ反映する。
-
-## 16. Source locationとID
-
-ユーザー向けの正式位置は、main module rootからの物理相対pathと物理的な一始まりの行・列とする。
-
-ユーザー記述の`//line`による論理位置は、追加情報として保持してよいが正式位置を置換しない。
-
-一時workspace、generated bridge、runtime packageの位置をユーザー向け位置として表示してはならない。
-
-DecisionIDとClauseIDは、同じsource revisionに対して決定論的でなければならない。
-
-IDはmodule path、package import path、相対file path、node kind、物理start offset、物理end offset、condition indexから生成してよい。
-
-IDはload順、解析順、goroutine順、map iteration順へ依存してはならない。
-
-異なるsource revision間のID安定性は保証しない。
-
-## 17. Evidence authorityとMeasurement mode
-
-standard-cover backendだけがStatement CoverageとFunction Coverageの実行証拠を所有する。
-
-AST backendだけがDecision、Condition、両MC/DC、三種類のClause Body Coverageの実行証拠を所有する。
-
-compiler-aware backendだけがSwitch Clause SelectionとType Switch Clause Selectionの実行証拠を所有する。
-
-backendは、別backendの証拠を推測または派生させて正式証拠へ昇格してはならない。
-
-### 17.1 Measurement mode
-
-StatementまたはFunctionだけを選択した場合は`standard-cover`とする。
-
-standard-cover以外の指標だけを選択した場合は`single-run`とする。
-
-両方を選択した場合は`dual-run-standard-cover`とする。
-
-dual-runでは、元ソースのstandard cover runと、計装済みsourceのinstrumented runを一回ずつ実行する。
-
-instrumented runはAST backendとcompiler-aware backendを同じbuildとtest executionへ適用する。
-
-Clause Selection指標を選択しても第三のtest runを追加してはならない。
-
-指標ごとにtestを再実行してはならない。
-
-選択指標が内部的に別指標のmetadataまたはruntime evidenceを必要とする場合、その依存情報は収集してよい。
-
-依存情報の収集だけを理由に、未選択指標をreportへ追加してはならない。
-
-二つのrunは別のtest executionであり、evaluationを相互に対応付けてはならない。
-
-各runのstatus、failure kind、package statusを独立してレポートする。
-
-一方が失敗しても、もう一方と失敗runから取得済みのデータを可能な範囲で回収する。
-
-## 18. go test引数
-
-package patternは一つ以上必須とする。
-
-`--`以降のGo build/test引数は、解析と全measurement runへ同じ意味で適用する。
-
-本ツールは`-count=1`を常に設定する。
-
-ユーザーまたはGOFLAGSが別の`-count`を指定した場合はCLI errorとする。
-
-`-cover`、`-covermode`、`-coverpkg`、`-coverprofile`、`-json`、`-overlay`は本ツールが所有するため、ユーザー指定をCLI errorとする。
-
-`-run`、`-skip`、`-tags`、`-race`、`-shuffle`、`-parallel`、`-timeout`など、計測方式と衝突しない引数は保持する。
-
-activeな複数main moduleを持つgo.workは対象外とし、推測で一つを選ばない。
-
-## 19. Runtime data
-
-test processごとに独立したevent fileへ書き込む。
-
-file identityにはpackage import pathの衝突不能なencoding、PID、RunID、nonceを含める。
-
-package pathをそのままfile path要素として連結してはならない。
-
-truncated tail、panic、timeout、異常終了があっても、完全に検証できたrecordを回収する。
-
-DecisionID、EvaluationIdentity、condition count、condition state、result、statusの整合性を検証する。
-
-式木の短絡規則と矛盾するcompleted vectorはcoverage evidenceから除外し、integrity errorとする。
-
-同じdecision、vector、result、statusの重複は集約してよい。
-
-witnessに必要な代表vectorとoccurrence countは失ってはならない。
-
-TestIDはbest-effort情報であり、取得できない場合は`unknown`とする。
-
-TestIDをMC/DC成立条件へ使用しない。
-
-## 20. CLI
-
-基本実行は次とする。
-
-```sh
-gocoverage test ./...
-```
-
-`--coverage`は次の正式名だけを受け付ける。
-
-```text
-statement
-function
-decision
-switch-clause-body
-type-switch-clause-body
-select-clause-body
-switch-clause-selection
-type-switch-clause-selection
-condition
-mcdc-unique
-mcdc-masking
-all
-```
-
-`c0`、`c1`、`c2`、`mcdc`などの別名は提供しない。
-
-主要optionは次とする。
-
-```text
---format text|json
---output <path>
---exclude <module-relative-glob>
---include-tests
---keep-workdir
---workdir <parent>
---timeout <duration>
---strict
-```
-
-`--exclude`は複数指定でき、空または解析不能なglobをerrorとする。
-
-`--output`未指定時はstdoutへ出力する。
-
-`--keep-workdir`未指定時は一時workspaceを終了時に削除する。
-
-デフォルトは`all`とする。
-
-`all`は、`all`以外の十一の正式指標を全て選択する。
-
-閾値optionは次とする。
-
-```text
---fail-under-statement
---fail-under-function
---fail-under-decision
---fail-under-switch-clause-body
---fail-under-type-switch-clause-body
---fail-under-select-clause-body
---fail-under-switch-clause-selection
---fail-under-type-switch-clause-selection
---fail-under-condition
---fail-under-mcdc-unique
---fail-under-mcdc-masking
-```
-
-閾値を指定した指標が`--coverage`に含まれない場合はCLI errorとする。
-
-汎用的な`--fail-under-clause`は提供しない。
-
-## 21. Coverage ratioと閾値
-
-coverage ratioは、covered obligation数を、coveredとnot-coveredのobligation合計で割った値とする。
-
-unsupported-by-backend、unknown、infeasible、analysis-incompleteはcoverage ratioの分母へ含めない。
-
-分母が0の場合、percentageは数学的に未定義であるため、textでは`n/a`、JSONでは`null`とする。
-
-分母0の指標へ閾値を指定した場合、その閾値は未達とする。
-
-閾値比較は丸め前の整数比で行う。
-
-表示percentageは小数点以下二桁へ丸める。
-
-## 22. 終了状態
-
-各measurement runは、passed、test-failed、build-failed、timeout、command-failedを区別する。
-
-overall resultは全run、integrity、strict、thresholdの結果を保持する。
-
-process exit codeは次とする。
+### D28. 終了結果
 
 ```text
 0 success
@@ -553,145 +231,54 @@ process exit codeは次とする。
 4 invalid CLI usage
 ```
 
-複数条件が重なる場合の優先順位は`4 > 2 > 1 > 3 > 0`とする。
+優先順位は `4 > 2 > 1 > 3 > 0` とする。overall result は test、measurement、integrity、strict、threshold の結果を別 field で保持する。
 
-test failureまたはmeasurement failureがあっても、生成可能なreportは出力する。
+### D29. JSON
 
-## 23. JSON report
+root は `version`、`module`、`run`、`measurementMode`、`measurements`、`instrumentationCoverage`、`summary`、`packages`、`errors` を持つ。draft 中の version は `1.0-draft` とする。
 
-reportはmodule、package、file、function、decision、condition、clause body、clause selectionの階層で集計する。
+summary key は `statement`、`function`、`decision`、`switchClauseBody`、`typeSwitchClauseBody`、`selectClauseBody`、`switchClauseSelection`、`typeSwitchClauseSelection`、`condition`、`mcdcUnique`、`mcdcMasking` である。
 
-上位集計の分子と分母は、直下entityのpercentage平均ではなくcoverage obligation数の合計から計算する。
+各 summary は covered、total、percentage、support/status 別件数を持つ。ID は16進文字列、array は package path、Location、ID の順に整列する。Decision detail は expression、Location、outcome、condition、両 MC/DC、evaluation vector、witness を持つ。error は phase、code、message と該当時だけ package、module-relative path を持つ。
 
-JSON rootの`version`はdraft中`1.0-draft`とし、1.0公開時に`1`へ固定する。
+### D30. Text
 
-JSON rootは最低限、次を持つ。
+有効な全指標について `covered / total = percentage` または `n/a` を表示する。Instrumentation Coverage と除外 status 件数を併記する。MC/DC は condition ごとの結果、witness vector、Decision result、Masking completion、成立しない規則を表示する。
 
-```text
-version
-module
-run
-measurementMode
-measurements
-instrumentationCoverage
-summary
-packages
-errors
-```
+### D31. Resource と trust boundary
 
-summary keyはCLIの正式指標名をlower camel caseへ変換したものとする。
+一つの計装runは一回のsource計装、compiler計装、build、testで全非standard-cover証拠を収集する。event journalはwitnessを失わない形で集約・compactionし、loop回数に比例する全recordをmemoryへ保持しない。通常の `go test` に対する目標はAST-onlyで2倍以内、両MC/DC込みで5倍以内だが、この目標は適合判定に使用しない。
 
-```text
-statement
-function
-decision
-switchClauseBody
-typeSwitchClauseBody
-selectClauseBody
-switchClauseSelection
-typeSwitchClauseSelection
-condition
-mcdcUnique
-mcdcMasking
-```
+対象moduleは信頼済みコードとして現在ユーザー権限でbuild/testする。一時workspaceはsecurity sandboxではなく、悪意ある対象コードに対するevidence真正性を保証しない。一時directoryとevent fileは現在ユーザーだけが読み書きできるpermissionとし、source複製時にsymlink/hardlinkからworkspace外へ書き込まない。通常reportはユーザーの絶対local pathを含めない。
 
-汎用的な`clause`または`clauseBody` keyは出力しない。
+本ツールはcoverage意味論だけを定義し、DO-178C適合、tool qualification、安全認証を主張しない。Windows、assembly、cgo内部、compiler IR、path coverage、distributed test executionはv1対象外である。
 
-IDはJSON numberではなく16進文字列として出力する。
+## 9. 適合条件
 
-enum値はschemaで列挙し、未知値を既知値へ変換しない。
+実装は次の全条件を満たすとき本仕様へ適合する。
 
-arrayの順序はpackage path、物理source location、IDの順で決定論的にする。
+1. D1–D31 の型、集合、関数、外部形式を実装する。
+2. 11指標を同一 source model と同一 report に統合する。
+3. not-evaluated を false として記録しない。
+4. aborted evaluation を coverage evidence または coverage entity status に使用しない。
+5. Clause Body と Clause Selection、direct selection と fallthrough body execution を統合しない。
+6. Decision Coverage を CFG Edge Coverage と呼称または集計しない。
+7. assignment、return、call argument の bool expression を v1 Decision 集合へ追加しない。
+8. unsupported または unknown evidence を covered / not-covered と推測しない。
+9. 汎用 `clause` 指標、`clause` / `clauseBody` summary、指標 alias、曖昧な threshold flag を公開しない。
+10. 計装 source、temporary path、生成行を正式 Location として公開しない。
+11. package load 順、map iteration 順、goroutine 順、解析並列度を ID または report 順序へ反映しない。
+12. test cache によって計測実行を省略しない。
+13. 個別 process が同じ evidence file へ書き込まない。
+14. compiler-aware backend が未対応の Go version を supported として処理しない。
+15. 完成条件から C0統合、両 MC/DC、複数 package、source mapping、並行評価、Clause Selection を除外しない。
 
-decision reportには式、位置、outcome、condition、MC/DC結果、評価vector、witnessを含める。
+## 10. 受け入れ検証
 
-各errorは少なくとも`phase`、`code`、`message`を持ち、該当する場合だけ`package`とmodule-relative `path`を持つ。
+受け入れ suite は AND、OR、NOT、nested expression、side effect、evaluation order、conditionless switch、expression switch、type switch、select、empty body、fallthrough、direct selection、no-match、再帰、nested decision、loop、複数 goroutine、panic、recover、defer、`runtime.Goexit`、複数 package、external test package、build tag、test/build failure、timeout、truncated event、partial recovery、source mapping、ユーザー `//line`、生成code除外、全11閾値を含む。`a && b` は Unique-Causeで `a=infeasible`、`b=covered`、Maskingで両condition coveredとなる。
 
-## 24. Text report
+`go test -count=1 ./...`、`go test -race -count=1 ./...`、`go vet ./...` が成功し、fixture module の module 集計と package 集計の整数和が一致することを完成条件とする。
 
-全ての有効指標について分子、分母、percentageまたは`n/a`を表示する。
+## 11. 参考資料
 
-Instrumentation Coverageとunsupported、unknown、analysis-incomplete件数をcoverage scoreの近くへ表示する。
-
-MC/DC witnessには観測vector、decision result、Maskingで使用したcompletionを表示する。
-
-Unique-CauseとMaskingの結果が異なる場合は、満たさなかった規則を表示する。
-
-## 25. Performanceとresource境界
-
-一つのmeasurement runで、decision数または指標数に比例してtestまたはbuildを繰り返してはならない。
-
-instrumented runは一回のsource計装、compiler計装、build、testで全非standard-cover指標の証拠を収集する。
-
-同一evaluation evidenceはwitnessを失わない範囲で集約する。
-
-event journalは定期的にcompactionし、loop回数に比例してmemoryへ全recordを保持してはならない。
-
-性能目標は通常の`go test`に対してAST-onlyで2倍以内、両MC/DCを含む場合で5倍以内とするが、test内容に依存するため適合保証には使用しない。
-
-## 26. Securityと信頼境界
-
-本ツールは対象moduleのbuildとtestを現在のユーザー権限で実行する。
-
-対象moduleは信頼済みでなければならない。
-
-一時workspaceはsecurity sandboxではない。
-
-対象testはevent fileや環境変数へアクセスできるため、悪意ある対象コードに対するcoverage証拠の真正性を保証しない。
-
-一時directoryとevent fileは現在ユーザーだけが読み書きできるpermissionで作成する。
-
-sourceの複製時はsymlinkとhardlinkによるworkspace外書込みを防止する。
-
-reportにはmodule-relative path、source expression、test outputが含まれ得るため、project dataとして扱う。
-
-ユーザーの絶対local pathを通常reportへ出力してはならない。
-
-## 27. 受け入れ条件
-
-最低限、次のintegration fixtureを持つ。
-
-- AND、OR、NOT、nested expression
-- `a && b`のUnique-Causeで`a=infeasible`、`b=covered`、Maskingで両方covered
-- side effectとevaluation order
-- panic、recover、defer、`runtime.Goexit`
-- recursion、loop、nested decision
-- goroutineとparallel package execution
-- conditionless switchの複数case expression
-- expression switch、type switch、select、empty body、direct selection、no-match、fallthrough
-- 複数package、external test package、build tag
-- test failure、build failure、timeout、truncated event file
-- source mapping、ユーザー`//line`、生成コード除外
-- dual-runと部分回収
-- 全閾値と終了コード優先順位
-
-次が成功しなければならない。
-
-```sh
-go test -count=1 ./...
-go test -count=1 -race ./...
-go vet ./...
-```
-
-## 28. 完成条件
-
-一回の`gocoverage test ./...`で、選択された全指標、Instrumentation Coverage、source location、partial run statusを一つのreportへ出力できることを完成条件とする。
-
-AST backendが取得不能なselection情報をcoveredまたはnot-coveredとして報告しないこと、およびcompiler-aware backendがClause Selection Coverageを正確に報告することを完成条件に含める。
-
-全受け入れfixture、race test、`go vet`が成功しなければ完成としない。
-
-## 29. 技術参照
-
-本書の論理式とMC/DC用語はNASA/TM-2001-210876を参照する。
-
-短絡言語におけるMasking MC/DCはNASAのshort-circuit MC/DC研究を参照する。
-
-Go構文と評価規則はGo 1.26 Language Specificationを参照する。
-
-Statement Coverageの形式はGo公式coverage documentationを参照する。
-
-- https://ntrs.nasa.gov/archive/nasa/casi.ntrs.nasa.gov/20010057789.pdf
-- https://ntrs.nasa.gov/api/citations/20150011052/downloads/20150011052.pdf
-- https://go.dev/ref/spec
-- https://go.dev/doc/build-cover
+FAA CAST-10、NASA MC/DC tutorial、Hayhurst et al.、Chilenski、Go language specification、Go `cmd/cover` を参照する。参考資料は D1–D31 を上書きしない。
