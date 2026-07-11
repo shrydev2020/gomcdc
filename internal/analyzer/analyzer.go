@@ -514,6 +514,7 @@ func hasLogicalJunction(expression ast.Expr) bool {
 
 func (visitor decisionVisitor) addSwitchClauses(kind cover.ClauseKind, switchNode ast.Node, statements []ast.Stmt) {
 	groupID := visitor.clauseGroupID(kind, switchNode)
+	hasDefault := false
 	for index, statement := range statements {
 		if index >= int(^uint16(0)) {
 			visitor.context.err = fmt.Errorf("%s has more than %d clauses", kind, ^uint16(0))
@@ -526,6 +527,7 @@ func (visitor decisionVisitor) addSwitchClauses(kind cover.ClauseKind, switchNod
 		role := cover.ClauseCase
 		if clause.List == nil {
 			role = cover.ClauseDefault
+			hasDefault = true
 		}
 		added := visitor.addClause(groupID, kind, role, uint16(index), clause, clause.List)
 		if kind != cover.ClauseConditionlessSwitch || clause.List == nil {
@@ -539,9 +541,13 @@ func (visitor decisionVisitor) addSwitchClauses(kind cover.ClauseKind, switchNod
 		}
 		added.Metadata.DecisionIDs = append([]cover.DecisionID(nil), added.DecisionIDs...)
 	}
-	// The AST backend reports clause body execution only. An implicit no-match
-	// has no source body to probe, while exact case selection belongs to a
-	// future compiler backend.
+	if (kind == cover.ClauseExpressionSwitch || kind == cover.ClauseTypeSwitch) && !hasDefault {
+		if len(statements) > int(^uint16(0)) {
+			visitor.context.err = fmt.Errorf("%s has too many clauses to represent no-match", kind)
+			return
+		}
+		visitor.addClause(groupID, kind, cover.ClauseNoMatch, uint16(len(statements)), switchNode, nil)
+	}
 }
 
 func (visitor decisionVisitor) addSelectClauses(statement *ast.SelectStmt) {

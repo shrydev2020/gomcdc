@@ -13,8 +13,8 @@ import (
 	"github.com/shrydev2020/gomcdc/internal/mcdc"
 )
 
-// SchemaVersion identifies the stable JSON and text report schema.
-const SchemaVersion = "1"
+// SchemaVersion identifies the current pre-1.0 JSON and text report schema.
+const SchemaVersion = "1.0-draft"
 
 const statusDisabled = "disabled"
 
@@ -24,16 +24,6 @@ const (
 	MeasurementSingleRun            MeasurementMode = "single-run"
 	MeasurementStandardCover        MeasurementMode = "standard-cover"
 	MeasurementDualRunStandardCover MeasurementMode = "dual-run-standard-cover"
-)
-
-// SpecialDenominatorPolicy controls whether non-evidence states contribute as
-// uncovered units. Exclusion is the default and preserves their separate
-// diagnostic counts.
-type SpecialDenominatorPolicy string
-
-const (
-	ExcludeSpecialFromDenominator SpecialDenominatorPolicy = "exclude"
-	IncludeSpecialInDenominator   SpecialDenominatorPolicy = "include"
 )
 
 // Input contains all static metadata, runtime evidence, and run state needed
@@ -64,10 +54,9 @@ type Input struct {
 	Complete               bool
 	PackageStatuses        map[string]string
 	ASTPackageStatuses     map[string]string
-	SpecialDenominator     SpecialDenominatorPolicy
 }
 
-// Report is the deterministic schema-v1 module report.
+// Report is the deterministic module report.
 type Report struct {
 	Version         string                         `json:"version"`
 	Module          string                         `json:"module"`
@@ -77,7 +66,6 @@ type Report struct {
 	Capabilities    backend.CapabilitySet          `json:"capabilities"`
 	Backends        []backend.ProducerCapabilities `json:"backendCapabilities"`
 	Instrumentation backend.InstrumentationReport  `json:"instrumentationCoverage"`
-	Policy          Policy                         `json:"policy"`
 	Summary         Summary                        `json:"summary"`
 	Packages        []PackageReport                `json:"packages"`
 }
@@ -90,11 +78,6 @@ type MeasurementRun struct {
 	Packages map[string]string `json:"packages"`
 }
 
-// Policy makes denominator treatment explicit in every serialized report.
-type Policy struct {
-	SpecialDenominator SpecialDenominatorPolicy `json:"specialDenominator"`
-}
-
 // Run describes test execution independently from coverage.
 type Run struct {
 	Status      cover.RunStatus      `json:"status"`
@@ -104,29 +87,28 @@ type Run struct {
 
 // Summary always exposes every supported metric.
 type Summary struct {
-	Statement            MetricSummary `json:"statement"`
-	Function             MetricSummary `json:"function"`
-	Decision             MetricSummary `json:"decision"`
-	Clause               MetricSummary `json:"clause"`
-	SwitchClauseBody     MetricSummary `json:"switchClauseBody"`
-	TypeSwitchClauseBody MetricSummary `json:"typeSwitchClauseBody"`
-	SelectClauseBody     MetricSummary `json:"selectClauseBody"`
-	Condition            MetricSummary `json:"condition"`
-	MCDCUnique           MetricSummary `json:"mcdcUnique"`
-	MCDCMasking          MetricSummary `json:"mcdcMasking"`
+	Statement                 MetricSummary `json:"statement"`
+	Function                  MetricSummary `json:"function"`
+	Decision                  MetricSummary `json:"decision"`
+	SwitchClauseBody          MetricSummary `json:"switchClauseBody"`
+	TypeSwitchClauseBody      MetricSummary `json:"typeSwitchClauseBody"`
+	SelectClauseBody          MetricSummary `json:"selectClauseBody"`
+	SwitchClauseSelection     MetricSummary `json:"switchClauseSelection"`
+	TypeSwitchClauseSelection MetricSummary `json:"typeSwitchClauseSelection"`
+	Condition                 MetricSummary `json:"condition"`
+	MCDCUnique                MetricSummary `json:"mcdcUnique"`
+	MCDCMasking               MetricSummary `json:"mcdcMasking"`
 }
 
-// MetricSummary contains denominator-based coverage and special states. The
-// special states are excluded from Total by policy.
+// MetricSummary contains denominator-based coverage and special states. Unsupported, unknown, aborted, and possibly infeasible states are excluded from Total.
 type MetricSummary struct {
-	Enabled            bool    `json:"enabled"`
-	Covered            int     `json:"covered"`
-	Total              int     `json:"total"`
-	Percentage         float64 `json:"percentage"`
-	Unsupported        int     `json:"unsupported"`
-	Unknown            int     `json:"unknown"`
-	Aborted            int     `json:"aborted"`
-	PossiblyInfeasible int     `json:"possiblyInfeasible"`
+	Enabled            bool     `json:"enabled"`
+	Covered            int      `json:"covered"`
+	Total              int      `json:"total"`
+	Percentage         *float64 `json:"percentage"`
+	Unsupported        int      `json:"unsupported"`
+	Unknown            int      `json:"unknown"`
+	PossiblyInfeasible int      `json:"possiblyInfeasible"`
 }
 
 // PackageReport contains one package's status, evidence marker, and hierarchy.
@@ -247,19 +229,18 @@ type EvaluationReport struct {
 // ClauseReport contains only source-body execution evidence. Exact case
 // selection is deliberately unsupported by the AST backend.
 type ClauseReport struct {
-	ClauseID        string               `json:"clauseId"`
-	GroupID         string               `json:"groupId"`
-	Kind            cover.ClauseKind     `json:"kind"`
-	Role            cover.ClauseRole     `json:"role"`
-	Index           uint16               `json:"index"`
-	Location        cover.SourceLocation `json:"location"`
-	Expressions     []string             `json:"expressions"`
-	Types           []string             `json:"types"`
-	DecisionIDs     []string             `json:"decisionIds"`
-	CoverageName    string               `json:"coverageName"`
-	SelectionStatus string               `json:"selectionStatus"`
-	BodyExecutions  int                  `json:"bodyExecutions"`
-	Metric          MetricSummary        `json:"metric"`
+	ClauseID          string               `json:"clauseId"`
+	GroupID           string               `json:"groupId"`
+	Kind              cover.ClauseKind     `json:"kind"`
+	Role              cover.ClauseRole     `json:"role"`
+	Index             uint16               `json:"index"`
+	Location          cover.SourceLocation `json:"location"`
+	Expressions       []string             `json:"expressions"`
+	Types             []string             `json:"types"`
+	DecisionIDs       []string             `json:"decisionIds"`
+	BodyExecutions    int                  `json:"bodyExecutions"`
+	BodyCoverage      MetricSummary        `json:"bodyCoverage"`
+	SelectionCoverage MetricSummary        `json:"selectionCoverage"`
 }
 
 type packageBuilder struct {
@@ -282,16 +263,11 @@ type entityState uint8
 const (
 	entityNormal entityState = iota
 	entityUnknown
-	entityAborted
 	entityUnsupported
 )
 
 // Build creates the deterministic integrated hierarchy.
 func Build(input Input) Report {
-	denominatorPolicy := input.SpecialDenominator
-	if denominatorPolicy != IncludeSpecialInDenominator {
-		denominatorPolicy = ExcludeSpecialFromDenominator
-	}
 	instrumentationBackend := input.Backend
 	if instrumentationBackend == nil {
 		instrumentationBackend = backend.OrchestratedBackend{}
@@ -314,7 +290,6 @@ func Build(input Input) Report {
 		Capabilities:    capabilities,
 		Backends:        producerCapabilities,
 		Instrumentation: buildInstrumentationReport(input, capabilities),
-		Policy:          Policy{SpecialDenominator: denominatorPolicy},
 		Summary:         newSummary(input.Coverage),
 		Packages:        make([]PackageReport, 0),
 	}
@@ -414,8 +389,7 @@ func Build(input Input) Report {
 		unknown := input.ASTEvidenceIntegrityUnknown || packageUnknown(astPackageStatus(input, clause.Package, builder.status), astPackageEvidence[clause.Package])
 		clauseReport := buildClauseReport(clause, observationCounts[clause.ID], unknown, input.Coverage)
 		function.report.Clauses = append(function.report.Clauses, clauseReport)
-		addMetric(&function.report.Summary.Clause, clauseReport.Metric)
-		addClauseKindMetric(&function.report.Summary, clause.Kind, clauseReport.Metric)
+		addClauseMetrics(&function.report.Summary, clause.Kind, clauseReport.BodyCoverage, clauseReport.SelectionCoverage)
 	}
 
 	packagePaths := make([]string, 0, len(builders))
@@ -444,9 +418,6 @@ func Build(input Input) Report {
 		}
 		report.Packages = append(report.Packages, packageReport)
 		addSummary(&report.Summary, packageReport.Summary)
-	}
-	if denominatorPolicy == IncludeSpecialInDenominator {
-		includeSpecialStates(&report)
 	}
 	return report
 }
@@ -514,10 +485,17 @@ func buildInstrumentationReport(input Input, capabilities backend.CapabilitySet)
 		}
 	}
 
-	if input.Coverage.Enabled(config.MetricClause) {
-		for _, clause := range input.Clauses {
-			status := clauseInstrumentationStatus(capabilities, clause)
-			add(clauseInstrumentationMetricName(clause.Kind), status, 1, status == backend.CapabilitySupported)
+	for _, clause := range input.Clauses {
+		bodyMetric, bodyEnabled := clauseBodyMetric(clause.Kind, input.Coverage)
+		bodyEnabled = bodyEnabled && clause.Role != cover.ClauseNoMatch
+		if bodyEnabled {
+			status := clauseBodyInstrumentationStatus(capabilities, clause)
+			add(string(bodyMetric), status, 1, status == backend.CapabilitySupported)
+		}
+		selectionMetric, selectionEnabled := clauseSelectionMetric(clause.Kind, input.Coverage)
+		if selectionEnabled {
+			status := clauseSelectionInstrumentationStatus(capabilities, clause)
+			add(string(selectionMetric), status, 1, false)
 		}
 	}
 	add("sourceAnalysis", backend.CapabilityUnknown, input.InstrumentationUnknown, false)
@@ -538,16 +516,42 @@ func repeatedConditionCapability(conditions []cover.ConditionMetadata) backend.C
 	return backend.CapabilitySupported
 }
 
-func clauseInstrumentationMetricName(kind cover.ClauseKind) string {
+func clauseBodyMetric(kind cover.ClauseKind, coverage config.CoverageSet) (config.Metric, bool) {
+	var metric config.Metric
 	switch kind {
 	case cover.ClauseExpressionSwitch, cover.ClauseConditionlessSwitch:
-		return "switchClauseBody"
+		metric = config.MetricSwitchClauseBody
 	case cover.ClauseTypeSwitch:
-		return "typeSwitchClauseBody"
+		metric = config.MetricTypeSwitchClauseBody
 	case cover.ClauseSelect:
-		return "selectClauseBody"
+		metric = config.MetricSelectClauseBody
 	default:
-		return "clause"
+		return "", false
+	}
+	return metric, coverage.Enabled(metric)
+}
+
+func clauseSelectionMetric(kind cover.ClauseKind, coverage config.CoverageSet) (config.Metric, bool) {
+	var metric config.Metric
+	switch kind {
+	case cover.ClauseExpressionSwitch:
+		metric = config.MetricSwitchClauseSelection
+	case cover.ClauseTypeSwitch:
+		metric = config.MetricTypeSwitchClauseSelection
+	default:
+		return "", false
+	}
+	return metric, coverage.Enabled(metric)
+}
+
+func clauseSelectionInstrumentationStatus(capabilities backend.CapabilitySet, clause cover.ClauseMetadata) backend.CapabilityStatus {
+	switch clause.Kind {
+	case cover.ClauseExpressionSwitch:
+		return capabilities.Status(backend.CapabilitySwitchClauseSelection)
+	case cover.ClauseTypeSwitch:
+		return capabilities.Status(backend.CapabilityTypeSwitchClauseSelection)
+	default:
+		return backend.CapabilityUnknown
 	}
 }
 
@@ -559,7 +563,7 @@ func decisionInstrumentationStatus(capabilities backend.CapabilitySet, kind cove
 	return capabilities.Status(capability)
 }
 
-func clauseInstrumentationStatus(capabilities backend.CapabilitySet, clause cover.ClauseMetadata) backend.CapabilityStatus {
+func clauseBodyInstrumentationStatus(capabilities backend.CapabilitySet, clause cover.ClauseMetadata) backend.CapabilityStatus {
 	if clause.Role == cover.ClauseNoMatch {
 		return backend.CapabilityUnsupportedByBackend
 	}
@@ -613,56 +617,6 @@ func booleanExpressionCapability(expression *cover.BooleanExpression) backend.Ca
 		}
 	}
 	return visit(expression)
-}
-
-func includeSpecialStates(value *Report) {
-	includeSpecialSummary(&value.Summary)
-	for packageIndex := range value.Packages {
-		packageReport := &value.Packages[packageIndex]
-		includeSpecialSummary(&packageReport.Summary)
-		for fileIndex := range packageReport.Files {
-			file := &packageReport.Files[fileIndex]
-			includeSpecialSummary(&file.Summary)
-			for functionIndex := range file.Functions {
-				function := &file.Functions[functionIndex]
-				includeSpecialSummary(&function.Summary)
-				for statementIndex := range function.Statements {
-					includeSpecialMetric(&function.Statements[statementIndex].Metric)
-				}
-				for decisionIndex := range function.Decisions {
-					decision := &function.Decisions[decisionIndex]
-					includeSpecialSummary(&decision.Summary)
-					includeSpecialMetric(&decision.DecisionCoverage.Metric)
-					includeSpecialMetric(&decision.MCDCUnique.Metric)
-					includeSpecialMetric(&decision.MCDCMasking.Metric)
-					for conditionIndex := range decision.Conditions {
-						includeSpecialMetric(&decision.Conditions[conditionIndex].Metric)
-					}
-				}
-				for clauseIndex := range function.Clauses {
-					includeSpecialMetric(&function.Clauses[clauseIndex].Metric)
-				}
-			}
-		}
-	}
-}
-
-func includeSpecialSummary(summary *Summary) {
-	includeSpecialMetric(&summary.Statement)
-	includeSpecialMetric(&summary.Function)
-	includeSpecialMetric(&summary.Decision)
-	includeSpecialMetric(&summary.Clause)
-	includeSpecialMetric(&summary.SwitchClauseBody)
-	includeSpecialMetric(&summary.TypeSwitchClauseBody)
-	includeSpecialMetric(&summary.SelectClauseBody)
-	includeSpecialMetric(&summary.Condition)
-	includeSpecialMetric(&summary.MCDCUnique)
-	includeSpecialMetric(&summary.MCDCMasking)
-}
-
-func includeSpecialMetric(metric *MetricSummary) {
-	metric.Total += metric.Unsupported + metric.Unknown + metric.Aborted + metric.PossiblyInfeasible
-	metric.recalculate()
 }
 
 func addC0Function(builder *functionBuilder, filePath string, source c0.FunctionReport, integrityUnknown bool, coverage config.CoverageSet) {
@@ -823,10 +777,6 @@ func buildMCDCAnalysis(
 				status = string(cover.CoverageUnknown)
 				reason = "package did not produce runtime or C0 evidence"
 				witness = nil
-			case entityAborted:
-				status = string(cover.CoverageAborted)
-				reason = "only aborted evaluations were observed"
-				witness = nil
 			case entityUnsupported:
 				status = string(cover.CoverageUnsupported)
 				reason = "decision kind is not supported"
@@ -843,9 +793,6 @@ func buildMCDCAnalysis(
 		case entityUnknown:
 			report.Status = string(cover.CoverageUnknown)
 			report.Reason = "package did not produce runtime or C0 evidence"
-		case entityAborted:
-			report.Status = string(cover.CoverageAborted)
-			report.Reason = "only aborted evaluations were observed"
 		case entityUnsupported:
 			report.Status = string(cover.CoverageUnsupported)
 			report.Reason = "decision kind is not supported"
@@ -862,21 +809,33 @@ func buildClauseReport(
 	unknown bool,
 	coverage config.CoverageSet,
 ) ClauseReport {
-	body := observations[cover.ClauseBodyExecution]
-	metric := newMetric(coverage.Enabled(config.MetricClause))
-	if metric.Enabled {
+	bodyExecutions := observations[cover.ClauseBodyExecution]
+	_, bodyEnabled := clauseBodyMetric(metadata.Kind, coverage)
+	bodyEnabled = bodyEnabled && metadata.Role != cover.ClauseNoMatch
+	bodyCoverage := newMetric(bodyEnabled)
+	if bodyCoverage.Enabled {
 		switch {
 		case unknown:
-			metric.Unknown = 1
+			bodyCoverage.Unknown = 1
 		case !supportedClause(metadata):
-			metric.Unsupported = 1
+			bodyCoverage.Unsupported = 1
 		default:
-			metric.Total = 1
-			if body > 0 {
-				metric.Covered = 1
+			bodyCoverage.Total = 1
+			if bodyExecutions > 0 {
+				bodyCoverage.Covered = 1
 			}
 		}
-		metric.recalculate()
+		bodyCoverage.recalculate()
+	}
+	_, selectionEnabled := clauseSelectionMetric(metadata.Kind, coverage)
+	selectionCoverage := newMetric(selectionEnabled)
+	if selectionCoverage.Enabled {
+		if unknown {
+			selectionCoverage.Unknown = 1
+		} else {
+			selectionCoverage.Unsupported = 1
+		}
+		selectionCoverage.recalculate()
 	}
 	decisionIDs := make([]string, 0, len(metadata.DecisionIDs))
 	for _, id := range metadata.DecisionIDs {
@@ -884,40 +843,26 @@ func buildClauseReport(
 	}
 	sort.Strings(decisionIDs)
 	return ClauseReport{
-		ClauseID:        formatID(uint64(metadata.ID)),
-		GroupID:         formatID(uint64(metadata.GroupID)),
-		Kind:            metadata.Kind,
-		Role:            metadata.Role,
-		Index:           metadata.Index,
-		Location:        metadata.Location,
-		Expressions:     append([]string{}, metadata.Expressions...),
-		Types:           append([]string{}, metadata.Types...),
-		DecisionIDs:     decisionIDs,
-		CoverageName:    clauseCoverageName(metadata.Kind),
-		SelectionStatus: "unsupported-by-backend",
-		BodyExecutions:  body,
-		Metric:          metric,
+		ClauseID: formatID(uint64(metadata.ID)), GroupID: formatID(uint64(metadata.GroupID)),
+		Kind: metadata.Kind, Role: metadata.Role, Index: metadata.Index, Location: metadata.Location,
+		Expressions: append([]string{}, metadata.Expressions...), Types: append([]string{}, metadata.Types...),
+		DecisionIDs: decisionIDs, BodyExecutions: bodyExecutions,
+		BodyCoverage: bodyCoverage, SelectionCoverage: selectionCoverage,
 	}
 }
 
 func finalizeFile(builder *fileBuilder, coverage config.CoverageSet) FileReport {
-	file := FileReport{
-		Path:      builder.path,
-		Summary:   newSummary(coverage),
-		Functions: make([]FunctionReport, 0, len(builder.functions)),
-	}
+	file := FileReport{Path: builder.path, Summary: newSummary(coverage), Functions: make([]FunctionReport, 0, len(builder.functions))}
 	functions := make([]FunctionReport, 0, len(builder.functions))
 	for _, function := range builder.functions {
 		sort.Slice(function.report.Statements, func(i, j int) bool {
 			return lessLocation(function.report.Statements[i].Location, function.report.Statements[j].Location)
 		})
 		sort.Slice(function.report.Decisions, func(i, j int) bool {
-			return lessLocation(function.report.Decisions[i].Location, function.report.Decisions[j].Location) ||
-				(function.report.Decisions[i].Location == function.report.Decisions[j].Location && function.report.Decisions[i].DecisionID < function.report.Decisions[j].DecisionID)
+			return lessLocation(function.report.Decisions[i].Location, function.report.Decisions[j].Location) || (function.report.Decisions[i].Location == function.report.Decisions[j].Location && function.report.Decisions[i].DecisionID < function.report.Decisions[j].DecisionID)
 		})
 		sort.Slice(function.report.Clauses, func(i, j int) bool {
-			return lessLocation(function.report.Clauses[i].Location, function.report.Clauses[j].Location) ||
-				(function.report.Clauses[i].Location == function.report.Clauses[j].Location && function.report.Clauses[i].ClauseID < function.report.Clauses[j].ClauseID)
+			return lessLocation(function.report.Clauses[i].Location, function.report.Clauses[j].Location) || (function.report.Clauses[i].Location == function.report.Clauses[j].Location && function.report.Clauses[i].ClauseID < function.report.Clauses[j].ClauseID)
 		})
 		functions = append(functions, function.report)
 	}
@@ -954,14 +899,7 @@ func ensureFunctionBuilder(builder *packageBuilder, filePath, name string, locat
 	}
 	function := file.functions[key]
 	if function == nil {
-		function = &functionBuilder{report: FunctionReport{
-			Name:       name,
-			Location:   cloneLocation(location),
-			Summary:    newSummary(coverage),
-			Statements: make([]StatementReport, 0),
-			Decisions:  make([]DecisionReport, 0),
-			Clauses:    make([]ClauseReport, 0),
-		}}
+		function = &functionBuilder{report: FunctionReport{Name: name, Location: cloneLocation(location), Summary: newSummary(coverage), Statements: make([]StatementReport, 0), Decisions: make([]DecisionReport, 0), Clauses: make([]ClauseReport, 0)}}
 		file.functions[key] = function
 	} else if function.report.Location == nil {
 		function.report.Location = cloneLocation(location)
@@ -985,18 +923,18 @@ func optionalLocation(location cover.SourceLocation) *cover.SourceLocation {
 }
 
 func newSummary(coverage config.CoverageSet) Summary {
-	clauseEnabled := coverage.Enabled(config.MetricClause)
 	return Summary{
-		Statement:            newMetric(coverage.Enabled(config.MetricStatement)),
-		Function:             newMetric(coverage.Enabled(config.MetricFunction)),
-		Decision:             newMetric(coverage.Enabled(config.MetricDecision)),
-		Clause:               newMetric(clauseEnabled),
-		SwitchClauseBody:     newMetric(clauseEnabled),
-		TypeSwitchClauseBody: newMetric(clauseEnabled),
-		SelectClauseBody:     newMetric(clauseEnabled),
-		Condition:            newMetric(coverage.Enabled(config.MetricCondition)),
-		MCDCUnique:           newMetric(coverage.Enabled(config.MetricMCDCUnique)),
-		MCDCMasking:          newMetric(coverage.Enabled(config.MetricMCDCMasking)),
+		Statement:                 newMetric(coverage.Enabled(config.MetricStatement)),
+		Function:                  newMetric(coverage.Enabled(config.MetricFunction)),
+		Decision:                  newMetric(coverage.Enabled(config.MetricDecision)),
+		SwitchClauseBody:          newMetric(coverage.Enabled(config.MetricSwitchClauseBody)),
+		TypeSwitchClauseBody:      newMetric(coverage.Enabled(config.MetricTypeSwitchClauseBody)),
+		SelectClauseBody:          newMetric(coverage.Enabled(config.MetricSelectClauseBody)),
+		SwitchClauseSelection:     newMetric(coverage.Enabled(config.MetricSwitchClauseSelection)),
+		TypeSwitchClauseSelection: newMetric(coverage.Enabled(config.MetricTypeSwitchClauseSelection)),
+		Condition:                 newMetric(coverage.Enabled(config.MetricCondition)),
+		MCDCUnique:                newMetric(coverage.Enabled(config.MetricMCDCUnique)),
+		MCDCMasking:               newMetric(coverage.Enabled(config.MetricMCDCMasking)),
 	}
 }
 
@@ -1010,8 +948,6 @@ func metricForOutcomes(enabled bool, state entityState, trueCovered, falseCovere
 	switch state {
 	case entityUnknown:
 		metric.Unknown = 2
-	case entityAborted:
-		metric.Aborted = 2
 	case entityUnsupported:
 		metric.Unsupported = 2
 	default:
@@ -1041,8 +977,6 @@ func addCoverageStatus(metric *MetricSummary, status cover.CoverageStatus, units
 		metric.Unsupported += units
 	case cover.CoverageUnknown:
 		metric.Unknown += units
-	case cover.CoverageAborted:
-		metric.Aborted += units
 	case cover.CoveragePossiblyInfeasible:
 		metric.PossiblyInfeasible += units
 	default:
@@ -1055,10 +989,11 @@ func addSummary(destination *Summary, source Summary) {
 	addMetric(&destination.Statement, source.Statement)
 	addMetric(&destination.Function, source.Function)
 	addMetric(&destination.Decision, source.Decision)
-	addMetric(&destination.Clause, source.Clause)
 	addMetric(&destination.SwitchClauseBody, source.SwitchClauseBody)
 	addMetric(&destination.TypeSwitchClauseBody, source.TypeSwitchClauseBody)
 	addMetric(&destination.SelectClauseBody, source.SelectClauseBody)
+	addMetric(&destination.SwitchClauseSelection, source.SwitchClauseSelection)
+	addMetric(&destination.TypeSwitchClauseSelection, source.TypeSwitchClauseSelection)
 	addMetric(&destination.Condition, source.Condition)
 	addMetric(&destination.MCDCUnique, source.MCDCUnique)
 	addMetric(&destination.MCDCMasking, source.MCDCMasking)
@@ -1072,18 +1007,18 @@ func addMetric(destination *MetricSummary, source MetricSummary) {
 	destination.Total += source.Total
 	destination.Unsupported += source.Unsupported
 	destination.Unknown += source.Unknown
-	destination.Aborted += source.Aborted
 	destination.PossiblyInfeasible += source.PossiblyInfeasible
 	destination.recalculate()
 }
 
 func (metric *MetricSummary) recalculate() {
 	if metric.Total == 0 {
-		metric.Percentage = 0
+		metric.Percentage = nil
 		return
 	}
 	percentage := float64(metric.Covered) * 100 / float64(metric.Total)
-	metric.Percentage = math.Round(percentage*100) / 100
+	value := math.Round(percentage*100) / 100
+	metric.Percentage = &value
 }
 
 func stateForEvaluations(evaluations []cover.DecisionEvaluation, packageUnknown bool) entityState {
@@ -1091,20 +1026,14 @@ func stateForEvaluations(evaluations []cover.DecisionEvaluation, packageUnknown 
 		return entityUnknown
 	}
 	completed := 0
-	aborted := 0
 	for _, evaluation := range evaluations {
 		switch evaluation.Status {
 		case cover.EvaluationCompleted:
 			completed++
-		case cover.EvaluationAborted:
-			aborted++
 		}
 	}
 	if completed > 0 {
 		return entityNormal
-	}
-	if aborted > 0 {
-		return entityAborted
 	}
 	return entityNormal
 }
@@ -1121,11 +1050,11 @@ func packageUnknown(status string, evidence bool) bool {
 	}
 }
 
-func astPackageStatus(input Input, packagePath, fallback string) string {
+func astPackageStatus(input Input, packagePath, defaultStatus string) string {
 	if status := input.ASTPackageStatuses[packagePath]; status != "" {
 		return status
 	}
-	return fallback
+	return defaultStatus
 }
 
 func cloneProducerCapabilities(values []backend.ProducerCapabilities) []backend.ProducerCapabilities {
@@ -1259,25 +1188,16 @@ func supportedClause(metadata cover.ClauseMetadata) bool {
 	return kindSupported && roleSupported
 }
 
-func addClauseKindMetric(summary *Summary, kind cover.ClauseKind, metric MetricSummary) {
+func addClauseMetrics(summary *Summary, kind cover.ClauseKind, body, selection MetricSummary) {
 	switch kind {
 	case cover.ClauseExpressionSwitch, cover.ClauseConditionlessSwitch:
-		addMetric(&summary.SwitchClauseBody, metric)
+		addMetric(&summary.SwitchClauseBody, body)
+		addMetric(&summary.SwitchClauseSelection, selection)
 	case cover.ClauseTypeSwitch:
-		addMetric(&summary.TypeSwitchClauseBody, metric)
+		addMetric(&summary.TypeSwitchClauseBody, body)
+		addMetric(&summary.TypeSwitchClauseSelection, selection)
 	case cover.ClauseSelect:
-		addMetric(&summary.SelectClauseBody, metric)
-	}
-}
-
-func clauseCoverageName(kind cover.ClauseKind) string {
-	switch kind {
-	case cover.ClauseTypeSwitch:
-		return "Type Switch Clause Body Coverage"
-	case cover.ClauseSelect:
-		return "Select Clause Body Coverage"
-	default:
-		return "Switch Clause Body Coverage"
+		addMetric(&summary.SelectClauseBody, body)
 	}
 }
 

@@ -25,6 +25,8 @@ const (
 	CapabilitySwitchClauseBody                  Capability = "switchClauseBody"
 	CapabilityTypeSwitchClauseBody              Capability = "typeSwitchClauseBody"
 	CapabilitySelectClauseBody                  Capability = "selectClauseBody"
+	CapabilitySwitchClauseSelection             Capability = "switchClauseSelection"
+	CapabilityTypeSwitchClauseSelection         Capability = "typeSwitchClauseSelection"
 	CapabilityExpressionSwitchMatchedExpression Capability = "expressionSwitchMatchedExpression"
 	CapabilityTypeSwitchMatchedTypeAlternative  Capability = "typeSwitchMatchedTypeAlternative"
 	CapabilityDirectCaseSelection               Capability = "directCaseSelection"
@@ -189,6 +191,8 @@ func (ASTBackend) Capabilities() CapabilitySet {
 		CapabilitySwitchClauseBody:                  CapabilitySupported,
 		CapabilityTypeSwitchClauseBody:              CapabilitySupported,
 		CapabilitySelectClauseBody:                  CapabilitySupported,
+		CapabilitySwitchClauseSelection:             CapabilityUnsupportedByBackend,
+		CapabilityTypeSwitchClauseSelection:         CapabilityUnsupportedByBackend,
 		CapabilityExpressionSwitchMatchedExpression: CapabilityUnsupportedByBackend,
 		CapabilityTypeSwitchMatchedTypeAlternative:  CapabilityUnsupportedByBackend,
 		CapabilityDirectCaseSelection:               CapabilityUnsupportedByBackend,

@@ -42,15 +42,22 @@ func TestIntegratedFixtureReportsAllMetricsAcrossPackages(t *testing.T) {
 			t.Fatalf("measurement %q shared package status = %q, want %q", measurement.Name, got, gotest.PackageSkipped)
 		}
 	}
-	if all.Capabilities.Status(backend.CapabilityDirectCaseSelection) != backend.CapabilityUnsupportedByBackend || all.Instrumentation.Total.Discovered == 0 || all.Instrumentation.HasGaps() {
+	if all.Capabilities.Status(backend.CapabilityDirectCaseSelection) != backend.CapabilityUnsupportedByBackend || all.Instrumentation.Total.Discovered == 0 || !all.Instrumentation.HasGaps() {
 		t.Fatalf("backend capability/instrumentation accounting = capabilities %#v instrumentation %#v", all.Capabilities, all.Instrumentation)
 	}
 	if len(all.Packages) != 4 {
 		t.Fatalf("packages = %d, want 4", len(all.Packages))
 	}
 	for name, metric := range reportMetrics(all.Summary) {
-		if !metric.Enabled || metric.Total == 0 {
+		if !metric.Enabled {
 			t.Fatalf("default all metric %s = %#v", name, metric)
+		}
+		if name == "switchClauseSelection" || name == "typeSwitchClauseSelection" {
+			if metric.Total != 0 || metric.Unsupported == 0 {
+				t.Fatalf("unsupported selection metric %s = %#v", name, metric)
+			}
+		} else if metric.Total == 0 {
+			t.Fatalf("default all metric %s has empty denominator: %#v", name, metric)
 		}
 	}
 	assertPackageSums(t, all)
@@ -123,7 +130,7 @@ func TestIntegratedFixtureReportsAllMetricsAcrossPackages(t *testing.T) {
 		}
 	}
 
-	c0Only, c0Stderr, code := runFixture(t, root, "--coverage=c0,function", "--format=json", "./...")
+	c0Only, c0Stderr, code := runFixture(t, root, "--coverage=statement,function", "--format=json", "./...")
 	if code != ExitSuccess {
 		t.Fatalf("C0-only exit = %d\nstderr:\n%s", code, c0Stderr)
 	}
@@ -356,11 +363,13 @@ func fixturePath(t *testing.T, name string) string {
 func reportMetrics(summary report.Summary) map[string]report.MetricSummary {
 	return map[string]report.MetricSummary{
 		"statement": summary.Statement, "function": summary.Function,
-		"decision": summary.Decision, "clause": summary.Clause,
-		"switchClauseBody":     summary.SwitchClauseBody,
-		"typeSwitchClauseBody": summary.TypeSwitchClauseBody,
-		"selectClauseBody":     summary.SelectClauseBody,
-		"condition":            summary.Condition, "mcdcUnique": summary.MCDCUnique,
+		"decision":                  summary.Decision,
+		"switchClauseBody":          summary.SwitchClauseBody,
+		"typeSwitchClauseBody":      summary.TypeSwitchClauseBody,
+		"selectClauseBody":          summary.SelectClauseBody,
+		"switchClauseSelection":     summary.SwitchClauseSelection,
+		"typeSwitchClauseSelection": summary.TypeSwitchClauseSelection,
+		"condition":                 summary.Condition, "mcdcUnique": summary.MCDCUnique,
 		"mcdcMasking": summary.MCDCMasking,
 	}
 }
@@ -452,7 +461,7 @@ func hasCoveredSelectClause(built report.Report) bool {
 		for _, file := range packageReport.Files {
 			for _, function := range file.Functions {
 				for _, clause := range function.Clauses {
-					if clause.Kind == cover.ClauseSelect && clause.Metric.Covered > 0 {
+					if clause.Kind == cover.ClauseSelect && clause.BodyCoverage.Covered > 0 {
 						return true
 					}
 				}

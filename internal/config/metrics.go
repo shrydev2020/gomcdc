@@ -13,20 +13,28 @@ import (
 type Metric = cover.CoverageMetric
 
 const (
-	MetricStatement   = cover.CoverageMetricStatement
-	MetricFunction    = cover.CoverageMetricFunction
-	MetricDecision    = cover.CoverageMetricDecision
-	MetricClause      = cover.CoverageMetricClause
-	MetricCondition   = cover.CoverageMetricCondition
-	MetricMCDCUnique  = cover.CoverageMetricMCDCUnique
-	MetricMCDCMasking = cover.CoverageMetricMCDCMasking
+	MetricStatement                 = cover.CoverageMetricStatement
+	MetricFunction                  = cover.CoverageMetricFunction
+	MetricDecision                  = cover.CoverageMetricDecision
+	MetricSwitchClauseBody          = cover.CoverageMetricSwitchClauseBody
+	MetricTypeSwitchClauseBody      = cover.CoverageMetricTypeSwitchClauseBody
+	MetricSelectClauseBody          = cover.CoverageMetricSelectClauseBody
+	MetricSwitchClauseSelection     = cover.CoverageMetricSwitchClauseSelection
+	MetricTypeSwitchClauseSelection = cover.CoverageMetricTypeSwitchClauseSelection
+	MetricCondition                 = cover.CoverageMetricCondition
+	MetricMCDCUnique                = cover.CoverageMetricMCDCUnique
+	MetricMCDCMasking               = cover.CoverageMetricMCDCMasking
 )
 
 var allMetrics = []Metric{
 	MetricStatement,
 	MetricFunction,
 	MetricDecision,
-	MetricClause,
+	MetricSwitchClauseBody,
+	MetricTypeSwitchClauseBody,
+	MetricSelectClauseBody,
+	MetricSwitchClauseSelection,
+	MetricTypeSwitchClauseSelection,
 	MetricCondition,
 	MetricMCDCUnique,
 	MetricMCDCMasking,
@@ -53,18 +61,24 @@ func ParseCoverage(value string) (CoverageSet, error) {
 		switch name {
 		case "all":
 			expanded = allMetrics
-		case "c0", "statement":
+		case "statement":
 			expanded = []Metric{MetricStatement}
 		case "function":
 			expanded = []Metric{MetricFunction}
-		case "c1", "decision":
+		case "decision":
 			expanded = []Metric{MetricDecision}
-		case "clause":
-			expanded = []Metric{MetricClause}
-		case "c2", "condition":
+		case "switch-clause-body":
+			expanded = []Metric{MetricSwitchClauseBody}
+		case "type-switch-clause-body":
+			expanded = []Metric{MetricTypeSwitchClauseBody}
+		case "select-clause-body":
+			expanded = []Metric{MetricSelectClauseBody}
+		case "switch-clause-selection":
+			expanded = []Metric{MetricSwitchClauseSelection}
+		case "type-switch-clause-selection":
+			expanded = []Metric{MetricTypeSwitchClauseSelection}
+		case "condition":
 			expanded = []Metric{MetricCondition}
-		case "mcdc":
-			expanded = []Metric{MetricMCDCUnique, MetricMCDCMasking}
 		case "mcdc-unique":
 			expanded = []Metric{MetricMCDCUnique}
 		case "mcdc-masking":

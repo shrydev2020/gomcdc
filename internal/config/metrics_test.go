@@ -5,15 +5,15 @@ import (
 	"testing"
 )
 
-func TestParseCoverageAliases(t *testing.T) {
+func TestParseCoverageCanonicalNames(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		value string
 		want  []string
 	}{
-		{"all", []string{"clause", "condition", "decision", "function", "mcdc-masking", "mcdc-unique", "statement"}},
-		{"c0,c1,c2,mcdc", []string{"condition", "decision", "mcdc-masking", "mcdc-unique", "statement"}},
-		{"statement,function,decision,clause,condition,mcdc-unique,mcdc-masking", []string{"clause", "condition", "decision", "function", "mcdc-masking", "mcdc-unique", "statement"}},
+		{"all", []string{"condition", "decision", "function", "mcdc-masking", "mcdc-unique", "select-clause-body", "statement", "switch-clause-body", "switch-clause-selection", "type-switch-clause-body", "type-switch-clause-selection"}},
+		{"statement,decision,condition,mcdc-unique,mcdc-masking", []string{"condition", "decision", "mcdc-masking", "mcdc-unique", "statement"}},
+		{"switch-clause-body,type-switch-clause-body,select-clause-body,switch-clause-selection,type-switch-clause-selection", []string{"select-clause-body", "switch-clause-body", "switch-clause-selection", "type-switch-clause-body", "type-switch-clause-selection"}},
 	}
 	for _, test := range tests {
 		set, err := ParseCoverage(test.value)
@@ -28,7 +28,7 @@ func TestParseCoverageAliases(t *testing.T) {
 
 func TestParseCoverageRejectsUnknownAndEmpty(t *testing.T) {
 	t.Parallel()
-	for _, value := range []string{"", ",,", "branch"} {
+	for _, value := range []string{"", ",,", "branch", "c0", "c1", "c2", "mcdc", "clause"} {
 		if _, err := ParseCoverage(value); err == nil {
 			t.Errorf("ParseCoverage(%q) error = nil", value)
 		}

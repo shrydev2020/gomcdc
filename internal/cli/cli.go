@@ -319,13 +319,13 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 				fmt.Fprintf(stderr, "gocoverage: C0 coverage collection failed: %v\n", c0Err)
 				integrityFailure = true
 			}
-			// Preserve the original statement/function inventory as unknown when
-			// a profile is absent, truncated, or otherwise unreadable.
-			fallback, fallbackErr := buildC0Report(c0.Profile{Mode: c0.ModeSet}, loaded, sources, nil)
-			if fallbackErr != nil {
-				fmt.Fprintf(stderr, "gocoverage: C0 inventory recovery failed after %v: %v\n", c0Err, fallbackErr)
+			// Build the source inventory so the partial report records the affected
+			// statement and function entities as unknown.
+			partialInventory, inventoryErr := buildC0Report(c0.Profile{Mode: c0.ModeSet}, loaded, sources, nil)
+			if inventoryErr != nil {
+				fmt.Fprintf(stderr, "gocoverage: C0 inventory recovery failed after %v: %v\n", c0Err, inventoryErr)
 			} else {
-				c0Report = fallback
+				c0Report = partialInventory
 			}
 		} else {
 			c0Report = analyzed
@@ -388,7 +388,6 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		Complete:                    overallStatus == cover.RunPassed && !integrityFailure && !analysisIncomplete,
 		PackageStatuses:             packageStatuses,
 		ASTPackageStatuses:          astPackageStatuses,
-		SpecialDenominator:          report.SpecialDenominatorPolicy(opts.specialDenom),
 	}
 	built := report.Build(input)
 	if err := writeReport(opts, input, workingDir, stdout); err != nil {
@@ -512,7 +511,11 @@ func goFilesInDirectory(directory string) ([]string, error) {
 
 func needsASTRuntime(metrics config.CoverageSet) bool {
 	return metrics.Enabled(config.MetricDecision) ||
-		metrics.Enabled(config.MetricClause) ||
+		metrics.Enabled(config.MetricSwitchClauseBody) ||
+		metrics.Enabled(config.MetricTypeSwitchClauseBody) ||
+		metrics.Enabled(config.MetricSelectClauseBody) ||
+		metrics.Enabled(config.MetricSwitchClauseSelection) ||
+		metrics.Enabled(config.MetricTypeSwitchClauseSelection) ||
 		metrics.Enabled(config.MetricCondition) ||
 		metrics.Enabled(config.MetricMCDCUnique) ||
 		metrics.Enabled(config.MetricMCDCMasking)
@@ -902,7 +905,11 @@ func thresholdFailures(opts options, summary report.Summary) []string {
 		{"statement", opts.failUnderStatement, summary.Statement},
 		{"function", opts.failUnderFunction, summary.Function},
 		{"decision", opts.failUnderDecision, summary.Decision},
-		{"clause", opts.failUnderClause, summary.Clause},
+		{"switch-clause-body", opts.failUnderSwitchClauseBody, summary.SwitchClauseBody},
+		{"type-switch-clause-body", opts.failUnderTypeSwitchClauseBody, summary.TypeSwitchClauseBody},
+		{"select-clause-body", opts.failUnderSelectClauseBody, summary.SelectClauseBody},
+		{"switch-clause-selection", opts.failUnderSwitchClauseSelection, summary.SwitchClauseSelection},
+		{"type-switch-clause-selection", opts.failUnderTypeSwitchClauseSelection, summary.TypeSwitchClauseSelection},
 		{"condition", opts.failUnderCondition, summary.Condition},
 		{"mcdc-unique", opts.failUnderMCDCUnique, summary.MCDCUnique},
 		{"mcdc-masking", opts.failUnderMCDCMasking, summary.MCDCMasking},
@@ -913,7 +920,7 @@ func thresholdFailures(opts options, summary report.Summary) []string {
 			failures = append(failures, fmt.Sprintf(
 				"gocoverage: %s %.2f%% (%d/%d) is below %.2f%%",
 				check.name,
-				check.metric.Percentage,
+				metricPercentage(check.metric),
 				check.metric.Covered,
 				check.metric.Total,
 				check.threshold.value,
@@ -923,9 +930,16 @@ func thresholdFailures(opts options, summary report.Summary) []string {
 	return failures
 }
 
+func metricPercentage(metric report.MetricSummary) float64 {
+	if metric.Percentage == nil {
+		return 0
+	}
+	return *metric.Percentage
+}
+
 func belowThreshold(metric report.MetricSummary, threshold float64) bool {
 	if metric.Total == 0 {
-		return threshold > 0
+		return true
 	}
 	// Percentage is rounded for stable display/JSON. Threshold decisions use
 	// the exact rational count so display rounding can never turn a failure

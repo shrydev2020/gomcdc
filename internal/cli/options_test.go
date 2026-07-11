@@ -12,7 +12,7 @@ func TestParseOptions(t *testing.T) {
 	t.Parallel()
 	var diagnostics bytes.Buffer
 	opts, err := parseOptions([]string{
-		"--coverage", "c1",
+		"--coverage", "decision",
 		"--format=json",
 		"--exclude", "**/mock_*.go",
 		"./...", "./cmd/...",
@@ -32,14 +32,10 @@ func TestParseOptions(t *testing.T) {
 	}
 }
 
-func TestParseOptionsDefaultsToCurrentPackage(t *testing.T) {
+func TestParseOptionsRequiresPackagePattern(t *testing.T) {
 	t.Parallel()
-	opts, err := parseOptions(nil, &bytes.Buffer{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(opts.patterns, []string{"."}) {
-		t.Fatalf("patterns = %#v, want current package", opts.patterns)
+	if _, err := parseOptions(nil, &bytes.Buffer{}); err == nil {
+		t.Fatal("missing package pattern was accepted")
 	}
 }
 
@@ -80,20 +76,16 @@ func TestThresholdRejectsDisabledMetric(t *testing.T) {
 	}
 }
 
-func TestSpecialDenominatorPolicyIsValidated(t *testing.T) {
+func TestThresholdFailsForEmptyDenominator(t *testing.T) {
 	t.Parallel()
-	opts, err := parseOptions([]string{"--special-denominator=include"}, &bytes.Buffer{})
-	if err != nil || opts.specialDenom != "include" {
-		t.Fatalf("include policy: opts=%#v err=%v", opts, err)
-	}
-	if _, err := parseOptions([]string{"--special-denominator=maybe"}, &bytes.Buffer{}); err == nil {
-		t.Fatal("invalid special denominator policy was accepted")
+	if !belowThreshold(report.MetricSummary{Enabled: true}, 0) {
+		t.Fatal("empty denominator passed a threshold")
 	}
 }
 
 func TestThresholdUsesExactCountsRatherThanRoundedPercentage(t *testing.T) {
 	t.Parallel()
-	metric := report.MetricSummary{Enabled: true, Covered: 2, Total: 3, Percentage: 66.67}
+	metric := report.MetricSummary{Enabled: true, Covered: 2, Total: 3}
 	if !belowThreshold(metric, 66.669) {
 		t.Fatal("2/3 incorrectly passed 66.669% because of display rounding")
 	}

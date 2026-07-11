@@ -362,7 +362,8 @@ type logicalLine struct {
 // mapGeneratedStatements requests a virtual filename for every inserted
 // statement while retaining printer.SourcePos's logical line for the next
 // original line. Some Go cover versions retain the physical filename anyway;
-// SourceMap.GeneratedRegions is the authoritative exclusion fallback.
+// SourceMap.GeneratedRegions is the authoritative exclusion mechanism when the
+// compiler profile retains physical filenames.
 func mapGeneratedStatements(source []byte, helperName, originalFile, generatedFile string) []byte {
 	lines := strings.Split(string(source), "\n")
 	positions := make([]logicalLine, len(lines))
@@ -478,6 +479,9 @@ func newFileTransformer(fset *token.FileSet, helperName string, analysis analyze
 		transformer.decisions[key] = decision
 	}
 	for _, clause := range analysis.Clauses {
+		if clause.Metadata.Role == cover.ClauseNoMatch {
+			continue
+		}
 		key := clauseLocation{kind: clause.Metadata.Kind, role: clause.Metadata.Role, start: clause.Span.Start, end: clause.Span.End}
 		if _, exists := transformer.clauses[key]; exists {
 			return nil, fmt.Errorf("duplicate analyzed %s clause at bytes %d:%d", clause.Metadata.Role, key.start, key.end)

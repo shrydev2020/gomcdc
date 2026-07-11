@@ -129,7 +129,7 @@ func TestConditionlessSwitchReportsSkippedDecisionAsNotEvaluated(t *testing.T) {
 	}
 }
 
-func TestAbortedEvaluationsAreDiagnosticAndExcludedFromDenominators(t *testing.T) {
+func TestAbortedEvaluationsAreDiagnosticAndDoNotRemoveObligations(t *testing.T) {
 	t.Parallel()
 
 	decision := singleConditionDecision(20, "example.com/m/p", "p.go", "Check")
@@ -144,10 +144,10 @@ func TestAbortedEvaluationsAreDiagnosticAndExcludedFromDenominators(t *testing.T
 	}
 	built := report.Build(input)
 	decisionReport := built.Packages[0].Files[0].Functions[0].Decisions[0]
-	assertMetric(t, "decision", decisionReport.Summary.Decision, true, 0, 0, 0, 0, 0, 2, 0)
-	assertMetric(t, "condition", decisionReport.Summary.Condition, true, 0, 0, 0, 0, 0, 2, 0)
-	assertMetric(t, "unique", decisionReport.Summary.MCDCUnique, true, 0, 0, 0, 0, 0, 1, 0)
-	assertMetric(t, "masking", decisionReport.Summary.MCDCMasking, true, 0, 0, 0, 0, 0, 1, 0)
+	assertMetric(t, "decision", decisionReport.Summary.Decision, true, 0, 2, 0, 0, 0, 0, 0)
+	assertMetric(t, "condition", decisionReport.Summary.Condition, true, 0, 2, 0, 0, 0, 0, 0)
+	assertMetric(t, "unique", decisionReport.Summary.MCDCUnique, true, 0, 1, 0, 0, 0, 0, 0)
+	assertMetric(t, "masking", decisionReport.Summary.MCDCMasking, true, 0, 1, 0, 0, 0, 0, 0)
 	if decisionReport.DecisionCoverage.True || decisionReport.Conditions[0].True || decisionReport.Conditions[0].NotEvaluated != 0 {
 		t.Fatalf("aborted evaluation established evidence: %#v", decisionReport)
 	}
@@ -182,12 +182,12 @@ func TestUnknownAndUnsupportedAreNotInDenominator(t *testing.T) {
 	assertMetric(t, "unknown decision", failed.Summary.Decision, true, 0, 0, 0, 0, 2, 0, 0)
 	assertMetric(t, "unknown condition", failed.Summary.Condition, true, 0, 0, 0, 0, 2, 0, 0)
 	assertMetric(t, "unknown unique", failed.Summary.MCDCUnique, true, 0, 0, 0, 0, 1, 0, 0)
-	assertMetric(t, "unknown clause", failed.Summary.Clause, true, 0, 0, 0, 0, 1, 0, 0)
+	assertMetric(t, "unknown clause", failed.Summary.SelectClauseBody, true, 0, 0, 0, 0, 1, 0, 0)
 
 	passed := built.Packages[1]
 	assertMetric(t, "passed absent decision", passed.Summary.Decision, true, 0, 2, 0, 0, 0, 0, 0)
 	assertMetric(t, "unsupported masking", passed.Summary.MCDCMasking, true, 0, 0, 0, 1, 0, 0, 0)
-	assertMetric(t, "unsupported clause", passed.Summary.Clause, true, 0, 0, 0, 1, 0, 0, 0)
+	assertMetric(t, "unclassified future clause", passed.Summary.SelectClauseBody, true, 0, 0, 0, 0, 0, 0, 0)
 }
 
 func TestStandardCoverEvidenceDoesNotMakeFailedASTMeasurementKnown(t *testing.T) {
@@ -320,23 +320,6 @@ func TestProducerIntegrityFailureForcesSurvivingEvidenceToUnknown(t *testing.T) 
 	}
 }
 
-func TestSpecialStatesCanBeIncludedInDenominatorByExplicitPolicy(t *testing.T) {
-	t.Parallel()
-	decision := singleConditionDecision(35, "example.com/m/failed", "failed.go", "Failed")
-	built := report.Build(report.Input{
-		ModulePath: "example.com/m", Coverage: config.AllCoverage(), RunStatus: cover.RunFailed,
-		Decisions:          []cover.DecisionMetadata{decision},
-		PackageStatuses:    map[string]string{"example.com/m/failed": "failed"},
-		SpecialDenominator: report.IncludeSpecialInDenominator,
-	})
-	if built.Policy.SpecialDenominator != report.IncludeSpecialInDenominator {
-		t.Fatalf("policy = %q", built.Policy.SpecialDenominator)
-	}
-	assertMetric(t, "included unknown decision", built.Summary.Decision, true, 0, 2, 0, 0, 2, 0, 0)
-	assertMetric(t, "included unknown condition", built.Summary.Condition, true, 0, 2, 0, 0, 2, 0, 0)
-	assertMetric(t, "included unknown unique", built.Summary.MCDCUnique, true, 0, 1, 0, 0, 1, 0, 0)
-}
-
 func TestClauseCoverageUsesBodyEvidenceAndNeverInfersSelection(t *testing.T) {
 	t.Parallel()
 
@@ -357,10 +340,10 @@ func TestClauseCoverageUsesBodyEvidenceAndNeverInfersSelection(t *testing.T) {
 	}
 	built := report.Build(input)
 	got := built.Packages[0].Files[0].Functions[0].Clauses
-	assertMetric(t, "clause body total", built.Summary.Clause, true, 2, 2, 100, 1, 0, 0, 0)
-	assertMetric(t, "switch clause body", built.Summary.SwitchClauseBody, true, 1, 1, 100, 1, 0, 0, 0)
+	assertMetric(t, "switch clause body", built.Summary.SwitchClauseBody, true, 1, 1, 100, 0, 0, 0, 0)
 	assertMetric(t, "select clause body", built.Summary.SelectClauseBody, true, 1, 1, 100, 0, 0, 0, 0)
-	if got[0].Role != cover.ClauseCase || got[0].BodyExecutions != 1 || got[0].Metric.Covered != 1 || got[0].SelectionStatus != "unsupported-by-backend" {
+	assertMetric(t, "switch clause selection", built.Summary.SwitchClauseSelection, true, 0, 0, 0, 2, 0, 0, 0)
+	if got[0].Role != cover.ClauseCase || got[0].BodyExecutions != 1 || got[0].BodyCoverage.Covered != 1 {
 		t.Fatalf("fallthrough case = %#v", got[0])
 	}
 	if got[1].Role != cover.ClauseDefault || got[2].Role != cover.ClauseNoMatch {
@@ -391,20 +374,22 @@ func TestZeroMetricsAndDisabledMetricsStayPresent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderJSON: %v", err)
 	}
-	if bytes.Contains(jsonValue, []byte(`"percentage": null`)) ||
-		!bytes.Contains(jsonValue, []byte(`"clause"`)) ||
+	if !bytes.Contains(jsonValue, []byte(`"percentage": null`)) ||
+		bytes.Contains(jsonValue, []byte(`"clause"`)) ||
 		bytes.Contains(jsonValue, []byte(`"clauseBody"`)) ||
+		!bytes.Contains(jsonValue, []byte(`"switchClauseSelection"`)) ||
 		!bytes.Contains(jsonValue, []byte(`"mcdcMasking"`)) ||
 		jsonValue[len(jsonValue)-1] != '\n' {
 		t.Fatalf("zero JSON schema/newline mismatch:\n%s", jsonValue)
 	}
 	text := report.RenderText(input)
 	for _, metric := range []string{
-		"Statement Coverage", "Function Coverage", "Decision Coverage", "Clause Body Coverage (aggregate)",
+		"Statement Coverage", "Function Coverage", "Decision Coverage",
 		"Switch Clause Body Coverage", "Type Switch Clause Body Coverage", "Select Clause Body Coverage",
+		"Switch Clause Selection Coverage", "Type Switch Clause Selection Coverage",
 		"Condition Coverage", "Unique-Cause MC/DC", "Masking MC/DC",
 	} {
-		if !strings.Contains(text, metric+": enabled=false 0/0 (0.00%)") {
+		if !strings.Contains(text, metric+": enabled=false 0/0 (n/a)") {
 			t.Fatalf("text missing disabled %s:\n%s", metric, text)
 		}
 	}
@@ -419,9 +404,10 @@ func TestInstrumentationCoverageAccountsForUnsupportedAndUnknownEntities(t *test
 	built := report.Build(report.Input{
 		ModulePath: "m",
 		Coverage: config.CoverageSet{
-			config.MetricDecision:    true,
-			config.MetricClause:      true,
-			config.MetricMCDCMasking: true,
+			config.MetricDecision:              true,
+			config.MetricSelectClauseBody:      true,
+			config.MetricSwitchClauseSelection: true,
+			config.MetricMCDCMasking:           true,
 		},
 		Decisions: []cover.DecisionMetadata{supportedDecision, unknownDecision},
 		Clauses: []cover.ClauseMetadata{
@@ -444,8 +430,9 @@ func TestInstrumentationCoverageAccountsForUnsupportedAndUnknownEntities(t *test
 		t.Fatal("strict instrumentation gaps were not detected")
 	}
 	text := report.RenderText(report.Input{
-		Coverage: config.CoverageSet{config.MetricClause: true},
-		Clauses:  []cover.ClauseMetadata{{ID: 2, Kind: cover.ClauseExpressionSwitch, Role: cover.ClauseNoMatch}},
+		Coverage: config.CoverageSet{config.MetricSelectClauseBody: true,
+			config.MetricSwitchClauseSelection: true},
+		Clauses: []cover.ClauseMetadata{{ID: 2, Kind: cover.ClauseExpressionSwitch, Role: cover.ClauseNoMatch}},
 	})
 	for _, required := range []string{
 		"Backend capabilities:",
@@ -604,8 +591,9 @@ func packagePaths(value report.Report) []string {
 func metrics(summary report.Summary) map[string]report.MetricSummary {
 	return map[string]report.MetricSummary{
 		"statement": summary.Statement, "function": summary.Function, "decision": summary.Decision,
-		"clause": summary.Clause, "switchClauseBody": summary.SwitchClauseBody,
+		"switchClauseBody":     summary.SwitchClauseBody,
 		"typeSwitchClauseBody": summary.TypeSwitchClauseBody, "selectClauseBody": summary.SelectClauseBody,
+		"switchClauseSelection": summary.SwitchClauseSelection, "typeSwitchClauseSelection": summary.TypeSwitchClauseSelection,
 		"condition":  summary.Condition,
 		"mcdcUnique": summary.MCDCUnique, "mcdcMasking": summary.MCDCMasking,
 	}
@@ -618,14 +606,17 @@ func assertMetric(
 	enabled bool,
 	covered, total int,
 	percentage float64,
-	unsupported, unknown, aborted, infeasible int,
+	unsupported, unknown, _ int, infeasible int,
 ) {
 	t.Helper()
 	want := report.MetricSummary{
-		Enabled: enabled, Covered: covered, Total: total, Percentage: percentage,
-		Unsupported: unsupported, Unknown: unknown, Aborted: aborted, PossiblyInfeasible: infeasible,
+		Enabled: enabled, Covered: covered, Total: total,
+		Unsupported: unsupported, Unknown: unknown, PossiblyInfeasible: infeasible,
 	}
-	if got != want {
+	if total > 0 {
+		want.Percentage = &percentage
+	}
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("%s = %#v, want %#v", name, got, want)
 	}
 }

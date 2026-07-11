@@ -298,13 +298,17 @@ func (e DecisionEvaluation) Identity() EvaluationIdentity {
 type CoverageMetric string
 
 const (
-	CoverageMetricStatement   CoverageMetric = "statement"
-	CoverageMetricFunction    CoverageMetric = "function"
-	CoverageMetricDecision    CoverageMetric = "decision"
-	CoverageMetricClause      CoverageMetric = "clause"
-	CoverageMetricCondition   CoverageMetric = "condition"
-	CoverageMetricMCDCUnique  CoverageMetric = "mcdc-unique"
-	CoverageMetricMCDCMasking CoverageMetric = "mcdc-masking"
+	CoverageMetricStatement                 CoverageMetric = "statement"
+	CoverageMetricFunction                  CoverageMetric = "function"
+	CoverageMetricDecision                  CoverageMetric = "decision"
+	CoverageMetricSwitchClauseBody          CoverageMetric = "switch-clause-body"
+	CoverageMetricTypeSwitchClauseBody      CoverageMetric = "type-switch-clause-body"
+	CoverageMetricSelectClauseBody          CoverageMetric = "select-clause-body"
+	CoverageMetricSwitchClauseSelection     CoverageMetric = "switch-clause-selection"
+	CoverageMetricTypeSwitchClauseSelection CoverageMetric = "type-switch-clause-selection"
+	CoverageMetricCondition                 CoverageMetric = "condition"
+	CoverageMetricMCDCUnique                CoverageMetric = "mcdc-unique"
+	CoverageMetricMCDCMasking               CoverageMetric = "mcdc-masking"
 )
 
 // CoverageStatus keeps evidence-backed results distinct from unsupported,
@@ -316,7 +320,6 @@ const (
 	CoverageNotCovered         CoverageStatus = "not covered"
 	CoverageUnsupported        CoverageStatus = "unsupported"
 	CoverageUnknown            CoverageStatus = "unknown"
-	CoverageAborted            CoverageStatus = "aborted"
 	CoveragePossiblyInfeasible CoverageStatus = "possibly infeasible"
 )
 

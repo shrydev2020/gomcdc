@@ -58,7 +58,6 @@ func renderText(report Report) string {
 	for _, metric := range report.Instrumentation.Metrics {
 		writeInstrumentationCoverage(&output, "  "+metric.Metric, metric.Coverage)
 	}
-	fmt.Fprintf(&output, "Special denominator policy: %s\n", report.Policy.SpecialDenominator)
 	output.WriteString("Summary:\n")
 	writeSummary(&output, "  ", report.Summary)
 
@@ -104,14 +103,11 @@ func renderText(report Report) string {
 						clause.Index,
 						formatLocation(clause.Location),
 					)
-					fmt.Fprintf(
-						&output,
-						"        %s: body-execution=%d selection-status=%s ",
-						clause.CoverageName,
-						clause.BodyExecutions,
-						clause.SelectionStatus,
-					)
-					writeMetricInline(&output, clause.Metric)
+					fmt.Fprintf(&output, "        Body coverage: executions=%d ", clause.BodyExecutions)
+					writeMetricInline(&output, clause.BodyCoverage)
+					output.WriteByte('\n')
+					fmt.Fprint(&output, "        Selection coverage: ")
+					writeMetricInline(&output, clause.SelectionCoverage)
 					output.WriteByte('\n')
 				}
 			}
@@ -143,7 +139,7 @@ func writeInstrumentationCoverage(output *strings.Builder, label string, coverag
 		coverage.Instrumented,
 		coverage.Unsupported,
 		coverage.Unknown,
-		formatPercentage(coverage.Percentage),
+		strconv.FormatFloat(coverage.Percentage, 'f', 2, 64)+"%",
 	)
 }
 
@@ -256,10 +252,11 @@ func writeSummary(output *strings.Builder, indent string, summary Summary) {
 		{"Statement Coverage", summary.Statement},
 		{"Function Coverage", summary.Function},
 		{"Decision Coverage", summary.Decision},
-		{"Clause Body Coverage (aggregate)", summary.Clause},
 		{"Switch Clause Body Coverage", summary.SwitchClauseBody},
 		{"Type Switch Clause Body Coverage", summary.TypeSwitchClauseBody},
 		{"Select Clause Body Coverage", summary.SelectClauseBody},
+		{"Switch Clause Selection Coverage", summary.SwitchClauseSelection},
+		{"Type Switch Clause Selection Coverage", summary.TypeSwitchClauseSelection},
 		{"Condition Coverage", summary.Condition},
 		{"Unique-Cause MC/DC", summary.MCDCUnique},
 		{"Masking MC/DC", summary.MCDCMasking},
@@ -274,20 +271,22 @@ func writeSummary(output *strings.Builder, indent string, summary Summary) {
 func writeMetricInline(output *strings.Builder, metric MetricSummary) {
 	fmt.Fprintf(
 		output,
-		"enabled=%t %d/%d (%s) unsupported=%d unknown=%d aborted=%d possibly-infeasible=%d",
+		"enabled=%t %d/%d (%s) unsupported=%d unknown=%d possibly-infeasible=%d",
 		metric.Enabled,
 		metric.Covered,
 		metric.Total,
 		formatPercentage(metric.Percentage),
 		metric.Unsupported,
 		metric.Unknown,
-		metric.Aborted,
 		metric.PossiblyInfeasible,
 	)
 }
 
-func formatPercentage(percentage float64) string {
-	return strconv.FormatFloat(percentage, 'f', 2, 64) + "%"
+func formatPercentage(percentage *float64) string {
+	if percentage == nil {
+		return "n/a"
+	}
+	return strconv.FormatFloat(*percentage, 'f', 2, 64) + "%"
 }
 
 func formatLocation(location cover.SourceLocation) string {
