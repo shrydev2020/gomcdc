@@ -107,7 +107,6 @@ func parseOptions(args []string, errOut io.Writer) (options, error) {
 		return options{}, err
 	}
 	opts.metrics = metrics
-	enableThresholdMetrics(&opts)
 	if err := validateOptions(opts); err != nil {
 		return options{}, err
 	}
@@ -134,43 +133,27 @@ func validateOptions(opts options) error {
 		return fmt.Errorf("unsupported --special-denominator=%q; use exclude or include", opts.specialDenom)
 	}
 	thresholds := []struct {
-		name  string
-		value optionalFloat
+		name   string
+		metric config.Metric
+		value  optionalFloat
 	}{
-		{"--fail-under-statement", opts.failUnderStatement},
-		{"--fail-under-function", opts.failUnderFunction},
-		{"--fail-under-decision", opts.failUnderDecision},
-		{"--fail-under-clause", opts.failUnderClause},
-		{"--fail-under-condition", opts.failUnderCondition},
-		{"--fail-under-mcdc-unique", opts.failUnderMCDCUnique},
-		{"--fail-under-mcdc-masking", opts.failUnderMCDCMasking},
+		{"--fail-under-statement", config.MetricStatement, opts.failUnderStatement},
+		{"--fail-under-function", config.MetricFunction, opts.failUnderFunction},
+		{"--fail-under-decision", config.MetricDecision, opts.failUnderDecision},
+		{"--fail-under-clause", config.MetricClause, opts.failUnderClause},
+		{"--fail-under-condition", config.MetricCondition, opts.failUnderCondition},
+		{"--fail-under-mcdc-unique", config.MetricMCDCUnique, opts.failUnderMCDCUnique},
+		{"--fail-under-mcdc-masking", config.MetricMCDCMasking, opts.failUnderMCDCMasking},
 	}
 	for _, threshold := range thresholds {
 		if err := validateThreshold(threshold.name, threshold.value); err != nil {
 			return err
 		}
-	}
-	return nil
-}
-
-func enableThresholdMetrics(opts *options) {
-	thresholds := []struct {
-		metric config.Metric
-		value  optionalFloat
-	}{
-		{config.MetricStatement, opts.failUnderStatement},
-		{config.MetricFunction, opts.failUnderFunction},
-		{config.MetricDecision, opts.failUnderDecision},
-		{config.MetricClause, opts.failUnderClause},
-		{config.MetricCondition, opts.failUnderCondition},
-		{config.MetricMCDCUnique, opts.failUnderMCDCUnique},
-		{config.MetricMCDCMasking, opts.failUnderMCDCMasking},
-	}
-	for _, threshold := range thresholds {
-		if threshold.value.set {
-			opts.metrics[threshold.metric] = true
+		if threshold.value.set && !opts.metrics.Enabled(threshold.metric) {
+			return fmt.Errorf("%s requires --coverage to include %s", threshold.name, threshold.metric)
 		}
 	}
+	return nil
 }
 
 func validateThreshold(name string, value optionalFloat) error {

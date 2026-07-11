@@ -5,7 +5,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/shrydev2020/gomcdc/internal/config"
 	"github.com/shrydev2020/gomcdc/internal/report"
 )
 
@@ -73,14 +72,11 @@ func TestParseOptionsRejectsNonFiniteThreshold(t *testing.T) {
 	}
 }
 
-func TestThresholdEnablesItsMetric(t *testing.T) {
+func TestThresholdRejectsDisabledMetric(t *testing.T) {
 	t.Parallel()
-	opts, err := parseOptions([]string{"--coverage=decision", "--fail-under-statement=80"}, &bytes.Buffer{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !opts.metrics.Enabled(config.MetricDecision) || !opts.metrics.Enabled(config.MetricStatement) {
-		t.Fatalf("metrics = %v", opts.metrics.Names())
+	_, err := parseOptions([]string{"--coverage=decision", "--fail-under-statement=80"}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("threshold for a disabled metric was accepted")
 	}
 }
 
