@@ -61,7 +61,9 @@ func TestLoadHonorsBuildTags(t *testing.T) {
 }
 
 func TestLoadRejectsActiveMultiModuleWorkspace(t *testing.T) {
-	t.Parallel()
+	// The fixture must test filesystem workspace discovery, not an inherited
+	// caller policy such as GOWORK=off.
+	t.Setenv("GOWORK", "")
 	root := t.TempDir()
 	module := filepath.Join(root, "module")
 	writeLoaderFile(t, filepath.Join(module, "go.mod"), "module example.test/workmodule\n\ngo 1.26\n")
