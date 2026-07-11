@@ -74,8 +74,8 @@ func parseOptions(args []string, errOut io.Writer) (options, error) {
 	fs := flag.NewFlagSet("gocoverage test", flag.ContinueOnError)
 	fs.SetOutput(errOut)
 	fs.StringVar(&opts.coverage, "coverage", "all", "coverage metrics: all,statement,function,decision,switch-clause-body,type-switch-clause-body,select-clause-body,switch-clause-selection,type-switch-clause-selection,condition,mcdc-unique,mcdc-masking")
-	fs.StringVar(&opts.format, "format", "text", "report format: text or json")
-	fs.StringVar(&opts.output, "output", "", "report output file (default: stdout)")
+	fs.StringVar(&opts.format, "format", "text", "report format: text, json, or html")
+	fs.StringVar(&opts.output, "output", "", "report output file, or directory for html (default: stdout)")
 	fs.Var(&opts.excludes, "exclude", "exclude module-relative glob; repeatable; ** is supported")
 	fs.BoolVar(&opts.includeTests, "include-tests", false, "include active _test.go decisions in the denominator")
 	fs.BoolVar(&opts.keepWorkDir, "keep-workdir", false, "keep the instrumented temporary workspace")
@@ -129,8 +129,11 @@ func splitGoTestArgs(args []string) (tool, goTest []string) {
 }
 
 func validateOptions(opts options) error {
-	if opts.format != "text" && opts.format != "json" {
-		return fmt.Errorf("unsupported --format=%q; use text or json", opts.format)
+	if opts.format != "text" && opts.format != "json" && opts.format != "html" {
+		return fmt.Errorf("unsupported --format=%q; use text, json, or html", opts.format)
+	}
+	if opts.format == "html" && (opts.output == "" || opts.output == "-") {
+		return errors.New("--format=html requires --output to name a directory")
 	}
 	if opts.timeout < 0 {
 		return errors.New("--timeout must be non-negative")

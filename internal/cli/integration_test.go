@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,6 +16,32 @@ import (
 	"github.com/shrydev2020/gomcdc/internal/report"
 	"github.com/shrydev2020/gomcdc/internal/runtimecov"
 )
+
+func TestIntegratedFixtureWritesPackageCenteredHTML(t *testing.T) {
+	configureIntegrationGoCache(t)
+	t.Setenv("GOMCDC_ISOLATION_FIXTURE", "1")
+	root := fixturePath(t, "integration")
+	output := filepath.Join(t.TempDir(), "coverage-html")
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	code := runAt(ctx, root, []string{"test", "--timeout=2m", "--format=html", "--output=" + output, "./..."}, &stdout, &stderr)
+	if code != ExitSuccess {
+		t.Fatalf("HTML exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("HTML report unexpectedly wrote stdout: %q", stdout.String())
+	}
+	contents, err := os.ReadFile(filepath.Join(output, "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range [][]byte{[]byte("Package navigation"), []byte("example.test/gocoverage-fixture/allow"), []byte("allow/allow.go"), []byte("Allow"), []byte("a &amp;&amp; b"), []byte("UC MC/DC"), []byte("Mask MC/DC"), []byte("Masking witness")} {
+		if !bytes.Contains(contents, required) {
+			t.Errorf("HTML missing %q", required)
+		}
+	}
+}
 
 func TestIntegratedFixtureReportsAllMetricsAcrossPackages(t *testing.T) {
 	configureIntegrationGoCache(t)

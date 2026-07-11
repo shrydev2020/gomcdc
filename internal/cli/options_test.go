@@ -2,11 +2,39 @@ package cli
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
 	"github.com/shrydev2020/gomcdc/internal/report"
 )
+
+func TestHTMLOutputRequiresDirectory(t *testing.T) {
+	t.Parallel()
+	if _, err := parseOptions([]string{"--format=html", "./..."}, &bytes.Buffer{}); err == nil {
+		t.Fatal("HTML format without output directory was accepted")
+	}
+	if _, err := parseOptions([]string{"--format=html", "--output=coverage-html", "./..."}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("valid HTML options: %v", err)
+	}
+}
+
+func TestWriteHTMLReportCreatesIndex(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	opts := options{format: "html", output: "coverage-html"}
+	if err := writeReport(opts, report.Input{ModulePath: "example.test/m"}, directory, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(filepath.Join(directory, "coverage-html", "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(contents, []byte("example.test/m")) || !bytes.Contains(contents, []byte("<!doctype html>")) {
+		t.Fatalf("unexpected HTML output: %s", contents)
+	}
+}
 
 func TestParseOptions(t *testing.T) {
 	t.Parallel()

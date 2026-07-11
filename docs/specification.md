@@ -245,7 +245,15 @@ Each summary carries covered, total, percentage, and support/status counts. IDs 
 
 Every enabled metric displays `covered / total = percentage` or `n/a`, with Instrumentation Coverage and excluded-status counts. MC/DC displays each condition result, witness vectors, Decision results, Masking completions, and the unsatisfied rule.
 
-### D31. Resources and trust boundary
+### D31. HTML
+
+`--format html --output <directory>` creates `<directory>/index.html`. HTML consumes only the same Report model and triggers no additional build or test.
+
+The module summary leads to package-centered navigation, followed by files and functions within each package. The function table presents all eleven metrics as independent columns. Function detail presents original-source Locations, Decisions, Conditions, Clause Body, Clause Selection, and both MC/DC results. Partial runs, unsupported, unknown, infeasible, and analysis-incomplete remain distinct from ordinary non-coverage.
+
+The output is one self-contained static HTML file with no external asset, CDN, network request, or JavaScript. Source expressions and paths are escaped for their HTML context. Information does not depend on color alone; numerator, denominator, percentage, and status text are present.
+
+### D32. Resources and trust boundary
 
 One instrumented run collects all non-standard-cover evidence with one source instrumentation, compiler instrumentation, build, and test. The event journal aggregates and compacts without losing witnesses and does not retain every record in memory in proportion to loop iterations. Targets relative to ordinary `go test` are at most 2x for AST-only and 5x with both MC/DC metrics, but these targets do not determine conformance.
 
@@ -257,7 +265,7 @@ The tool defines coverage semantics only and claims no DO-178C compliance, tool 
 
 An implementation conforms only when all conditions hold.
 
-1. It implements the types, sets, functions, and external forms of D1–D31.
+1. It implements the types, sets, functions, and external forms of D1–D32.
 2. It integrates all eleven metrics over one source model and report.
 3. It does not record not-evaluated as false.
 4. It does not use an aborted evaluation as coverage evidence or an entity status.
@@ -281,4 +289,4 @@ Completion requires successful `go test -count=1 ./...`, `go test -race -count=1
 
 ## 11. References
 
-The semantic references are FAA CAST-10, the NASA MC/DC tutorial, Hayhurst et al., Chilenski, the Go language specification, and Go `cmd/cover`. References do not override D1–D31.
+The semantic references are FAA CAST-10, the NASA MC/DC tutorial, Hayhurst et al., Chilenski, the Go language specification, and Go `cmd/cover`. References do not override D1–D32.

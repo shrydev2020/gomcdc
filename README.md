@@ -19,7 +19,7 @@ Definitions, metric names, JSON fields, thresholds, and completion criteria belo
 
 The repository is under active development and does not yet conform to every requirement in the `1.0-draft` specification.
 
-Known incomplete areas include the compiler-aware Clause Selection backend, canonical metric migration, nullable zero-denominator percentages, and the final JSON schema.
+Known incomplete areas include the compiler-aware Clause Selection backend and the final JSON schema.
 
 Do not use the current output as a certification or safety-compliance claim.
 
@@ -39,7 +39,10 @@ go install github.com/shrydev2020/gomcdc/cmd/gocoverage@latest
 
 ```sh
 gocoverage test ./...
+gocoverage test --format html --output coverage-html ./...
 ```
+
+The HTML report entry point is `coverage-html/index.html`.
 
 The draft specification defines the final CLI.
 

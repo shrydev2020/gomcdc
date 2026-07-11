@@ -245,7 +245,15 @@ summary key は `statement`、`function`、`decision`、`switchClauseBody`、`ty
 
 有効な全指標について `covered / total = percentage` または `n/a` を表示する。Instrumentation Coverage と除外 status 件数を併記する。MC/DC は condition ごとの結果、witness vector、Decision result、Masking completion、成立しない規則を表示する。
 
-### D31. Resource と trust boundary
+### D31. HTML
+
+`--format html --output <directory>` は `<directory>/index.html` を生成する。HTMLは同じReport modelだけを入力とし、追加のbuildまたはtestを実行しない。
+
+HTMLはmodule summaryからpackageを主navigationとし、package内をfile、functionの順に表示する。function一覧は11指標を独立列として表示し、function detailは元source Location、Decision、Condition、Clause Body、Clause Selection、両MC/DC結果を表示する。partial run、unsupported、unknown、infeasible、analysis-incompleteを通常の未達と区別する。
+
+出力は単一のself-contained static HTMLとし、外部asset、CDN、network request、JavaScriptを使用しない。source expressionとpathはHTML contextに従ってescapeする。色だけに依存せず、分子、分母、percentage、status textを併記する。
+
+### D32. Resource と trust boundary
 
 一つの計装runは一回のsource計装、compiler計装、build、testで全非standard-cover証拠を収集する。event journalはwitnessを失わない形で集約・compactionし、loop回数に比例する全recordをmemoryへ保持しない。通常の `go test` に対する目標はAST-onlyで2倍以内、両MC/DC込みで5倍以内だが、この目標は適合判定に使用しない。
 
@@ -257,7 +265,7 @@ summary key は `statement`、`function`、`decision`、`switchClauseBody`、`ty
 
 実装は次の全条件を満たすとき本仕様へ適合する。
 
-1. D1–D31 の型、集合、関数、外部形式を実装する。
+1. D1–D32 の型、集合、関数、外部形式を実装する。
 2. 11指標を同一 source model と同一 report に統合する。
 3. not-evaluated を false として記録しない。
 4. aborted evaluation を coverage evidence または coverage entity status に使用しない。
@@ -281,4 +289,4 @@ summary key は `statement`、`function`、`decision`、`switchClauseBody`、`ty
 
 ## 11. 参考資料
 
-FAA CAST-10、NASA MC/DC tutorial、Hayhurst et al.、Chilenski、Go language specification、Go `cmd/cover` を参照する。参考資料は D1–D31 を上書きしない。
+FAA CAST-10、NASA MC/DC tutorial、Hayhurst et al.、Chilenski、Go language specification、Go `cmd/cover` を参照する。参考資料は D1–D32 を上書きしない。

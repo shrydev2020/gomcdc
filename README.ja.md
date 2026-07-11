@@ -19,7 +19,7 @@
 
 本リポジトリは開発中であり、`1.0-draft`仕様の全要件にはまだ適合していません。
 
-未完成の主な領域は、compiler-aware Clause Selection backend、正式指標名への移行、分母0に対するnullable percentage、最終JSON schemaです。
+未完成の主な領域は、compiler-aware Clause Selection backendと最終JSON schemaです。
 
 現在の出力を安全認証または規格適合の根拠として使用しないでください。
 
@@ -39,7 +39,10 @@ go install github.com/shrydev2020/gomcdc/cmd/gocoverage@latest
 
 ```sh
 gocoverage test ./...
+gocoverage test --format html --output coverage-html ./...
 ```
+
+HTML reportの入口は`coverage-html/index.html`です。
 
 最終的なCLIはdraft仕様で定義します。
 

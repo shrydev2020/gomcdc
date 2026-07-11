@@ -948,6 +948,28 @@ func belowThreshold(metric report.MetricSummary, threshold float64) bool {
 }
 
 func writeReport(opts options, input report.Input, workingDir string, stdout io.Writer) error {
+	if opts.format == "html" {
+		outputDir := opts.output
+		if !filepath.IsAbs(outputDir) {
+			outputDir = filepath.Join(workingDir, outputDir)
+		}
+		if err := os.MkdirAll(outputDir, 0o755); err != nil {
+			return fmt.Errorf("create HTML report directory %q: %w", outputDir, err)
+		}
+		outputPath := filepath.Join(outputDir, "index.html")
+		file, err := os.OpenFile(outputPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+		if err != nil {
+			return fmt.Errorf("create HTML report %q: %w", outputPath, err)
+		}
+		if err := report.WriteHTML(file, input); err != nil {
+			_ = file.Close()
+			return err
+		}
+		if err := file.Close(); err != nil {
+			return fmt.Errorf("close HTML report %q: %w", outputPath, err)
+		}
+		return nil
+	}
 	var contents []byte
 	var err error
 	switch opts.format {
