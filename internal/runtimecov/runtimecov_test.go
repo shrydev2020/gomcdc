@@ -158,13 +158,6 @@ func TestCollectDetailedRetainsValidEvidenceAndSynthesizesAbort(t *testing.T) {
 	if collected.Diagnostics[0].Severity != DiagnosticIntegrity || collected.Diagnostics[1].Severity != DiagnosticRecoverable || !collected.Diagnostics[1].Truncated {
 		t.Errorf("truncated diagnostic = %#v", collected.Diagnostics[1])
 	}
-	outcomes, err := Collect(dataDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := outcomes[7]; got != (cover.Outcome{True: true}) {
-		t.Errorf("outcome 7 = %#v", got)
-	}
 }
 
 func TestCollectMissingDirectoryIsIOError(t *testing.T) {
@@ -214,16 +207,9 @@ func TestCollectDetailedRejectsTerminalWithoutBeginAsCoverageEvidence(t *testing
 	if len(collected.Diagnostics) != 1 || !strings.Contains(collected.Diagnostics[0].Message, "no matching begin") {
 		t.Fatalf("diagnostics = %#v", collected.Diagnostics)
 	}
-	outcomes, err := Collect(dataDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(outcomes) != 0 {
-		t.Fatalf("orphan terminal produced outcomes: %#v", outcomes)
-	}
 }
 
-func TestCollectDetailedAggregatesLegacyAndSelfContainedEvaluationRecords(t *testing.T) {
+func TestCollectDetailedAggregatesJournalAndCompactedEvaluationRecords(t *testing.T) {
 	dataDir := t.TempDir()
 	content := strings.Join([]string{
 		`{"type":"begin","runId":"run","packagePath":"example.test/p","processId":1,"evaluationId":1,"decisionId":7,"conditionCount":2,"testId":"unknown"}`,

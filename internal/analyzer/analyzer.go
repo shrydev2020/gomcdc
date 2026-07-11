@@ -263,11 +263,11 @@ func CanonicalKey(metadata cover.DecisionMetadata) string {
 		StableIDVersion,
 		metadata.ModulePath,
 		metadata.Package,
-		filepath.ToSlash(metadata.File),
-		strconv.Itoa(metadata.Start.Line),
-		strconv.Itoa(metadata.Start.Column),
-		strconv.Itoa(metadata.End.Line),
-		strconv.Itoa(metadata.End.Column),
+		filepath.ToSlash(metadata.Location.File),
+		strconv.Itoa(metadata.Location.Start.Line),
+		strconv.Itoa(metadata.Location.Start.Column),
+		strconv.Itoa(metadata.Location.End.Line),
+		strconv.Itoa(metadata.Location.End.Column),
 		string(metadata.Kind),
 	}
 	return strings.Join(fields, "\x00")
@@ -409,14 +409,16 @@ func (visitor decisionVisitor) addDecision(kind cover.DecisionKind, condition as
 		function = "<package>"
 	}
 	metadata := cover.DecisionMetadata{
-		ModulePath:       visitor.context.modulePath,
-		Package:          visitor.context.packagePath,
-		File:             visitor.context.relative,
+		ModulePath: visitor.context.modulePath,
+		Package:    visitor.context.packagePath,
+		Location: cover.SourceLocation{
+			File:  visitor.context.relative,
+			Start: cover.Position{Line: start.Line, Column: start.Column},
+			End:   cover.Position{Line: end.Line, Column: end.Column},
+		},
 		Function:         function,
 		FunctionLocation: visitor.functionLocation,
 		Kind:             kind,
-		Start:            cover.Position{Line: start.Line, Column: start.Column},
-		End:              cover.Position{Line: end.Line, Column: end.Column},
 		Expression:       formatExpression(visitor.context.fset, condition),
 	}
 	conditions, expressionTree := visitor.conditions(condition)

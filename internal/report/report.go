@@ -308,8 +308,8 @@ func Build(input Input) Report {
 	report := Report{
 		Version:         SchemaVersion,
 		Module:          input.ModulePath,
-		Run:             Run{Status: input.RunStatus, FailureKind: normalizedFailureKind(input.RunStatus, input.FailureKind), Complete: input.Complete},
-		MeasurementMode: normalizedMeasurementMode(input.MeasurementMode),
+		Run:             Run{Status: input.RunStatus, FailureKind: input.FailureKind, Complete: input.Complete},
+		MeasurementMode: input.MeasurementMode,
 		Measurements:    cloneMeasurementRuns(input.Measurements),
 		Capabilities:    capabilities,
 		Backends:        producerCapabilities,
@@ -395,7 +395,7 @@ func Build(input Input) Report {
 
 	for _, decision := range decisions {
 		builder := ensurePackageBuilder(builders, decision.Package, input)
-		function := ensureFunctionBuilder(builder, decision.File, displayFunctionName(decision.Function), optionalLocation(decision.FunctionLocation), input.Coverage)
+		function := ensureFunctionBuilder(builder, decision.Location.File, displayFunctionName(decision.Function), optionalLocation(decision.FunctionLocation), input.Coverage)
 		state := stateForEvaluations(
 			evaluationsByDecision[decision.ID],
 			input.ASTEvidenceIntegrityUnknown || packageUnknown(astPackageStatus(input, decision.Package, builder.status), astPackageEvidence[decision.Package]),
@@ -764,7 +764,7 @@ func buildDecisionReport(
 	return DecisionReport{
 		DecisionID:   formatID(uint64(metadata.ID)),
 		Kind:         metadata.Kind,
-		Location:     metadata.SourceLocation(),
+		Location:     metadata.Location,
 		Expression:   metadata.Expression,
 		NotEvaluated: notEvaluated,
 		Summary:      summary,
@@ -1128,26 +1128,6 @@ func astPackageStatus(input Input, packagePath, fallback string) string {
 	return fallback
 }
 
-func normalizedFailureKind(status cover.RunStatus, kind cover.RunFailureKind) cover.RunFailureKind {
-	if kind != "" {
-		return kind
-	}
-	if status == cover.RunPassed {
-		return cover.RunFailureNone
-	}
-	if status == cover.RunTimeout {
-		return cover.RunFailureTimeout
-	}
-	return cover.RunFailureCommand
-}
-
-func normalizedMeasurementMode(mode MeasurementMode) MeasurementMode {
-	if mode == "" {
-		return MeasurementSingleRun
-	}
-	return mode
-}
-
 func cloneProducerCapabilities(values []backend.ProducerCapabilities) []backend.ProducerCapabilities {
 	cloned := make([]backend.ProducerCapabilities, 0, len(values))
 	for _, value := range values {
@@ -1309,17 +1289,17 @@ func lessDecision(left, right cover.DecisionMetadata) bool {
 	if left.Package != right.Package {
 		return left.Package < right.Package
 	}
-	if left.File != right.File {
-		return left.File < right.File
+	if left.Location.File != right.Location.File {
+		return left.Location.File < right.Location.File
 	}
 	if left.Function != right.Function {
 		return left.Function < right.Function
 	}
-	if left.Start != right.Start {
-		return lessPosition(left.Start, right.Start)
+	if left.Location.Start != right.Location.Start {
+		return lessPosition(left.Location.Start, right.Location.Start)
 	}
-	if left.End != right.End {
-		return lessPosition(left.End, right.End)
+	if left.Location.End != right.Location.End {
+		return lessPosition(left.Location.End, right.Location.End)
 	}
 	return left.ID < right.ID
 }

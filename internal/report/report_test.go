@@ -94,7 +94,7 @@ func TestConditionlessSwitchReportsSkippedDecisionAsNotEvaluated(t *testing.T) {
 	second := singleConditionDecision(41, "example.com/m/p", "p.go", "Choose")
 	second.Kind = cover.DecisionSwitchCase
 	second.Expression = "b"
-	second.Start.Line, second.End.Line = 11, 11
+	second.Location.Start.Line, second.Location.End.Line = 11, 11
 	second.Conditions[0].Expression = "b"
 	second.Conditions[0].Location = location("p.go", 11)
 
@@ -371,6 +371,14 @@ func TestClauseCoverageUsesBodyEvidenceAndNeverInfersSelection(t *testing.T) {
 	}
 }
 
+func TestBuildDoesNotInventMissingRunProvenance(t *testing.T) {
+	t.Parallel()
+	built := report.Build(report.Input{})
+	if built.MeasurementMode != "" || built.Run.FailureKind != "" {
+		t.Fatalf("missing provenance was inferred: mode=%q failureKind=%q", built.MeasurementMode, built.Run.FailureKind)
+	}
+}
+
 func TestZeroMetricsAndDisabledMetricsStayPresent(t *testing.T) {
 	t.Parallel()
 
@@ -479,9 +487,9 @@ func TestJSONAndTextAreDeterministicAcrossInputOrder(t *testing.T) {
 
 func weightedInput() report.Input {
 	decisions := []cover.DecisionMetadata{
-		{ID: 3, Package: "example.com/m/b", File: "b.go", Function: "Loop", Kind: cover.DecisionFor, Start: cover.Position{Line: 8, Column: 2}, End: cover.Position{Line: 8, Column: 7}, Expression: "i < 2"},
-		{ID: 2, Package: "example.com/m/a", File: "a.go", Function: "Check", Kind: cover.DecisionIf, Start: cover.Position{Line: 20, Column: 2}, End: cover.Position{Line: 20, Column: 8}, Expression: "second"},
-		{ID: 1, Package: "example.com/m/a", File: "a.go", Function: "Check", Kind: cover.DecisionIf, Start: cover.Position{Line: 10, Column: 2}, End: cover.Position{Line: 10, Column: 7}, Expression: "first"},
+		{ID: 3, Package: "example.com/m/b", Function: "Loop", Kind: cover.DecisionFor, Location: cover.SourceLocation{File: "b.go", Start: cover.Position{Line: 8, Column: 2}, End: cover.Position{Line: 8, Column: 7}}, Expression: "i < 2"},
+		{ID: 2, Package: "example.com/m/a", Function: "Check", Kind: cover.DecisionIf, Location: cover.SourceLocation{File: "a.go", Start: cover.Position{Line: 20, Column: 2}, End: cover.Position{Line: 20, Column: 8}}, Expression: "second"},
+		{ID: 1, Package: "example.com/m/a", Function: "Check", Kind: cover.DecisionIf, Location: cover.SourceLocation{File: "a.go", Start: cover.Position{Line: 10, Column: 2}, End: cover.Position{Line: 10, Column: 7}}, Expression: "first"},
 	}
 	return report.Input{
 		ModulePath: "example.com/m", Coverage: config.AllCoverage(), RunStatus: cover.RunPassed, Complete: true,
@@ -556,8 +564,8 @@ func andDecision(id cover.DecisionID, packagePath, file, function string) cover.
 
 func singleConditionDecision(id cover.DecisionID, packagePath, file, function string) cover.DecisionMetadata {
 	return cover.DecisionMetadata{
-		ID: id, Package: packagePath, File: file, Function: function, Kind: cover.DecisionIf,
-		Start: cover.Position{Line: 10, Column: 2}, End: cover.Position{Line: 10, Column: 8}, Expression: "a",
+		ID: id, Package: packagePath, Function: function, Kind: cover.DecisionIf,
+		Location: cover.SourceLocation{File: file, Start: cover.Position{Line: 10, Column: 2}, End: cover.Position{Line: 10, Column: 8}}, Expression: "a",
 		Conditions:     []cover.ConditionMetadata{{Index: 0, Expression: "a", Location: location(file, 10)}},
 		ExpressionTree: cover.NewConditionExpression(0),
 	}

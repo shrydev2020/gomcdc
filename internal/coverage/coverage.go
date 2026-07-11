@@ -51,7 +51,7 @@ const (
 	ClauseConditionlessSwitch ClauseKind = "conditionless-switch"
 )
 
-// ClauseRole distinguishes an explicit case, explicit default, and the legacy
+// ClauseRole distinguishes an explicit case, explicit default, and a
 // synthetic no-match outcome. The AST backend does not create no-match clauses.
 type ClauseRole string
 
@@ -177,26 +177,18 @@ func NewOrExpression(left, right *BooleanExpression) *BooleanExpression {
 }
 
 // DecisionMetadata describes one stable decision occurrence in the original
-// (un-instrumented) source tree. File, Start, and End remain first-class fields
-// for stable serialization; SourceLocation returns their normalized view.
+// (un-instrumented) source tree. Location is always normalized to the original source.
 type DecisionMetadata struct {
 	ID               DecisionID
 	ModulePath       string
 	Package          string
-	File             string
 	Function         string
 	FunctionLocation SourceLocation
 	Kind             DecisionKind
-	Start            Position
-	End              Position
+	Location         SourceLocation
 	Expression       string
 	Conditions       []ConditionMetadata
 	ExpressionTree   *BooleanExpression
-}
-
-// SourceLocation returns the original-source range for this decision.
-func (d DecisionMetadata) SourceLocation() SourceLocation {
-	return SourceLocation{File: d.File, Start: d.Start, End: d.End}
 }
 
 // StableKey contains every field that contributes to a decision ID. It is
@@ -206,30 +198,13 @@ func (d DecisionMetadata) StableKey() string {
 	return fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%d\x00%d\x00%d\x00%s",
 		d.ModulePath,
 		d.Package,
-		d.File,
-		d.Start.Line,
-		d.Start.Column,
-		d.End.Line,
-		d.End.Column,
+		d.Location.File,
+		d.Location.Start.Line,
+		d.Location.Start.Column,
+		d.Location.End.Line,
+		d.Location.End.Column,
 		d.Kind,
 	)
-}
-
-// Outcome records whether each side of a boolean decision was observed.
-type Outcome struct {
-	True  bool
-	False bool
-}
-
-func (o Outcome) Covered() int {
-	covered := 0
-	if o.True {
-		covered++
-	}
-	if o.False {
-		covered++
-	}
-	return covered
 }
 
 // ConditionState records whether an atomic condition was evaluated and, when

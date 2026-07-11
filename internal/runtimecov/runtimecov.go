@@ -31,11 +31,6 @@ const (
 	maxEventLine         = 16 << 20
 )
 
-// ErrCorruptEventData is retained for callers that classify diagnostics from
-// older versions. CollectDetailed recovers valid records and returns structural
-// problems in Collection.Diagnostics instead of discarding partial evidence.
-var ErrCorruptEventData = errors.New("runtime coverage event data is corrupt")
-
 // Package describes a runtime package injected into a copied target module.
 type Package struct {
 	Dir         string
@@ -168,37 +163,6 @@ func CollectDetailed(dataDir string) (Collection, error) {
 	collector.finishAborted()
 	collector.sort()
 	return collector.result, nil
-}
-
-// CollectEvaluations returns the lifecycle evidence without the compatibility
-// outcome projection.
-func CollectEvaluations(dataDir string) ([]cover.DecisionEvaluation, []Diagnostic, error) {
-	collected, err := CollectDetailed(dataDir)
-	return collected.Evaluations, collected.Diagnostics, err
-}
-
-// Collect is a compatibility projection over completed evaluations. Aborted
-// and malformed records never contribute outcomes.
-func Collect(dataDir string) (map[uint64]cover.Outcome, error) {
-	collected, err := CollectDetailed(dataDir)
-	if err != nil {
-		return nil, err
-	}
-	outcomes := make(map[uint64]cover.Outcome)
-	for _, evaluation := range collected.Evaluations {
-		if evaluation.Status != cover.EvaluationCompleted {
-			continue
-		}
-		id := uint64(evaluation.DecisionID)
-		outcome := outcomes[id]
-		if evaluation.Result {
-			outcome.True = true
-		} else {
-			outcome.False = true
-		}
-		outcomes[id] = outcome
-	}
-	return outcomes, nil
 }
 
 type wireRecord struct {
@@ -752,17 +716,6 @@ func EndDecision(evaluationID uint64, value bool) (result bool) {
 func AbortDecision(evaluationID uint64) {
 	defer func() { _ = recover() }()
 	abort(evaluationID)
-}
-
-// EvalDecision is retained for bridges produced by older instrumenters.
-func EvalDecision(id uint64, value bool) (result bool) {
-	result = value
-	defer func() { _ = recover() }()
-	hooks := NewHooks("unknown")
-	var slot uint64
-	hooks.BeginInto(&slot, id, 1)
-	hooks.Condition(slot, 0, value)
-	return hooks.End(slot, value)
 }
 
 func (hooks Hooks) BeginInto(slot *uint64, decisionID uint64, conditionCount uint16) (proceed bool) {

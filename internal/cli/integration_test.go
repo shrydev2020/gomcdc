@@ -224,13 +224,13 @@ func TestValidationDropsImpossibleCompletedEvidence(t *testing.T) {
 func TestValidationKeepsConditionlessSwitchNotEvaluatedEvidence(t *testing.T) {
 	t.Parallel()
 	first := cover.DecisionMetadata{
-		ID: 1, Package: "example.test/p", File: "p.go", Function: "Choose", Kind: cover.DecisionSwitchCase,
-		Start: cover.Position{Line: 3, Column: 7}, End: cover.Position{Line: 3, Column: 8},
+		ID: 1, Package: "example.test/p", Function: "Choose", Kind: cover.DecisionSwitchCase,
+		Location:   cover.SourceLocation{File: "p.go", Start: cover.Position{Line: 3, Column: 7}, End: cover.Position{Line: 3, Column: 8}},
 		Conditions: []cover.ConditionMetadata{{Index: 0}}, ExpressionTree: cover.NewConditionExpression(0),
 	}
 	second := first
 	second.ID = 2
-	second.Start.Line, second.End.Line = 4, 4
+	second.Location.Start.Line, second.Location.End.Line = 4, 4
 	evaluation := cover.DecisionEvaluation{
 		DecisionID: 1, EvaluationID: 9, RunID: "run", PackagePath: "example.test/p", ProcessID: 12,
 		TestID: cover.UnknownTestID, Conditions: []cover.ConditionState{cover.ConditionTrue}, Result: true, Status: cover.EvaluationCompleted,

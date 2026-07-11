@@ -220,8 +220,8 @@ func (*Value) Check(a bool) {
 	if got, want := len(file.Decisions), 2; got != want {
 		t.Fatalf("len(Decisions) = %d, want %d", got, want)
 	}
-	if file.Decisions[0].Metadata.Start.Line >= 900 {
-		t.Fatalf("Start.Line = %d; //line-adjusted position was used", file.Decisions[0].Metadata.Start.Line)
+	if file.Decisions[0].Metadata.Location.Start.Line >= 900 {
+		t.Fatalf("Start.Line = %d; //line-adjusted position was used", file.Decisions[0].Metadata.Location.Start.Line)
 	}
 	if len(file.LineMappings) == 0 {
 		t.Fatal("user //line directive was not exposed for C0 reverse mapping")
@@ -283,7 +283,7 @@ func TestGeneratedFileRemainsInCoverageAndIdentifiersAreAvailable(t *testing.T) 
 
 package p
 
-func __gocoverageEvalDecision(value bool) {
+func __gocoverageHooks(value bool) {
 	if value {}
 }
 `)
@@ -302,7 +302,7 @@ func __gocoverageEvalDecision(value bool) {
 	if len(file.Decisions) != 1 {
 		t.Fatalf("len(Decisions) = %d, want 1", len(file.Decisions))
 	}
-	if !slices.Contains(file.Identifiers, "__gocoverageEvalDecision") {
+	if !slices.Contains(file.Identifiers, "__gocoverageHooks") {
 		t.Fatalf("Identifiers = %v", file.Identifiers)
 	}
 }

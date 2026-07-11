@@ -116,17 +116,17 @@ func TestSelectHelperNameScansTestsAndToleratesMalformedSyntax(t *testing.T) {
 
 	directory := t.TempDir()
 	production := writeFile(t, directory, "p.go", `package p
-var __gocoverageEvalDecision = 1
+var __gocoverageHooks = 1
 `)
 	brokenTest := writeFile(t, directory, "p_test.go", `package p
 func TestBroken( {
-	__gocoverageEvalDecision_1 := 2
+	__gocoverageHooks_1 := 2
 `)
 	name, err := SelectHelperName([]string{brokenTest, production})
 	if err != nil {
 		t.Fatalf("SelectHelperName() error = %v", err)
 	}
-	if name != "__gocoverageEvalDecision_2" {
+	if name != "__gocoverageHooks_2" {
 		t.Fatalf("helper name = %q", name)
 	}
 }
@@ -164,12 +164,12 @@ func TestWriteBridgeCreatesGeneratedNormalAndTestOnlyFiles(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			directory := t.TempDir()
 			path, err := WriteBridge(BridgeOptions{
-				Directory:           directory,
-				PackageName:         test.pkg,
-				RuntimeImportPath:   "example.com/p/internal/runtimecov",
-				RuntimeFunctionName: "EvalDecision",
-				HelperName:          "__hit",
-				TestOnly:            test.testOnly,
+				Directory:         directory,
+				PackageName:       test.pkg,
+				PackagePath:       "example.com/p",
+				RuntimeImportPath: "example.com/p/internal/runtimecov",
+				HelperName:        "__hit",
+				TestOnly:          test.testOnly,
 			})
 			if err != nil {
 				t.Fatalf("WriteBridge() error = %v", err)
@@ -188,10 +188,20 @@ func TestWriteBridgeCreatesGeneratedNormalAndTestOnlyFiles(t *testing.T) {
 			if !ast.IsGenerated(file) {
 				t.Fatalf("bridge is not recognized as generated:\n%s", contents)
 			}
-			if !bytes.Contains(contents, []byte(`var __hit = __gocoverageRuntime.EvalDecision`)) {
+			if !bytes.Contains(contents, []byte(`var __hit = __hitRuntime.NewHooks("example.com/p")`)) {
 				t.Fatalf("bridge contents:\n%s", contents)
 			}
 		})
+	}
+}
+
+func TestInstrumentPackageRejectsMissingPackagePath(t *testing.T) {
+	t.Parallel()
+	_, err := InstrumentPackage(PackageOptions{
+		Directory: t.TempDir(), PackageName: "p", RuntimeImportPath: "example.com/p/internal/runtimecov",
+	})
+	if err == nil || !strings.Contains(err.Error(), "package path is empty") {
+		t.Fatalf("InstrumentPackage() error = %v", err)
 	}
 }
 
@@ -205,11 +215,11 @@ func TestWriteBridgeDoesNotOverwriteUserFileWithCandidateName(t *testing.T) {
 		t.Fatal(err)
 	}
 	created, err := WriteBridge(BridgeOptions{
-		Directory:           directory,
-		PackageName:         "p",
-		RuntimeImportPath:   "example.com/p/internal/runtimecov",
-		RuntimeFunctionName: "EvalDecision",
-		HelperName:          defaultHelperBase,
+		Directory:         directory,
+		PackageName:       "p",
+		PackagePath:       "example.com/p",
+		RuntimeImportPath: "example.com/p/internal/runtimecov",
+		HelperName:        defaultHelperBase,
 	})
 	if err != nil {
 		t.Fatalf("WriteBridge: %v", err)
@@ -359,6 +369,7 @@ func (Hooks) SelectClause(uint64) {}
 	result, err := InstrumentPackage(PackageOptions{
 		Directory:         filepath.Dir(copyPath),
 		PackageName:       "logic",
+		PackagePath:       "example.com/fixture/logic",
 		RuntimeImportPath: "example.com/fixture/runtimecov",
 		ActiveFiles:       []string{copyPath, testPath},
 		Files:             []FileMapping{{CopyPath: copyPath, Analysis: analysis}},
@@ -391,6 +402,7 @@ func TestInstrumentPackageTestOnlyBridgeDoesNotMixExternalPackage(t *testing.T) 
 	result, err := InstrumentPackage(PackageOptions{
 		Directory:         filepath.Dir(copyPath),
 		PackageName:       "p_test",
+		PackagePath:       "example.com/p_test",
 		RuntimeImportPath: "example.com/p/internal/runtimecov",
 		TestOnly:          true,
 		ActiveFiles:       []string{copyPath},

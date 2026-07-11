@@ -32,20 +32,6 @@ func TestConditionStatePreservesNotEvaluated(t *testing.T) {
 	}
 }
 
-func TestDecisionSourceLocationUsesOriginalMetadata(t *testing.T) {
-	t.Parallel()
-
-	metadata := DecisionMetadata{
-		File:  "pkg/source.go",
-		Start: Position{Line: 7, Column: 3},
-		End:   Position{Line: 7, Column: 14},
-	}
-	location := metadata.SourceLocation()
-	if location.File != metadata.File || location.Start != metadata.Start || location.End != metadata.End {
-		t.Fatalf("SourceLocation() = %#v, want legacy original-source fields", location)
-	}
-}
-
 func TestEvaluationIdentityIncludesProcessProvenance(t *testing.T) {
 	t.Parallel()
 
