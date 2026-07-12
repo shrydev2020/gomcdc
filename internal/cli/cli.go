@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/shrydev2020/gomcdc/internal/analyzer"
-	"github.com/shrydev2020/gomcdc/internal/backend"
 	"github.com/shrydev2020/gomcdc/internal/c0"
 	"github.com/shrydev2020/gomcdc/internal/c0map"
 	"github.com/shrydev2020/gomcdc/internal/config"
@@ -334,65 +333,14 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		}
 	}
 
-	overallStatus, overallFailure := combineTestResults(standardResult, astResult)
-	packageStatuses := make(map[string]string, len(loaded.PackageImportSet))
-	for _, packagePath := range loaded.PackageImportSet {
-		packageStatuses[packagePath] = ""
-	}
-	for _, result := range []*gotest.Result{standardResult, astResult} {
-		if result == nil {
-			continue
-		}
-		for packagePath, status := range result.Packages {
-			packageStatuses[packagePath] = mergePackageStatus(packageStatuses[packagePath], string(status))
-		}
-	}
-	for packagePath, status := range packageStatuses {
-		if status == "" {
-			packageStatuses[packagePath] = string(overallStatus)
-		}
-	}
-	astPackageStatuses := make(map[string]string, len(loaded.PackageImportSet))
-	if astResult != nil {
-		for _, packagePath := range loaded.PackageImportSet {
-			astPackageStatuses[packagePath] = string(astResult.Status)
-		}
-		for packagePath, status := range astResult.Packages {
-			astPackageStatuses[packagePath] = string(status)
-		}
-	}
-	measurementMode := report.MeasurementSingleRun
-	if needsC0 && needsASTRun {
-		measurementMode = report.MeasurementDualRunStandardCover
-	} else if needsC0 {
-		measurementMode = report.MeasurementStandardCover
-	}
-	measurements := measurementRuns(standardResult, astResult)
-
-	input := report.Input{
-		ModulePath:                  loaded.ModulePath,
-		SourceFiles:                 sourceFileInputs(sources),
-		Coverage:                    opts.metrics,
-		Decisions:                   decisions,
-		Evaluations:                 collection.Evaluations,
-		NotEvaluatedDecisions:       collection.NotEvaluatedDecisions,
-		Clauses:                     clauses,
-		NoMatches:                   noMatches,
-		ClauseObservations:          collection.Clauses,
-		C0:                          c0Report,
-		RunStatus:                   overallStatus,
-		FailureKind:                 overallFailure,
-		MeasurementMode:             measurementMode,
-		Measurements:                measurements,
-		Backend:                     backend.OrchestratedBackend{},
-		BackendProducers:            backend.V1Producers(),
-		ASTEvidenceIntegrityUnknown: astEvidenceIntegrityUnknown,
-		C0EvidenceIntegrityUnknown:  c0EvidenceIntegrityUnknown,
-		InstrumentationUnknown:      analysisUnknown,
-		Complete:                    overallStatus == cover.RunPassed && !integrityFailure && !analysisIncomplete,
-		PackageStatuses:             packageStatuses,
-		ASTPackageStatuses:          astPackageStatuses,
-	}
+	input := assembleReportInput(reportAssembly{
+		loaded: loaded, sources: sources, coverage: opts.metrics, decisions: decisions,
+		clauses: clauses, noMatches: noMatches,
+		collection: collection, c0: c0Report, standardResult: standardResult, astResult: astResult,
+		standardCoverRequested: needsC0, astRequested: needsASTRun,
+		astEvidenceUnknown: astEvidenceIntegrityUnknown, c0EvidenceUnknown: c0EvidenceIntegrityUnknown,
+		instrumentationUnknown: analysisUnknown, integrityFailure: integrityFailure, analysisIncomplete: analysisIncomplete,
+	})
 	built := report.Build(input)
 	if err := writeReport(opts, input, workingDir, stdout); err != nil {
 		fmt.Fprintf(stderr, "gomcdc: report generation failed: %v\n", err)
