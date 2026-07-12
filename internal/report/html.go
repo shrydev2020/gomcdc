@@ -31,6 +31,8 @@ func WriteHTMLReport(w io.Writer, report Report, input Input) error {
 func writeHTMLReport(w io.Writer, value Report) error {
 	t, err := template.New("report").Funcs(template.FuncMap{
 		"metrics": htmlMetrics, "pct": htmlPercentage, "class": htmlMetricClass,
+		"triageMetrics": htmlTriageMetrics, "metricStatus": htmlMetricStatus,
+		"summaryGaps": htmlSummaryGaps, "summaryState": htmlSummaryState,
 		"loc": htmlLocation, "complete": completeness, "sourceSegments": htmlSourceSegments,
 	}).Parse(htmlDocument)
 	if err != nil {
@@ -108,6 +110,59 @@ func htmlMetrics(s Summary) []htmlMetric {
 		{"Type switch clause selection", "Type select", s.TypeSwitchClauseSelection}, {"Condition", "Condition", s.Condition},
 		{"Unique-Cause MC/DC", "UC MC/DC", s.MCDCUnique}, {"Masking MC/DC", "Mask MC/DC", s.MCDCMasking},
 	}
+}
+
+func htmlTriageMetrics(s Summary) []htmlMetric {
+	return []htmlMetric{
+		{"Statement", "Stmt", s.Statement}, {"Function", "Func", s.Function},
+		{"Decision", "Decision", s.Decision}, {"Condition", "Condition", s.Condition},
+		{"Unique-Cause MC/DC", "UC MC/DC", s.MCDCUnique}, {"Masking MC/DC", "Mask MC/DC", s.MCDCMasking},
+	}
+}
+
+func htmlMetricStatus(metric MetricSummary) string {
+	switch {
+	case !metric.Enabled:
+		return "disabled"
+	case metric.Unknown > 0:
+		return "unknown"
+	case metric.Unsupported > 0:
+		return "unsupported"
+	case metric.PossiblyInfeasible > 0:
+		return "infeasible"
+	case metric.Total == 0:
+		return "empty"
+	case metric.Covered == metric.Total:
+		return "complete"
+	case metric.Covered == 0:
+		return "not-covered"
+	default:
+		return "partial"
+	}
+}
+
+func htmlSummaryGaps(summary Summary) int {
+	gaps := 0
+	for _, metric := range htmlMetrics(summary) {
+		if !metric.Summary.Enabled {
+			continue
+		}
+		gaps += metric.Summary.Total - metric.Summary.Covered
+		gaps += metric.Summary.Unknown + metric.Summary.Unsupported + metric.Summary.PossiblyInfeasible
+	}
+	return gaps
+}
+
+func htmlSummaryState(summary Summary) string {
+	if htmlSummaryGaps(summary) > 0 {
+		return "attention"
+	}
+	for _, metric := range htmlMetrics(summary) {
+		if metric.Summary.Enabled && metric.Summary.Total > 0 {
+			return "complete"
+		}
+	}
+	return "empty"
 }
 func htmlPercentage(m MetricSummary) string {
 	if m.Percentage == nil {

@@ -51,3 +51,26 @@ func TestWriteHTMLMarksPartialReport(t *testing.T) {
 		t.Fatal("partial report warning is missing")
 	}
 }
+
+func TestWriteHTMLPresentsHumanReadableTriageHierarchy(t *testing.T) {
+	t.Parallel()
+	percentage := 75.0
+	metric := MetricSummary{Enabled: true, Covered: 3, Total: 4, Percentage: &percentage}
+	value := Report{
+		Module: "example.test/module",
+		Run:    Run{Status: cover.RunPassed, Complete: true},
+		Summary: Summary{Statement: metric, Decision: metric, Condition: metric,
+			MCDCUnique: metric, MCDCMasking: metric},
+		Packages: []PackageReport{{Path: "example.test/module/pkg", Status: "passed", Summary: Summary{Statement: metric, Decision: metric, Condition: metric}, Files: []FileReport{{Path: "pkg/value.go", Functions: []FunctionReport{{Name: "Check", Summary: Summary{Statement: metric, Decision: metric}}}}}}},
+	}
+	var output bytes.Buffer
+	if err := writeHTMLReport(&output, value); err != nil {
+		t.Fatal(err)
+	}
+	html := output.String()
+	for _, required := range []string{"Where to look first", "Open obligations", "Package → file → function → evidence", "Source view:", "Statement", "status-partial"} {
+		if !strings.Contains(html, required) {
+			t.Errorf("HTML missing human-readable UI element %q", required)
+		}
+	}
+}
