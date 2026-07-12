@@ -25,7 +25,6 @@ import (
 	"github.com/shrydev2020/gomcdc/internal/mcdc"
 	"github.com/shrydev2020/gomcdc/internal/report"
 	"github.com/shrydev2020/gomcdc/internal/runtimecov"
-	"github.com/shrydev2020/gomcdc/internal/workspace"
 )
 
 const (
@@ -178,52 +177,6 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 
 	needsC0 := opts.metrics.Enabled(config.MetricStatement) || opts.metrics.Enabled(config.MetricFunction)
 	needsASTRun := needsASTRuntime(opts.metrics)
-	primary, err := workspace.Create(workspace.Options{
-		SourceDir:  loaded.ModuleRoot,
-		TempParent: opts.workDirParent,
-		Keep:       opts.keepWorkDir,
-	})
-	if err != nil {
-		fmt.Fprintf(stderr, "gomcdc: temporary workspace creation failed: %v\n", err)
-		return ExitMeasurementFailed
-	}
-	type namedWorkspace struct {
-		measurement string
-		workspace   *workspace.Workspace
-	}
-	workspaces := make([]namedWorkspace, 0, 2)
-	var standardWork, astWork *workspace.Workspace
-	if needsASTRun {
-		astWork = primary
-		workspaces = append(workspaces, namedWorkspace{measurement: "ast", workspace: astWork})
-	} else {
-		standardWork = primary
-		workspaces = append(workspaces, namedWorkspace{measurement: "standard-cover", workspace: standardWork})
-	}
-	defer func() {
-		for _, item := range workspaces {
-			if cleanupErr := item.workspace.Cleanup(); cleanupErr != nil {
-				fmt.Fprintf(stderr, "gomcdc: %s workspace cleanup failed: %v\n", item.measurement, cleanupErr)
-				exitCode = ExitMeasurementFailed
-			}
-			if item.workspace.IsKept() {
-				fmt.Fprintf(stderr, "gomcdc: kept %s workspace: %s\n", item.measurement, item.workspace.RootDir)
-			}
-		}
-	}()
-	if needsC0 && needsASTRun {
-		standardWork, err = workspace.Create(workspace.Options{
-			SourceDir:  loaded.ModuleRoot,
-			TempParent: opts.workDirParent,
-			Keep:       opts.keepWorkDir,
-		})
-		if err != nil {
-			fmt.Fprintf(stderr, "gomcdc: standard-cover workspace creation failed: %v\n", err)
-			return ExitMeasurementFailed
-		}
-		workspaces = append(workspaces, namedWorkspace{measurement: "standard-cover", workspace: standardWork})
-	}
-
 	var decisions []cover.DecisionMetadata
 	var clauses []cover.ClauseMetadata
 	var noMatches []cover.NoMatchMetadata
@@ -238,130 +191,38 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	}
 
 	jsonMode := goTestJSONEnabled(opts.goTestArgs)
-	coverProfile := ""
-	if standardWork != nil {
-		coverProfile = filepath.Join(standardWork.RootDir, "standard-cover.out")
-	}
-
-	var standardResult *gotest.Result
-	if needsC0 {
-		fmt.Fprintln(stderr, "gomcdc: measurement standard-cover (original source)")
-		result := runGoTest(ctx, opts.timeout, gotest.Options{
-			Dir:           filepath.Join(standardWork.ModuleDir, loaded.RelativeWorkDir),
-			Patterns:      loaded.PackageImportSet,
-			Args:          opts.goTestArgs,
-			CoverProfile:  coverProfile,
-			CoverPackages: loaded.CoverPackageImportSet,
-			Environment:   map[string]string{"GOWORK": "off"},
-			JSON:          jsonMode,
-			Output:        stderr,
-		})
-		standardResult = &result
-	}
-
-	if needsASTRun && (len(decisions) > 0 || len(clauses) > 0) {
-		injected, injectErr := runtimecov.Inject(astWork.ModuleDir, loaded.ModulePath)
-		if injectErr != nil {
-			fmt.Fprintf(stderr, "gomcdc: runtime instrumentation failed: %v\n", injectErr)
-			return ExitMeasurementFailed
-		}
-		if _, instrumentErr := instrumentPackages(astWork.ModuleDir, sources, injected.ImportPath); instrumentErr != nil {
-			fmt.Fprintf(stderr, "gomcdc: source instrumentation failed: %v\n", instrumentErr)
-			return ExitMeasurementFailed
-		}
-	}
-
-	var astResult *gotest.Result
-	runID := ""
-	if needsASTRun {
-		runID, err = newRunID()
-		if err != nil {
-			fmt.Fprintf(stderr, "gomcdc: create coverage run ID: %v\n", err)
-			return ExitMeasurementFailed
-		}
-		fmt.Fprintln(stderr, "gomcdc: measurement ast")
-		result := runGoTest(ctx, opts.timeout, gotest.Options{
-			Dir:        filepath.Join(astWork.ModuleDir, loaded.RelativeWorkDir),
-			Patterns:   loaded.PackageImportSet,
-			Args:       opts.goTestArgs,
-			DataDirEnv: runtimecov.DataDirEnv,
-			DataDir:    astWork.EventDir,
-			Environment: map[string]string{
-				runtimecov.RunIDEnv: runID,
-				"GOWORK":            "off",
-			},
-			JSON:         jsonMode,
-			DisableCover: true,
-			Output:       stderr,
-		})
-		astResult = &result
-	}
-
-	collection := runtimecov.Collection{}
-	var collectionErr error
-	if needsASTRun {
-		collection, collectionErr = runtimecov.CollectDetailed(astWork.EventDir)
-	}
-	integrityFailure := false
-	astEvidenceIntegrityUnknown := false
-	if collectionErr != nil {
-		fmt.Fprintf(stderr, "gomcdc: runtime coverage collection failed: %v\n", collectionErr)
-		integrityFailure = true
-		astEvidenceIntegrityUnknown = true
-	}
-	validatedCollection, validationErr := validateObservations(decisions, clauses, collection, runID, noMatches)
-	collection = validatedCollection
-	if validationErr != nil {
-		fmt.Fprintf(stderr, "gomcdc: runtime coverage validation failed: %v\n", validationErr)
-		integrityFailure = true
-		astEvidenceIntegrityUnknown = true
-	}
-	for _, diagnostic := range collection.Diagnostics {
-		fmt.Fprintf(stderr, "gomcdc: runtime coverage diagnostic: %s\n", formatRuntimeDiagnostic(diagnostic))
-	}
-	if runtimeDiagnosticsInvalidate(collection.Diagnostics, astResult) {
-		integrityFailure = true
-		astEvidenceIntegrityUnknown = true
-	}
-
-	var c0Report *c0.Report
-	c0EvidenceIntegrityUnknown := false
-	if needsC0 {
-		analyzed, c0Err := collectC0(coverProfile, loaded, sources, nil)
-		if c0Err != nil {
-			c0EvidenceIntegrityUnknown = true
-			standardPassed := standardResult != nil && standardResult.Status == cover.RunPassed
-			if standardPassed {
-				fmt.Fprintf(stderr, "gomcdc: C0 coverage collection failed: %v\n", c0Err)
-				integrityFailure = true
+	measurement, workspaces, measurementErr := measure(measurementRequest{
+		context: ctx, timeout: opts.timeout, goTestArgs: opts.goTestArgs, json: jsonMode,
+		workDirParent: opts.workDirParent, keepWorkDir: opts.keepWorkDir,
+		loaded: loaded, sources: sources, decisions: decisions, clauses: clauses, noMatches: noMatches,
+		needsC0: needsC0, needsAST: needsASTRun,
+	}, stderr)
+	if workspaces != nil {
+		defer func() {
+			if cleanupErr := workspaces.cleanup(stderr); cleanupErr != nil {
+				exitCode = ExitMeasurementFailed
 			}
-			// Build the source inventory so the partial report records the affected
-			// statement and function entities as unknown.
-			partialInventory, inventoryErr := buildC0Report(c0.Profile{Mode: c0.ModeSet}, loaded, sources, nil)
-			if inventoryErr != nil {
-				fmt.Fprintf(stderr, "gomcdc: C0 inventory recovery failed after %v: %v\n", c0Err, inventoryErr)
-			} else {
-				c0Report = partialInventory
-			}
-		} else {
-			c0Report = analyzed
-		}
+		}()
+	}
+	if measurementErr != nil {
+		fmt.Fprintf(stderr, "gomcdc: %v\n", measurementErr)
+		return ExitMeasurementFailed
 	}
 
 	input := assembleReportInput(reportAssembly{
 		loaded: loaded, sources: sources, coverage: opts.metrics, decisions: decisions,
 		clauses: clauses, noMatches: noMatches,
-		collection: collection, c0: c0Report, standardResult: standardResult, astResult: astResult,
+		collection: measurement.collection, c0: measurement.c0, standardResult: measurement.standardResult, astResult: measurement.astResult,
 		standardCoverRequested: needsC0, astRequested: needsASTRun,
-		astEvidenceUnknown: astEvidenceIntegrityUnknown, c0EvidenceUnknown: c0EvidenceIntegrityUnknown,
-		instrumentationUnknown: analysisUnknown, integrityFailure: integrityFailure, analysisIncomplete: analysisIncomplete,
+		astEvidenceUnknown: measurement.astEvidenceIntegrityUnknown, c0EvidenceUnknown: measurement.c0EvidenceIntegrityUnknown,
+		instrumentationUnknown: analysisUnknown, integrityFailure: measurement.integrityFailure, analysisIncomplete: analysisIncomplete,
 	})
 	built := report.Build(input)
 	if err := writeReport(opts, input, built, workingDir, stdout); err != nil {
 		fmt.Fprintf(stderr, "gomcdc: report generation failed: %v\n", err)
 		return ExitMeasurementFailed
 	}
-	if integrityFailure {
+	if measurement.integrityFailure {
 		return classifyExit(false, true, false, false)
 	}
 	if opts.strict && built.Instrumentation.HasGaps() {
@@ -380,12 +241,12 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	if analysisIncomplete {
 		return classifyExit(false, true, false, false)
 	}
-	if testRunsFailed(standardResult, astResult) {
-		if standardResult != nil && standardResult.Err != nil {
-			fmt.Fprintf(stderr, "gomcdc: standard-cover measurement: %v\n", standardResult.Err)
+	if testRunsFailed(measurement.standardResult, measurement.astResult) {
+		if measurement.standardResult != nil && measurement.standardResult.Err != nil {
+			fmt.Fprintf(stderr, "gomcdc: standard-cover measurement: %v\n", measurement.standardResult.Err)
 		}
-		if astResult != nil && astResult.Err != nil {
-			fmt.Fprintf(stderr, "gomcdc: ast measurement: %v\n", astResult.Err)
+		if measurement.astResult != nil && measurement.astResult.Err != nil {
+			fmt.Fprintf(stderr, "gomcdc: ast measurement: %v\n", measurement.astResult.Err)
 		}
 		return classifyExit(false, false, true, false)
 	}

@@ -49,6 +49,13 @@
 **禁止:** `Phase1`、`Manager`、`Service` など責務を説明しない名前のパッケージを
 追加しない。既存の挙動を保ったまま、一段ずつ抽出する。
 
+**実施状況:** `internal/cli/measurement.go` の `measure` がworkspace作成、standard-cover
+実行、AST計装と実行、event/C0収集、観測検証を担当する。`runCoverage` は入力準備、
+実行順序、report assembly、終了コードとthreshold判定を担当し、workspace cleanupの
+タイミングと既存のエラー文言を維持する。`measurementRequest` と
+`measurementOutcome` はこのpackage内だけの値境界であり、汎用ManagerやServiceは追加
+していない。既存integration、通常/race、vetを通過している。
+
 **完了条件:** 既存fixtureのJSON/text/HTMLが同一意味を持ち、package failure、
 timeout、partial evidence、threshold failureの終了コードが変わらない。抽出後に
 `go test -race ./...` が通る。
