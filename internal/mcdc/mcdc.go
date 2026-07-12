@@ -169,7 +169,7 @@ func (MaskingStrategy) Analyze(metadata cover.DecisionMetadata, evaluations []co
 				}
 				for _, firstCompletion := range completions[first] {
 					for _, secondCompletion := range completions[second] {
-						witness, covered := maskingWitness(metadata.ExpressionTree, left, right, target, firstCompletion.values, secondCompletion.values)
+						witness, covered := findMaskingWitness(metadata.ExpressionTree, left, right, target, firstCompletion.values, secondCompletion.values)
 						if covered {
 							conditionResult.Status = cover.CoverageCovered
 							conditionResult.Witness = witness
@@ -382,7 +382,7 @@ func maskingCompletionsForTarget(
 	return completions
 }
 
-func maskingWitness(
+func findMaskingWitness(
 	expression *cover.BooleanExpression,
 	first cover.DecisionEvaluation,
 	second cover.DecisionEvaluation,
