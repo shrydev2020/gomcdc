@@ -667,6 +667,7 @@ type writerState struct {
 	evaluations map[string]record
 	clauses map[string]record
 	seenClauses map[string]struct{}
+	beginIDs map[uint64]struct{}
 	terminalIDs map[uint64]struct{}
 }
 
@@ -832,6 +833,7 @@ func writeTerminal(item *evaluation, event record) {
 	if current := active[event.EvaluationID]; current == item { delete(active, event.EvaluationID) }
 	activeMu.Unlock()
 	delete(state.terminalIDs, event.EvaluationID)
+	delete(state.beginIDs, event.EvaluationID)
 	state.mu.Unlock()
 }
 
@@ -864,6 +866,7 @@ func writerFor(packagePath string) *writerState {
 		evaluations: make(map[string]record),
 		clauses: make(map[string]record),
 		seenClauses: make(map[string]struct{}),
+		beginIDs: make(map[uint64]struct{}),
 		terminalIDs: make(map[uint64]struct{}),
 	}
 	writers[packagePath] = state
@@ -879,6 +882,9 @@ func writeEvent(packagePath string, event record) {
 }
 
 func writeEventLocked(state *writerState, event record) {
+	if event.Type == "begin" {
+		if _, recorded := state.beginIDs[event.EvaluationID]; recorded { return }
+	}
 	if state.file == nil {
 		reopened, err := os.OpenFile(state.path, os.O_WRONLY|os.O_APPEND, 0)
 		if err != nil { diagnostic(state.packagePath, "reopen event file: " + err.Error()); return }
@@ -953,9 +959,11 @@ func compactLocked(state *writerState) {
 
 	activeMu.RLock()
 	activeEvents := make([]record, 0, len(active))
+	activeIDs := make([]uint64, 0, len(active))
 	for id, item := range active {
 		if item.packagePath != state.packagePath { continue }
 		if _, terminalRecorded := state.terminalIDs[id]; terminalRecorded { continue }
+		activeIDs = append(activeIDs, id)
 		activeEvents = append(activeEvents, record{
 			Type: "begin", RunID: runID, PackagePath: state.packagePath, ProcessID: processID,
 			EvaluationID: id, DecisionID: item.decisionID, ConditionCount: len(item.conditions), TestID: item.testID,
@@ -995,6 +1003,7 @@ func compactLocked(state *writerState) {
 		return
 	}
 	keepTemporary = false
+	for _, id := range activeIDs { state.beginIDs[id] = struct{}{} }
 	reopened, err := os.OpenFile(state.path, os.O_WRONLY|os.O_APPEND, 0)
 	if err != nil {
 		_ = state.file.Close()
