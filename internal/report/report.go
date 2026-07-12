@@ -289,118 +289,17 @@ const (
 
 // Build creates the deterministic integrated hierarchy.
 func Build(input Input) Report {
-	instrumentationBackend := input.Backend
-	if instrumentationBackend == nil {
-		instrumentationBackend = backend.OrchestratedBackend{}
-	}
-	capabilities := instrumentationBackend.Capabilities().Clone()
-	producerCapabilities := cloneProducerCapabilities(input.BackendProducers)
-	if len(producerCapabilities) == 0 {
-		if input.Backend == nil {
-			producerCapabilities = cloneProducerCapabilities(backend.V1Producers())
-		} else {
-			producerCapabilities = []backend.ProducerCapabilities{{Backend: "configured", Capabilities: capabilities.Clone()}}
-		}
-	}
-	report := Report{
-		Version:         SchemaVersion,
-		Module:          input.ModulePath,
-		Run:             Run{Status: input.RunStatus, FailureKind: input.FailureKind, Complete: input.Complete},
-		MeasurementMode: input.MeasurementMode,
-		Measurements:    cloneMeasurementRuns(input.Measurements),
-		Capabilities:    capabilities,
-		Backends:        producerCapabilities,
-		Instrumentation: buildInstrumentationReport(input, capabilities),
-		Summary:         newSummary(input.Coverage),
-		Packages:        make([]PackageReport, 0),
-	}
-
-	decisions := append([]cover.DecisionMetadata(nil), input.Decisions...)
-	sort.Slice(decisions, func(i, j int) bool { return lessDecision(decisions[i], decisions[j]) })
-	clauses := append([]cover.ClauseMetadata(nil), input.Clauses...)
-	sort.Slice(clauses, func(i, j int) bool { return lessClause(clauses[i], clauses[j]) })
-
-	decisionByID := make(map[cover.DecisionID]cover.DecisionMetadata, len(decisions))
-	for _, decision := range decisions {
-		decisionByID[decision.ID] = decision
-	}
-	clauseByID := make(map[cover.ClauseID]cover.ClauseMetadata, len(clauses))
-	for _, clause := range clauses {
-		clauseByID[clause.ID] = clause
-	}
-
-	evaluationsByDecision := make(map[cover.DecisionID][]cover.DecisionEvaluation)
-	notEvaluatedByDecision := make(map[cover.DecisionID]int)
-	packageEvidence := make(map[string]bool)
-	astPackageEvidence := make(map[string]bool)
-	for _, evaluation := range input.Evaluations {
-		evaluationsByDecision[evaluation.DecisionID] = append(evaluationsByDecision[evaluation.DecisionID], evaluation)
-		packagePath := evaluation.PackagePath
-		if packagePath == "" {
-			packagePath = decisionByID[evaluation.DecisionID].Package
-		}
-		if packagePath != "" && !input.ASTEvidenceIntegrityUnknown {
-			packageEvidence[packagePath] = true
-			astPackageEvidence[packagePath] = true
-		}
-	}
-	for id := range evaluationsByDecision {
-		sort.Slice(evaluationsByDecision[id], func(i, j int) bool {
-			return lessEvaluation(evaluationsByDecision[id][i], evaluationsByDecision[id][j])
-		})
-	}
-	for _, observation := range input.NotEvaluatedDecisions {
-		notEvaluatedByDecision[observation.DecisionID]++
-		if metadata, found := decisionByID[observation.DecisionID]; found && !input.ASTEvidenceIntegrityUnknown {
-			packageEvidence[metadata.Package] = true
-			astPackageEvidence[metadata.Package] = true
-		}
-	}
-
-	observationCounts := make(map[cover.ClauseID]map[cover.ClauseEventKind]int)
-	noMatchObservations := make(map[cover.SwitchID]int)
-	for _, observation := range input.ClauseObservations {
-		if observation.Event == cover.ClauseNoMatchSelection {
-			noMatchObservations[observation.SwitchID]++
-			continue
-		}
-		if observationCounts[observation.ClauseID] == nil {
-			observationCounts[observation.ClauseID] = make(map[cover.ClauseEventKind]int)
-		}
-		observationCounts[observation.ClauseID][observation.Event]++
-		if clause, found := clauseByID[observation.ClauseID]; found && !input.ASTEvidenceIntegrityUnknown {
-			packageEvidence[clause.Package] = true
-			astPackageEvidence[clause.Package] = true
-		}
-	}
-
-	builders := make(map[string]*packageBuilder)
-	for packagePath := range input.PackageStatuses {
-		ensurePackageBuilder(builders, packagePath, input)
-	}
-	for _, source := range input.SourceFiles {
-		builder := ensurePackageBuilder(builders, source.PackagePath, input)
-		if _, exists := builder.files[source.Path]; !exists {
-			builder.files[source.Path] = &fileBuilder{
-				path: source.Path, functions: make(map[string]*functionBuilder),
-			}
-		}
-	}
-	if input.C0 != nil {
-		for _, packageReport := range input.C0.Packages {
-			if packageReport.Evidence && !input.C0EvidenceIntegrityUnknown {
-				packageEvidence[packageReport.Path] = true
-			}
-			builder := ensurePackageBuilder(builders, packageReport.Path, input)
-			for _, fileReport := range packageReport.Files {
-				for _, functionReport := range fileReport.Functions {
-					location := c0SourceLocation(fileReport.Path, functionReport.Position)
-					function := ensureFunctionBuilder(builder, fileReport.Path, functionReport.Name, &location, input.Coverage)
-					addC0Function(function, fileReport.Path, functionReport, input.C0EvidenceIntegrityUnknown, input.Coverage)
-				}
-			}
-		}
-	}
+	context := newBuildContext(input)
+	report := context.report
+	decisions := context.decisions
+	clauses := context.clauses
+	evaluationsByDecision := context.evaluationsByDecision
+	notEvaluatedByDecision := context.notEvaluatedByDecision
+	observationCounts := context.observationCounts
+	noMatchObservations := context.noMatchObservations
+	packageEvidence := context.packageEvidence
+	astPackageEvidence := context.astPackageEvidence
+	builders := context.builders
 
 	for _, decision := range decisions {
 		builder := ensurePackageBuilder(builders, decision.Package, input)
