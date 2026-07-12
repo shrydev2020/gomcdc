@@ -75,7 +75,7 @@ func htmlSourceSegments(view *SourceFileView, metric string) []htmlSourceSegment
 		}
 		segments = append(segments, htmlSourceSegment{
 			Text: view.Source[interval.start:interval.end], Class: class,
-			Tooltip: strings.Join(tooltipParts, " | "), Metrics: strings.Join(metrics, " "),
+			Tooltip: strings.Join(tooltipParts, "\n"), Metrics: strings.Join(metrics, " "),
 		})
 	}
 	return segments

@@ -68,6 +68,28 @@ func TestBuildLeavesHTMLSourceProjectionToWriteHTML(t *testing.T) {
 	}
 }
 
+func TestWriteHTMLReportsSourceMappingDiagnostics(t *testing.T) {
+	t.Parallel()
+	location := cover.SourceLocation{File: "p.go", Start: cover.Position{Line: 9, Column: 1}, End: cover.Position{Line: 9, Column: 2}}
+	input := report.Input{
+		ModulePath: "example.com/m",
+		SourceFiles: []report.SourceFileInput{{
+			PackagePath: "example.com/m/p", Path: "p.go", Source: []byte("package p\n"),
+		}},
+		Decisions:       []cover.DecisionMetadata{{ID: 1, Package: "example.com/m/p", Function: "Check", Location: location, Expression: "a"}},
+		PackageStatuses: map[string]string{"example.com/m/p": "passed"},
+	}
+	var html bytes.Buffer
+	if err := report.WriteHTML(&html, input); err != nil {
+		t.Fatalf("WriteHTML: %v", err)
+	}
+	for _, required := range []string{"Source mapping diagnostics", "decision 0x0000000000000001", "cannot be mapped"} {
+		if !strings.Contains(html.String(), required) {
+			t.Errorf("HTML missing mapping diagnostic %q", required)
+		}
+	}
+}
+
 func TestANDShortCircuitDistinguishesUniqueAndMasking(t *testing.T) {
 	t.Parallel()
 

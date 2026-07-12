@@ -1,6 +1,7 @@
 package report
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -28,6 +29,9 @@ func TestSourceIntervalsSplitOverlappingRanges(t *testing.T) {
 	if len(intervals[1].anns) != 2 {
 		t.Fatalf("overlap annotations = %d, want 2", len(intervals[1].anns))
 	}
+	if again := sourceIntervals(view); !reflect.DeepEqual(intervals, again) {
+		t.Fatal("source interval ordering is not deterministic")
+	}
 }
 
 func TestSourceRangeOffsetsUseByteColumns(t *testing.T) {
@@ -36,9 +40,9 @@ func TestSourceRangeOffsetsUseByteColumns(t *testing.T) {
 		Start: cover.Position{Line: 1, Column: 1},
 		End:   cover.Position{Line: 1, Column: 5},
 	}
-	start, end := sourceRangeOffsets(location, source)
-	if start != 0 || end != 4 {
-		t.Fatalf("range = %d:%d, want 0:4", start, end)
+	mapping := sourceRangeOffsets(location, source)
+	if mapping.start != 0 || mapping.end != 4 || mapping.status != "mapped" {
+		t.Fatalf("mapping = %#v, want 0:4 mapped", mapping)
 	}
 }
 
@@ -80,8 +84,8 @@ func TestSourceAnnotationsUseConditionOccurrenceIDs(t *testing.T) {
 	file := FileReport{Functions: []FunctionReport{{Decisions: []DecisionReport{{
 		DecisionID: "decision-1",
 		Conditions: []ConditionReport{
-			{Index: 0, Location: location},
-			{Index: 1, Location: location},
+			{Index: 0, Expression: "a", Location: location, True: true, NotEvaluated: 2, MCDCUnique: MCDCConditionReport{Status: "not covered"}, MCDCMasking: MCDCConditionReport{Status: "covered"}},
+			{Index: 1, Expression: "b", Location: location},
 		},
 	}}}}}
 	annotations := sourceAnnotations(file, []byte("ab"))
@@ -106,5 +110,44 @@ func TestSourceAnnotationsUseConditionOccurrenceIDs(t *testing.T) {
 		if !ids[want] {
 			t.Errorf("missing annotation ID %q", want)
 		}
+	}
+	for _, annotation := range annotations {
+		if annotation.Metric == "condition" && annotation.EntityID == "decision-1:condition:0" {
+			for _, required := range []string{"Condition #0: a", "true: covered", "false: not covered", "not evaluated: 2", "Unique-Cause MC/DC: not covered", "Masking MC/DC: covered"} {
+				if !strings.Contains(annotation.Tooltip, required) {
+					t.Errorf("condition tooltip missing %q: %q", required, annotation.Tooltip)
+				}
+			}
+		}
+	}
+}
+
+func TestSourceMappingFailureProducesDiagnostic(t *testing.T) {
+	location := cover.SourceLocation{File: "p.go", Start: cover.Position{Line: 9, Column: 1}, End: cover.Position{Line: 9, Column: 2}}
+	file := FileReport{Functions: []FunctionReport{{Decisions: []DecisionReport{{
+		DecisionID: "decision-1", Location: location,
+	}}}}}
+	annotations := sourceAnnotations(file, []byte("a\n"))
+	diagnostics := sourceMappingDiagnostics(annotations)
+	if len(diagnostics) != 1 || diagnostics[0].Metric != "decision" || diagnostics[0].EntityID != "decision-1" {
+		t.Fatalf("diagnostics = %#v", diagnostics)
+	}
+	if diagnostics[0].Reason == "" {
+		t.Fatal("mapping diagnostic has no reason")
+	}
+	if got := normalizeAnnotations(annotations, 2); len(got) != 0 {
+		t.Fatalf("unmapped annotations survived normalization: %#v", got)
+	}
+}
+
+func BenchmarkSourceIntervalsSweepLine(b *testing.B) {
+	view := SourceFileView{Source: strings.Repeat("x", 100_000), Annotations: make([]SourceAnnotation, 2_000)}
+	for index := range view.Annotations {
+		start := index * 40
+		view.Annotations[index] = SourceAnnotation{StartOffset: start, EndOffset: start + 2_000, Metric: "condition", State: "both"}
+	}
+	b.ResetTimer()
+	for range b.N {
+		_ = sourceIntervals(view)
 	}
 }
