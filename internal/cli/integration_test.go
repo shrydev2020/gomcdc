@@ -215,8 +215,8 @@ func TestBuildFailureStillProducesPartialMultiPackageReport(t *testing.T) {
 	configureIntegrationGoCache(t)
 	root := fixturePath(t, "partial")
 	built, stderr, code := runFixture(t, root, "--format=json", "./...")
-	if code != ExitTestsFailed {
-		t.Fatalf("exit = %d, want test failure %d\nstderr:\n%s", code, ExitTestsFailed, stderr)
+	if code != ExitMeasurementFailed {
+		t.Fatalf("exit = %d, want measurement failure %d\nstderr:\n%s", code, ExitMeasurementFailed, stderr)
 	}
 	if built.Run.Status != cover.RunFailed || built.Run.FailureKind != cover.RunFailureBuild || built.Run.Complete {
 		t.Fatalf("partial run = %#v", built.Run)

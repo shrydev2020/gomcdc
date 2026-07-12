@@ -29,20 +29,35 @@ import (
 )
 
 const (
-	ExitSuccess               = 0
-	ExitTestsFailed           = 1
-	ExitCoverageThreshold     = 2
-	ExitInstrumentationFailed = 3
-	ExitInvalidUsage          = 4
-	ExitInternalError         = 5
+	ExitSuccess           = 0
+	ExitTestsFailed       = 1
+	ExitMeasurementFailed = 2
+	ExitCoverageThreshold = 3
+	ExitInvalidUsage      = 4
 )
+
+// classifyExit applies D28 precedence: usage, measurement, test, threshold.
+func classifyExit(invalidUsage, measurementFailure, testsFailed, thresholdFailure bool) int {
+	switch {
+	case invalidUsage:
+		return ExitInvalidUsage
+	case measurementFailure:
+		return ExitMeasurementFailed
+	case testsFailed:
+		return ExitTestsFailed
+	case thresholdFailure:
+		return ExitCoverageThreshold
+	default:
+		return ExitSuccess
+	}
+}
 
 // Run executes the CLI with the process working directory.
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	workingDir, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(stderr, "gomcdc: determine working directory: %v\n", err)
-		return ExitInternalError
+		return ExitMeasurementFailed
 	}
 	return runAt(ctx, workingDir, args, stdout, stderr)
 }
@@ -120,7 +135,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "gomcdc: package load failed: %v\n", err)
-		return ExitInstrumentationFailed
+		return ExitMeasurementFailed
 	}
 
 	var sources []sourceInstrumentation
@@ -130,7 +145,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		relative, relErr := filepath.Rel(loaded.ModuleRoot, file.Path)
 		if relErr != nil {
 			fmt.Fprintf(stderr, "gomcdc: resolve source path %q: %v\n", file.Path, relErr)
-			return ExitInstrumentationFailed
+			return ExitMeasurementFailed
 		}
 		if excludes.Match(relative) {
 			continue
@@ -158,7 +173,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	}
 	if err := analyzer.DetectCollisions(analyses); err != nil {
 		fmt.Fprintf(stderr, "gomcdc: source analysis failed: %v\n", err)
-		return ExitInstrumentationFailed
+		return ExitMeasurementFailed
 	}
 
 	needsC0 := opts.metrics.Enabled(config.MetricStatement) || opts.metrics.Enabled(config.MetricFunction)
@@ -170,7 +185,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "gomcdc: temporary workspace creation failed: %v\n", err)
-		return ExitInstrumentationFailed
+		return ExitMeasurementFailed
 	}
 	type namedWorkspace struct {
 		measurement string
@@ -189,7 +204,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		for _, item := range workspaces {
 			if cleanupErr := item.workspace.Cleanup(); cleanupErr != nil {
 				fmt.Fprintf(stderr, "gomcdc: %s workspace cleanup failed: %v\n", item.measurement, cleanupErr)
-				exitCode = ExitInternalError
+				exitCode = ExitMeasurementFailed
 			}
 			if item.workspace.IsKept() {
 				fmt.Fprintf(stderr, "gomcdc: kept %s workspace: %s\n", item.measurement, item.workspace.RootDir)
@@ -204,7 +219,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		})
 		if err != nil {
 			fmt.Fprintf(stderr, "gomcdc: standard-cover workspace creation failed: %v\n", err)
-			return ExitInstrumentationFailed
+			return ExitMeasurementFailed
 		}
 		workspaces = append(workspaces, namedWorkspace{measurement: "standard-cover", workspace: standardWork})
 	}
@@ -248,11 +263,11 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		injected, injectErr := runtimecov.Inject(astWork.ModuleDir, loaded.ModulePath)
 		if injectErr != nil {
 			fmt.Fprintf(stderr, "gomcdc: runtime instrumentation failed: %v\n", injectErr)
-			return ExitInstrumentationFailed
+			return ExitMeasurementFailed
 		}
 		if _, instrumentErr := instrumentPackages(astWork.ModuleDir, sources, injected.ImportPath); instrumentErr != nil {
 			fmt.Fprintf(stderr, "gomcdc: source instrumentation failed: %v\n", instrumentErr)
-			return ExitInstrumentationFailed
+			return ExitMeasurementFailed
 		}
 	}
 
@@ -262,7 +277,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		runID, err = newRunID()
 		if err != nil {
 			fmt.Fprintf(stderr, "gomcdc: create coverage run ID: %v\n", err)
-			return ExitInternalError
+			return ExitMeasurementFailed
 		}
 		fmt.Fprintln(stderr, "gomcdc: measurement ast")
 		result := runGoTest(ctx, opts.timeout, gotest.Options{
@@ -344,19 +359,10 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	built := report.Build(input)
 	if err := writeReport(opts, input, workingDir, stdout); err != nil {
 		fmt.Fprintf(stderr, "gomcdc: report generation failed: %v\n", err)
-		return ExitInternalError
+		return ExitMeasurementFailed
 	}
 	if integrityFailure {
-		return ExitInternalError
-	}
-	if testRunsFailed(standardResult, astResult) {
-		if standardResult != nil && standardResult.Err != nil {
-			fmt.Fprintf(stderr, "gomcdc: standard-cover measurement: %v\n", standardResult.Err)
-		}
-		if astResult != nil && astResult.Err != nil {
-			fmt.Fprintf(stderr, "gomcdc: ast measurement: %v\n", astResult.Err)
-		}
-		return ExitTestsFailed
+		return classifyExit(false, true, false, false)
 	}
 	if opts.strict && built.Instrumentation.HasGaps() {
 		coverage := built.Instrumentation.Total
@@ -369,18 +375,27 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 			coverage.Unsupported,
 			coverage.Unknown,
 		)
-		return ExitInstrumentationFailed
+		return classifyExit(false, true, false, false)
 	}
 	if analysisIncomplete {
-		return ExitInstrumentationFailed
+		return classifyExit(false, true, false, false)
+	}
+	if testRunsFailed(standardResult, astResult) {
+		if standardResult != nil && standardResult.Err != nil {
+			fmt.Fprintf(stderr, "gomcdc: standard-cover measurement: %v\n", standardResult.Err)
+		}
+		if astResult != nil && astResult.Err != nil {
+			fmt.Fprintf(stderr, "gomcdc: ast measurement: %v\n", astResult.Err)
+		}
+		return classifyExit(false, false, true, false)
 	}
 	if failures := thresholdFailures(opts, built.Summary); len(failures) > 0 {
 		for _, failure := range failures {
 			fmt.Fprintln(stderr, failure)
 		}
-		return ExitCoverageThreshold
+		return classifyExit(false, false, false, true)
 	}
-	return ExitSuccess
+	return classifyExit(false, false, false, false)
 }
 
 func sourceFileInputs(sources []sourceInstrumentation) []report.SourceFileInput {
