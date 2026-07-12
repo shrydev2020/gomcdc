@@ -18,7 +18,7 @@ import (
 )
 
 func TestIntegratedFixtureWritesPackageCenteredHTML(t *testing.T) {
-	configureIntegrationGoCache(t)
+	configureIntegrationEnvironment(t)
 	t.Setenv("GOMCDC_ISOLATION_FIXTURE", "1")
 	root := fixturePath(t, "integration")
 	output := filepath.Join(t.TempDir(), "coverage-html")
@@ -47,7 +47,7 @@ func TestIntegratedFixtureWritesPackageCenteredHTML(t *testing.T) {
 }
 
 func TestIntegratedFixtureReportsAllMetricsAcrossPackages(t *testing.T) {
-	configureIntegrationGoCache(t)
+	configureIntegrationEnvironment(t)
 	t.Setenv("GOMCDC_ISOLATION_FIXTURE", "1")
 	root := fixturePath(t, "integration")
 
@@ -182,7 +182,7 @@ func TestIntegratedFixtureReportsAllMetricsAcrossPackages(t *testing.T) {
 }
 
 func TestThresholdFailureHasDistinctExitCode(t *testing.T) {
-	configureIntegrationGoCache(t)
+	configureIntegrationEnvironment(t)
 	root := fixturePath(t, "integration")
 	built, stderr, code := runFixture(t, root, "--coverage=decision", "--include-tests", "--fail-under-decision=100", "--format=json", "./...")
 	if code != ExitCoverageThreshold {
@@ -212,7 +212,7 @@ func hasTestSourceDecision(built report.Report) bool {
 }
 
 func TestBuildFailureStillProducesPartialMultiPackageReport(t *testing.T) {
-	configureIntegrationGoCache(t)
+	configureIntegrationEnvironment(t)
 	root := fixturePath(t, "partial")
 	built, stderr, code := runFixture(t, root, "--format=json", "./...")
 	if code != ExitMeasurementFailed {
@@ -377,9 +377,8 @@ func runFixture(t *testing.T, root string, arguments ...string) (report.Report, 
 	return built, stderr.String(), code
 }
 
-func configureIntegrationGoCache(t *testing.T) {
+func configureIntegrationEnvironment(t *testing.T) {
 	t.Helper()
-	t.Setenv("GOCACHE", t.TempDir())
 	t.Setenv("GOWORK", "off")
 }
 
