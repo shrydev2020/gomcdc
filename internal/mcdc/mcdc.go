@@ -107,22 +107,9 @@ func (UniqueCauseStrategy) Analyze(metadata cover.DecisionMetadata, evaluations 
 
 	for conditionPosition, target := range indexes {
 		conditionResult := &result.Conditions[conditionPosition]
-		for first := 0; first < len(prepared.evaluations); first++ {
-			for second := first + 1; second < len(prepared.evaluations); second++ {
-				left := prepared.evaluations[first]
-				right := prepared.evaluations[second]
-				if uniqueCausePair(left, right, target) {
-					conditionResult.Status = cover.CoverageCovered
-					conditionResult.Witness = &cover.MCDCWitness{
-						First:  cloneEvaluation(left),
-						Second: cloneEvaluation(right),
-					}
-					break
-				}
-			}
-			if conditionResult.Witness != nil {
-				break
-			}
+		if witness, covered := uniqueCauseWitness(prepared.evaluations, target); covered {
+			conditionResult.Status = cover.CoverageCovered
+			conditionResult.Witness = witness
 		}
 		if conditionResult.Witness == nil {
 			if expressionStructureValid && !uniqueCauseStructurallyFeasible(metadata.ExpressionTree, target, count) {
@@ -227,19 +214,113 @@ func repeatedAtomicExpression(conditions []cover.ConditionMetadata) string {
 	return ""
 }
 
-func uniqueCausePair(first, second cover.DecisionEvaluation, target uint16) bool {
-	if !candidatePair(first, second, target) {
+// uniqueCauseWitness indexes evaluations by every non-target condition state.
+// The index avoids rescanning all evaluation pairs for each target while still
+// selecting the same lexicographically-first pair as the former nested loop.
+func uniqueCauseWitness(evaluations []cover.DecisionEvaluation, target uint16) (*cover.MCDCWitness, bool) {
+	// Most real decisions have only a few distinct vectors and commonly find a
+	// witness immediately. Keep that hot path allocation-free; the index below
+	// handles large or witness-free sets without an O(E²) scan.
+	const probeLimit = 1024
+	fullScanLimit := probeLimit
+	if len(evaluations) <= 32 {
+		fullScanLimit = len(evaluations) * len(evaluations)
+	}
+	probes := 0
+	for first := 0; first < len(evaluations); first++ {
+		for second := first + 1; second < len(evaluations); second++ {
+			if uniqueCausePairMatches(evaluations[first], evaluations[second], target) {
+				return &cover.MCDCWitness{
+					First:  cloneEvaluation(evaluations[first]),
+					Second: cloneEvaluation(evaluations[second]),
+				}, true
+			}
+			probes++
+			if probes == fullScanLimit {
+				first = len(evaluations)
+				break
+			}
+		}
+	}
+	if len(evaluations) <= 32 {
+		return nil, false
+	}
+
+	type group struct {
+		indexes [2][2][]int // [decision result][target value]
+	}
+	groups := make(map[string]*group, len(evaluations))
+	for index, evaluation := range evaluations {
+		if int(target) >= len(evaluation.Conditions) || !evaluation.Conditions[target].IsEvaluated() {
+			continue
+		}
+		key := nonTargetVectorKey(evaluation.Conditions, target)
+		entry := groups[key]
+		if entry == nil {
+			entry = &group{}
+			groups[key] = entry
+		}
+		resultIndex := 0
+		if evaluation.Result {
+			resultIndex = 1
+		}
+		targetIndex := 0
+		if evaluation.Conditions[target] == cover.ConditionTrue {
+			targetIndex = 1
+		}
+		entry.indexes[resultIndex][targetIndex] = append(entry.indexes[resultIndex][targetIndex], index)
+	}
+
+	bestFirst, bestSecond := len(evaluations), len(evaluations)
+	for _, entry := range groups {
+		for firstResult := 0; firstResult < 2; firstResult++ {
+			secondResult := 1 - firstResult
+			for firstTarget := 0; firstTarget < 2; firstTarget++ {
+				secondTarget := 1 - firstTarget
+				secondIndexes := entry.indexes[secondResult][secondTarget]
+				for _, first := range entry.indexes[firstResult][firstTarget] {
+					position := sort.SearchInts(secondIndexes, first+1)
+					if position == len(secondIndexes) {
+						continue
+					}
+					second := secondIndexes[position]
+					if first < bestFirst || (first == bestFirst && second < bestSecond) {
+						bestFirst, bestSecond = first, second
+					}
+				}
+			}
+		}
+	}
+	if bestFirst == len(evaluations) {
+		return nil, false
+	}
+	return &cover.MCDCWitness{
+		First:  cloneEvaluation(evaluations[bestFirst]),
+		Second: cloneEvaluation(evaluations[bestSecond]),
+	}, true
+}
+
+func uniqueCausePairMatches(first, second cover.DecisionEvaluation, target uint16) bool {
+	if first.Result == second.Result || !first.Conditions[target].IsEvaluated() || !second.Conditions[target].IsEvaluated() || first.Conditions[target] == second.Conditions[target] {
 		return false
 	}
 	for index := range first.Conditions {
-		if uint16(index) == target {
-			continue
-		}
-		if first.Conditions[index] != second.Conditions[index] {
+		if uint16(index) != target && first.Conditions[index] != second.Conditions[index] {
 			return false
 		}
 	}
 	return true
+}
+
+func nonTargetVectorKey(states []cover.ConditionState, target uint16) string {
+	key := make([]byte, 0, len(states)-1)
+	for index, state := range states {
+		if uint16(index) == target {
+			continue
+		}
+		key = append(key, byte(state))
+	}
+	return string(key)
 }
 
 func candidatePair(first, second cover.DecisionEvaluation, target uint16) bool {
