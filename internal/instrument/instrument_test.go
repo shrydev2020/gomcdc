@@ -383,7 +383,7 @@ func (Hooks) SelectClause(uint64, ...uint64) {}
 
 	command := exec.Command("go", "test", "./...")
 	command.Dir = workspace
-	command.Env = append(os.Environ(), "GOWORK=off", "GOCACHE="+filepath.Join(t.TempDir(), "go-build"))
+	command.Env = append(os.Environ(), "GOWORK=off")
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("instrumented fixture failed: %v\n%s", err, output)
@@ -585,7 +585,6 @@ func TestCoverageFixture(t *testing.T) {
 	command.Dir = workspace
 	command.Env = append(os.Environ(),
 		"GOWORK=off",
-		"GOCACHE="+filepath.Join(t.TempDir(), "go-build"),
 		runtimecov.DataDirEnv+"="+dataDir,
 		runtimecov.RunIDEnv+"=fixture-run",
 	)
