@@ -290,14 +290,21 @@ const (
 // Build creates the deterministic integrated hierarchy.
 func Build(input Input) Report {
 	context := newBuildContext(input)
-	report := context.report
+	buildHierarchy(context, input)
+	finalizeReport(context, input)
+	return context.report
+}
+
+// buildHierarchy turns indexed evidence and static metadata into the
+// package/file/function/decision/clause tree. It does not finalize package
+// ordering or module summaries.
+func buildHierarchy(context *buildContext, input Input) {
 	decisions := context.decisions
 	clauses := context.clauses
 	evaluationsByDecision := context.evaluationsByDecision
 	notEvaluatedByDecision := context.notEvaluatedByDecision
 	observationCounts := context.observationCounts
 	noMatchObservations := context.noMatchObservations
-	packageEvidence := context.packageEvidence
 	astPackageEvidence := context.astPackageEvidence
 	builders := context.builders
 
@@ -332,7 +339,14 @@ func Build(input Input) Report {
 		function.report.NoMatches = append(function.report.NoMatches, noMatchReport)
 		addNoMatchMetric(&function.report.Summary, noMatch.Kind, noMatchReport.SelectionCoverage)
 	}
+}
 
+// finalizeReport orders the hierarchy and aggregates child summaries into
+// package and module totals. Source views are a separate HTML projection.
+func finalizeReport(context *buildContext, input Input) {
+	report := &context.report
+	packageEvidence := context.packageEvidence
+	builders := context.builders
 	packagePaths := make([]string, 0, len(builders))
 	for packagePath := range builders {
 		packagePaths = append(packagePaths, packagePath)
@@ -360,7 +374,6 @@ func Build(input Input) Report {
 		report.Packages = append(report.Packages, packageReport)
 		addSummary(&report.Summary, packageReport.Summary)
 	}
-	return report
 }
 
 func buildInstrumentationReport(input Input, capabilities backend.CapabilitySet) backend.InstrumentationReport {
