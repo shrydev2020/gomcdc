@@ -658,12 +658,14 @@ type evaluation struct {
 }
 
 type writerState struct {
+	mu sync.Mutex
 	packagePath string
 	path string
 	file *os.File
 	eventsSinceCompact int
 	evaluations map[string]record
 	clauses map[string]record
+	seenClauses map[string]struct{}
 }
 
 type record struct {
@@ -690,10 +692,11 @@ var (
 	runID = initializeRunID()
 	processID = os.Getpid()
 	nextEvaluation atomic.Uint64
-	recordMu sync.Mutex
+	activeMu sync.RWMutex
+	writersMu sync.Mutex
+	diagnosticMu sync.Mutex
 	active = make(map[uint64]*evaluation)
 	writers = make(map[string]*writerState)
-	seenClauses = make(map[string]struct{})
 	diagnosticFile *os.File
 	diagnosticSeen = make(map[string]struct{})
 )
@@ -731,25 +734,29 @@ func (hooks Hooks) BeginInto(slot *uint64, decisionID uint64, conditionCount uin
 	id := nextEvaluation.Add(1)
 	if id == 0 { id = nextEvaluation.Add(1) }
 	item := &evaluation{packagePath: hooks.packagePath, decisionID: decisionID, conditions: make([]uint8, int(conditionCount)), testID: "unknown"}
-	recordMu.Lock()
-	defer recordMu.Unlock()
-	active[id] = item
 	*slot = id
-	writeLocked(hooks.packagePath, record{Type:"begin", EvaluationID:id, DecisionID:decisionID, ConditionCount:int(conditionCount), TestID:item.testID})
+	// Publish the active evaluation only after its begin record is written in
+	// the package writer. Otherwise a concurrent compaction could snapshot the
+	// active entry and emit a second begin record before this write completes.
+	writeEvent(hooks.packagePath, record{Type:"begin", EvaluationID:id, DecisionID:decisionID, ConditionCount:int(conditionCount), TestID:item.testID})
+	activeMu.Lock()
+	active[id] = item
+	activeMu.Unlock()
 	return proceed
 }
 
 func (hooks Hooks) Condition(evaluationID uint64, index uint16, value bool) (result bool) {
 	result = value
 	defer func() { _ = recover() }()
-	recordMu.Lock()
-	defer recordMu.Unlock()
+	activeMu.Lock()
 	item := active[evaluationID]
 	if item == nil || int(index) >= len(item.conditions) {
-		diagnosticLocked(hooks.packagePath, "condition referenced an unknown evaluation or index")
+		activeMu.Unlock()
+		diagnostic(hooks.packagePath, "condition referenced an unknown evaluation or index")
 		return result
 	}
 	if value { item.conditions[index] = conditionTrue } else { item.conditions[index] = conditionFalse }
+	activeMu.Unlock()
 	return result
 }
 
@@ -788,55 +795,81 @@ func (hooks Hooks) NoMatch(switchID uint64) {
 }
 
 func finish(id uint64, result bool, status uint8, skippedDecisionIDs []uint64) {
-	recordMu.Lock()
-	defer recordMu.Unlock()
+	activeMu.Lock()
 	item := active[id]
-	if item == nil { diagnosticLocked("unknown", "terminal referenced an unknown evaluation"); return }
+	if item == nil {
+		activeMu.Unlock()
+		diagnostic("unknown", "terminal referenced an unknown evaluation")
+		return
+	}
 	delete(active, id)
-	writeLocked(item.packagePath, record{Type:"terminal", EvaluationID:id, DecisionID:item.decisionID, TestID:item.testID, Conditions:append([]uint8(nil), item.conditions...), Result:result, Status:status, SkippedDecisionIDs:append([]uint64(nil), skippedDecisionIDs...)})
+	event := record{Type:"terminal", EvaluationID:id, DecisionID:item.decisionID, TestID:item.testID, Conditions:append([]uint8(nil), item.conditions...), Result:result, Status:status, SkippedDecisionIDs:append([]uint64(nil), skippedDecisionIDs...)}
+	packagePath := item.packagePath
+	activeMu.Unlock()
+	writeEvent(packagePath, event)
 }
 
 func abort(id uint64) {
 	if id == 0 { return }
-	recordMu.Lock()
-	defer recordMu.Unlock()
+	activeMu.Lock()
 	item := active[id]
-	if item == nil { return }
+	if item == nil { activeMu.Unlock(); return }
 	delete(active, id)
-	writeLocked(item.packagePath, record{Type:"terminal", EvaluationID:id, DecisionID:item.decisionID, TestID:item.testID, Conditions:append([]uint8(nil), item.conditions...), Status:statusAborted})
+	event := record{Type:"terminal", EvaluationID:id, DecisionID:item.decisionID, TestID:item.testID, Conditions:append([]uint8(nil), item.conditions...), Status:statusAborted}
+	packagePath := item.packagePath
+	activeMu.Unlock()
+	writeEvent(packagePath, event)
 }
 
 func recordClause(packagePath string, switchID, clauseID uint64, event string) {
-	recordMu.Lock()
-	defer recordMu.Unlock()
+	state := writerFor(packagePath)
+	if state == nil { return }
+	state.mu.Lock()
+	defer state.mu.Unlock()
 	key := packagePath + "\x00" + strconv.FormatUint(switchID, 10) + "\x00" + strconv.FormatUint(clauseID, 10) + "\x00" + event
-	if _, exists := seenClauses[key]; exists { return }
-	seenClauses[key] = struct{}{}
-	writeLocked(packagePath, record{Type:"clause", SwitchID: switchID, ClauseID:clauseID, Event:event})
+	if _, exists := state.seenClauses[key]; exists { return }
+	state.seenClauses[key] = struct{}{}
+	writeEventLocked(state, record{Type:"clause", SwitchID: switchID, ClauseID:clauseID, Event:event})
 }
 
-func writeLocked(packagePath string, event record) {
-	if dataDir == "" { return }
+func writerFor(packagePath string) *writerState {
+	if dataDir == "" { return nil }
+	writersMu.Lock()
+	defer writersMu.Unlock()
 	state := writers[packagePath]
-	if state == nil {
-		encodedPackage := filenameComponent(packagePath)
-		encodedRun := filenameComponent(runID)
-		pattern := eventPrefix + encodedPackage + "-pid_" + strconv.Itoa(processID) + "-run_" + encodedRun + "-*" + eventSuffix
-		created, err := os.CreateTemp(dataDir, pattern)
-		if err != nil { diagnosticLocked(packagePath, "create event file: " + err.Error()); return }
-		state = &writerState{
-			packagePath: packagePath,
-			path: created.Name(),
-			file: created,
-			evaluations: make(map[string]record),
-			clauses: make(map[string]record),
-		}
-		writers[packagePath] = state
-	} else if state.file == nil {
+	if state != nil { return state }
+	encodedPackage := filenameComponent(packagePath)
+	encodedRun := filenameComponent(runID)
+	pattern := eventPrefix + encodedPackage + "-pid_" + strconv.Itoa(processID) + "-run_" + encodedRun + "-*" + eventSuffix
+	created, err := os.CreateTemp(dataDir, pattern)
+	if err != nil { diagnostic(packagePath, "create event file: " + err.Error()); return nil }
+	state = &writerState{
+		packagePath: packagePath,
+		path: created.Name(),
+		file: created,
+		evaluations: make(map[string]record),
+		clauses: make(map[string]record),
+		seenClauses: make(map[string]struct{}),
+	}
+	writers[packagePath] = state
+	return state
+}
+
+func writeEvent(packagePath string, event record) {
+	state := writerFor(packagePath)
+	if state == nil { return }
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	writeEventLocked(state, event)
+}
+
+func writeEventLocked(state *writerState, event record) {
+	if state.file == nil {
 		reopened, err := os.OpenFile(state.path, os.O_WRONLY|os.O_APPEND, 0)
-		if err != nil { diagnosticLocked(packagePath, "reopen event file: " + err.Error()); return }
+		if err != nil { diagnostic(state.packagePath, "reopen event file: " + err.Error()); return }
 		state.file = reopened
 	}
+	packagePath := state.packagePath
 	event.RunID = runID
 	event.PackagePath = packagePath
 	event.ProcessID = processID
@@ -851,7 +884,7 @@ func writeLocked(packagePath string, event record) {
 		if _, exists := state.clauses[key]; !exists { state.clauses[key] = event }
 	}
 	if err := writeRecord(state.file, event); err != nil {
-		diagnosticLocked(packagePath, "write event file: " + err.Error())
+		diagnostic(packagePath, "write event file: " + err.Error())
 		return
 	}
 	state.eventsSinceCompact++
@@ -882,7 +915,7 @@ func writeRecord(file *os.File, event record) error {
 func compactLocked(state *writerState) {
 	state.eventsSinceCompact = 0
 	temporary, err := os.CreateTemp(dataDir, "." + filepath.Base(state.path) + ".compact-*")
-	if err != nil { diagnosticLocked(state.packagePath, "create compacted event file: " + err.Error()); return }
+	if err != nil { diagnostic(state.packagePath, "create compacted event file: " + err.Error()); return }
 	temporaryPath := temporary.Name()
 	keepTemporary := true
 	defer func() {
@@ -895,25 +928,26 @@ func compactLocked(state *writerState) {
 	for _, key := range evaluationKeys {
 		if err := writeRecord(temporary, state.evaluations[key]); err != nil {
 			_ = temporary.Close()
-			diagnosticLocked(state.packagePath, "write compacted evaluation: " + err.Error())
+			diagnostic(state.packagePath, "write compacted evaluation: " + err.Error())
 			return
 		}
 	}
 
-	activeIDs := make([]uint64, 0, len(active))
+	activeMu.RLock()
+	activeEvents := make([]record, 0, len(active))
 	for id, item := range active {
-		if item.packagePath == state.packagePath { activeIDs = append(activeIDs, id) }
-	}
-	sort.Slice(activeIDs, func(i, j int) bool { return activeIDs[i] < activeIDs[j] })
-	for _, id := range activeIDs {
-		item := active[id]
-		event := record{
+		if item.packagePath != state.packagePath { continue }
+		activeEvents = append(activeEvents, record{
 			Type: "begin", RunID: runID, PackagePath: state.packagePath, ProcessID: processID,
 			EvaluationID: id, DecisionID: item.decisionID, ConditionCount: len(item.conditions), TestID: item.testID,
-		}
+		})
+	}
+	activeMu.RUnlock()
+	sort.Slice(activeEvents, func(i, j int) bool { return activeEvents[i].EvaluationID < activeEvents[j].EvaluationID })
+	for _, event := range activeEvents {
 		if err := writeRecord(temporary, event); err != nil {
 			_ = temporary.Close()
-			diagnosticLocked(state.packagePath, "write compacted active evaluation: " + err.Error())
+			diagnostic(state.packagePath, "write compacted active evaluation: " + err.Error())
 			return
 		}
 	}
@@ -924,21 +958,21 @@ func compactLocked(state *writerState) {
 	for _, key := range clauseKeys {
 		if err := writeRecord(temporary, state.clauses[key]); err != nil {
 			_ = temporary.Close()
-			diagnosticLocked(state.packagePath, "write compacted clause: " + err.Error())
+			diagnostic(state.packagePath, "write compacted clause: " + err.Error())
 			return
 		}
 	}
 	if err := temporary.Sync(); err != nil {
 		_ = temporary.Close()
-		diagnosticLocked(state.packagePath, "sync compacted event file: " + err.Error())
+		diagnostic(state.packagePath, "sync compacted event file: " + err.Error())
 		return
 	}
 	if err := temporary.Close(); err != nil {
-		diagnosticLocked(state.packagePath, "close compacted event file: " + err.Error())
+		diagnostic(state.packagePath, "close compacted event file: " + err.Error())
 		return
 	}
 	if err := os.Rename(temporaryPath, state.path); err != nil {
-		diagnosticLocked(state.packagePath, "replace event file with compacted snapshot: " + err.Error())
+		diagnostic(state.packagePath, "replace event file with compacted snapshot: " + err.Error())
 		return
 	}
 	keepTemporary = false
@@ -946,15 +980,17 @@ func compactLocked(state *writerState) {
 	if err != nil {
 		_ = state.file.Close()
 		state.file = nil
-		diagnosticLocked(state.packagePath, "reopen compacted event file: " + err.Error())
+		diagnostic(state.packagePath, "reopen compacted event file: " + err.Error())
 		return
 	}
 	old := state.file
 	state.file = reopened
-	if err := old.Close(); err != nil { diagnosticLocked(state.packagePath, "close replaced event file: " + err.Error()) }
+	if err := old.Close(); err != nil { diagnostic(state.packagePath, "close replaced event file: " + err.Error()) }
 }
 
-func diagnosticLocked(packagePath, message string) {
+func diagnostic(packagePath, message string) {
+	diagnosticMu.Lock()
+	defer diagnosticMu.Unlock()
 	key := packagePath + "\x00" + message
 	if _, exists := diagnosticSeen[key]; exists { return }
 	diagnosticSeen[key] = struct{}{}

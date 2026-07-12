@@ -302,6 +302,9 @@ func main() {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(collected.Diagnostics) != 0 {
+		t.Fatalf("concurrent runtime diagnostics = %#v", collected.Diagnostics)
+	}
 	if got, want := len(collected.Evaluations), 5; got != want {
 		t.Fatalf("evaluations = %d, want %d; diagnostics=%#v", got, want, collected.Diagnostics)
 	}
