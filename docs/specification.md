@@ -91,7 +91,7 @@ Every condition starts as `not-evaluated`. Only an Atom that actually evaluates 
 
 ### D10. Evaluation function
 
-For a complete assignment `x ∈ {false,true}^n`, `eval(E,x)` is the value of Decision tree `E`. `Comp(v)` is the set of complete assignments consistent with observed vector `v`.
+For a complete assignment `x ∈ {false,true}^n`, `eval(E,x)` is the value of Decision tree `E`. `Comp(v)` is the set of complete assignments consistent with observed vector `v`, including the observed short-circuit path. Condition indices are occurrence identities: v1 does not infer or enforce value coupling between occurrences, even when their source text is equal. Source-language coupling analysis is outside this model; a witness never receives credit from an unproved coupling assumption.
 
 ### D11. Clause event
 

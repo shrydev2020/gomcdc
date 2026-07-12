@@ -147,14 +147,6 @@ func (MaskingStrategy) Analyze(metadata cover.DecisionMetadata, evaluations []co
 		applyIssue(&result, treeIssue)
 		return result
 	}
-	if repeated := repeatedAtomicExpression(metadata.Conditions); repeated != "" {
-		applyIssue(&result, &analysisIssue{
-			status: cover.CoverageUnknown,
-			reason: fmt.Sprintf("masking MC/DC cannot infer value coupling for repeated atomic expression %q", repeated),
-		})
-		return result
-	}
-
 	prepared := prepareEvaluations(metadata.ID, count, evaluations)
 	result.AbortedEvaluations = prepared.aborted
 	result.InvalidEvaluations = prepared.invalid
@@ -205,21 +197,6 @@ func (MaskingStrategy) Analyze(metadata cover.DecisionMetadata, evaluations []co
 
 	finishResult(&result)
 	return result
-}
-
-func repeatedAtomicExpression(conditions []cover.ConditionMetadata) string {
-	seen := make(map[string]struct{}, len(conditions))
-	for _, condition := range conditions {
-		expression := condition.Expression
-		if expression == "" {
-			continue
-		}
-		if _, exists := seen[expression]; exists {
-			return expression
-		}
-		seen[expression] = struct{}{}
-	}
-	return ""
 }
 
 // uniqueCauseWitness indexes evaluations by every non-target condition state.

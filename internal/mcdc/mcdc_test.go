@@ -347,7 +347,7 @@ func TestMaskingWitnessExplainsShortCircuitCompletion(t *testing.T) {
 	}
 }
 
-func TestMaskingRepeatedAtomicExpressionIsUnknownWithoutCouplingProof(t *testing.T) {
+func TestMaskingTreatsRepeatedSourceTextAsSeparateOccurrences(t *testing.T) {
 	t.Parallel()
 	metadata := decisionMetadata(and(condition(0), condition(1)))
 	metadata.Conditions[0].Expression = "a"
@@ -356,7 +356,7 @@ func TestMaskingRepeatedAtomicExpressionIsUnknownWithoutCouplingProof(t *testing
 		completed(1, []cover.ConditionState{conditionFalse, notEvaluated}, false),
 		completed(2, []cover.ConditionState{conditionTrue, conditionTrue}, true),
 	})
-	if result.Status != cover.CoverageUnknown || result.Conditions[0].Status != cover.CoverageUnknown || result.Conditions[0].Witness != nil {
+	if result.Conditions[0].Status != cover.CoverageCovered || result.Conditions[0].Witness == nil {
 		t.Fatalf("repeated-condition masking result = %#v", result)
 	}
 }

@@ -91,7 +91,7 @@ type DecisionEvaluation struct {
 
 ### D10. 評価関数
 
-完全 assignment `x ∈ {false,true}^n` に対する Decision tree の値を `eval(E,x)` とする。観測 vector `v` と整合する完全 assignment の集合を `Comp(v)` とする。
+完全 assignment `x ∈ {false,true}^n` に対する Decision tree の値を `eval(E,x)` とする。`Comp(v)` は観測された短絡評価経路を含め、観測 vector `v` と整合する完全 assignment の集合とする。condition indexはoccurrenceの識別子であり、v1ではsource textが同じoccurrence間の値のcouplingを推測・強制しない。このモデルではsource-language coupling解析を行わず、未証明のcouplingを根拠とするwitnessを認めない。
 
 ### D11. Clause event
 
