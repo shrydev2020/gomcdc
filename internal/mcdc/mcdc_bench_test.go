@@ -112,12 +112,10 @@ func BenchmarkMaskingCompletions(b *testing.B) {
 		}
 		evaluations[vector] = cover.DecisionEvaluation{DecisionID: 1, Conditions: states, Result: vector == 255, Status: cover.EvaluationCompleted}
 	}
-	indexes := make([]uint16, conditionCount)
-	for index := range indexes {
-		indexes[index] = uint16(index)
-	}
 	b.ReportAllocs()
 	for index := 0; index < b.N; index++ {
-		_ = maskingCompletions(expression, evaluations, indexes)
+		for target := uint16(0); target < conditionCount; target++ {
+			_ = maskingCompletionsForTarget(expression, evaluations, target)
+		}
 	}
 }

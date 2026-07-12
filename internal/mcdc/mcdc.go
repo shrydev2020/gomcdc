@@ -156,9 +156,9 @@ func (MaskingStrategy) Analyze(metadata cover.DecisionMetadata, evaluations []co
 		result.InvalidEvaluations,
 	)
 	result.EvaluationsAnalyzed = len(prepared.evaluations)
-	completions := maskingCompletions(metadata.ExpressionTree, prepared.evaluations, indexes)
 
 	for conditionPosition, target := range indexes {
+		completions := maskingCompletionsForTarget(metadata.ExpressionTree, prepared.evaluations, target)
 		conditionResult := &result.Conditions[conditionPosition]
 		for first := 0; first < len(prepared.evaluations); first++ {
 			for second := first + 1; second < len(prepared.evaluations); second++ {
@@ -167,8 +167,8 @@ func (MaskingStrategy) Analyze(metadata cover.DecisionMetadata, evaluations []co
 				if !candidatePair(left, right, target) {
 					continue
 				}
-				for _, firstCompletion := range completions[first][conditionPosition] {
-					for _, secondCompletion := range completions[second][conditionPosition] {
+				for _, firstCompletion := range completions[first] {
+					for _, secondCompletion := range completions[second] {
 						witness, covered := maskingWitness(metadata.ExpressionTree, left, right, target, firstCompletion.values, secondCompletion.values)
 						if covered {
 							conditionResult.Status = cover.CoverageCovered
@@ -370,18 +370,14 @@ func maskedAt(expression *cover.BooleanExpression, values []bool, condition uint
 	return evaluateFull(expression, values, -1, false) == evaluateFull(expression, values, int(condition), !values[condition])
 }
 
-func maskingCompletions(
+func maskingCompletionsForTarget(
 	expression *cover.BooleanExpression,
 	evaluations []cover.DecisionEvaluation,
-	indexes []uint16,
-) [][][]maskingCompletion {
-	completions := make([][][]maskingCompletion, len(evaluations))
+	target uint16,
+) [][]maskingCompletion {
+	completions := make([][]maskingCompletion, len(evaluations))
 	for evaluationIndex, evaluation := range evaluations {
-		row := make([][]maskingCompletion, len(indexes))
-		for conditionPosition, target := range indexes {
-			row[conditionPosition] = enumeratePivotalCompletions(expression, evaluation, target)
-		}
-		completions[evaluationIndex] = row
+		completions[evaluationIndex] = enumeratePivotalCompletions(expression, evaluation, target)
 	}
 	return completions
 }
