@@ -86,3 +86,38 @@ func naiveUniqueCauseWitness(evaluations []cover.DecisionEvaluation, target uint
 	}
 	return -1, -1
 }
+
+func BenchmarkMaskingCompletions(b *testing.B) {
+	const conditionCount = 8
+	conditions := make([]cover.ConditionMetadata, conditionCount)
+	var expression *cover.BooleanExpression
+	for index := range conditions {
+		conditions[index] = cover.ConditionMetadata{Index: uint16(index), Expression: string(rune('a' + index))}
+		leaf := cover.NewConditionExpression(uint16(index))
+		if expression == nil {
+			expression = leaf
+		} else {
+			expression = cover.NewAndExpression(expression, leaf)
+		}
+	}
+	evaluations := make([]cover.DecisionEvaluation, 256)
+	for vector := range evaluations {
+		states := make([]cover.ConditionState, conditionCount)
+		for index := range states {
+			if vector&(1<<index) == 0 {
+				states[index] = cover.ConditionFalse
+			} else {
+				states[index] = cover.ConditionTrue
+			}
+		}
+		evaluations[vector] = cover.DecisionEvaluation{DecisionID: 1, Conditions: states, Result: vector == 255, Status: cover.EvaluationCompleted}
+	}
+	indexes := make([]uint16, conditionCount)
+	for index := range indexes {
+		indexes[index] = uint16(index)
+	}
+	b.ReportAllocs()
+	for index := 0; index < b.N; index++ {
+		_ = maskingCompletions(expression, evaluations, indexes)
+	}
+}

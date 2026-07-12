@@ -164,6 +164,7 @@ func (MaskingStrategy) Analyze(metadata cover.DecisionMetadata, evaluations []co
 		result.InvalidEvaluations,
 	)
 	result.EvaluationsAnalyzed = len(prepared.evaluations)
+	completions := maskingCompletions(metadata.ExpressionTree, prepared.evaluations, indexes)
 
 	for conditionPosition, target := range indexes {
 		conditionResult := &result.Conditions[conditionPosition]
@@ -174,7 +175,12 @@ func (MaskingStrategy) Analyze(metadata cover.DecisionMetadata, evaluations []co
 				if !candidatePair(left, right, target) {
 					continue
 				}
-				witness, covered := maskingWitness(metadata.ExpressionTree, left, right, target)
+				firstCompletion := completions[first][conditionPosition]
+				secondCompletion := completions[second][conditionPosition]
+				if !firstCompletion.pivotal || !secondCompletion.pivotal {
+					continue
+				}
+				witness, covered := maskingWitness(left, right, target, firstCompletion.values, secondCompletion.values)
 				if covered {
 					conditionResult.Status = cover.CoverageCovered
 					conditionResult.Witness = witness
@@ -334,21 +340,35 @@ func candidatePair(first, second cover.DecisionEvaluation, target uint16) bool {
 		firstTarget != secondTarget
 }
 
-func maskingWitness(
+type maskingCompletion struct {
+	values  []bool
+	pivotal bool
+}
+
+func maskingCompletions(
 	expression *cover.BooleanExpression,
+	evaluations []cover.DecisionEvaluation,
+	indexes []uint16,
+) [][]maskingCompletion {
+	completions := make([][]maskingCompletion, len(evaluations))
+	for evaluationIndex, evaluation := range evaluations {
+		row := make([]maskingCompletion, len(indexes))
+		for conditionPosition, target := range indexes {
+			values, pivotal := pivotalCompletion(expression, evaluation, target)
+			row[conditionPosition] = maskingCompletion{values: values, pivotal: pivotal}
+		}
+		completions[evaluationIndex] = row
+	}
+	return completions
+}
+
+func maskingWitness(
 	first cover.DecisionEvaluation,
 	second cover.DecisionEvaluation,
 	target uint16,
+	firstCompletion []bool,
+	secondCompletion []bool,
 ) (*cover.MCDCWitness, bool) {
-	firstCompletion, firstPivotal := pivotalCompletion(expression, first, target)
-	if !firstPivotal {
-		return nil, false
-	}
-	secondCompletion, secondPivotal := pivotalCompletion(expression, second, target)
-	if !secondPivotal {
-		return nil, false
-	}
-
 	unobserved := make([]uint16, 0)
 	masked := make([]uint16, 0)
 	for index := range first.Conditions {
