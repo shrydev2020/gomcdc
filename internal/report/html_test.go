@@ -68,7 +68,7 @@ func TestWriteHTMLPresentsHumanReadableTriageHierarchy(t *testing.T) {
 		t.Fatal(err)
 	}
 	html := output.String()
-	for _, required := range []string{"Where to look first", "Open obligations", "Package → file → function → evidence", "Source view:", "Statement", "status-partial"} {
+	for _, required := range []string{"Where to look first", "Open obligations", "Package → file → function → evidence", "Source view:", "Statement", "Function", "Decision", "Condition", "UC MC/DC", "Mask MC/DC", "status-partial"} {
 		if !strings.Contains(html, required) {
 			t.Errorf("HTML missing human-readable UI element %q", required)
 		}
