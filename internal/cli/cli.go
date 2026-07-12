@@ -357,7 +357,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		instrumentationUnknown: analysisUnknown, integrityFailure: integrityFailure, analysisIncomplete: analysisIncomplete,
 	})
 	built := report.Build(input)
-	if err := writeReport(opts, input, workingDir, stdout); err != nil {
+	if err := writeReport(opts, input, built, workingDir, stdout); err != nil {
 		fmt.Fprintf(stderr, "gomcdc: report generation failed: %v\n", err)
 		return ExitMeasurementFailed
 	}
@@ -939,7 +939,7 @@ func belowThreshold(metric report.MetricSummary, threshold float64) bool {
 	return float64(metric.Covered)*100 < threshold*float64(metric.Total)
 }
 
-func writeReport(opts options, input report.Input, workingDir string, stdout io.Writer) error {
+func writeReport(opts options, input report.Input, built report.Report, workingDir string, stdout io.Writer) error {
 	if opts.format == "html" {
 		outputDir := opts.output
 		if !filepath.IsAbs(outputDir) {
@@ -958,7 +958,7 @@ func writeReport(opts options, input report.Input, workingDir string, stdout io.
 			_ = file.Close()
 			_ = os.Remove(tempPath)
 		}
-		if err := report.WriteHTML(file, input); err != nil {
+		if err := report.WriteHTMLReport(file, built, input); err != nil {
 			cleanup()
 			return err
 		}
@@ -984,9 +984,9 @@ func writeReport(opts options, input report.Input, workingDir string, stdout io.
 	var err error
 	switch opts.format {
 	case "json":
-		contents, err = report.RenderJSON(input)
+		contents, err = report.RenderJSONReport(built)
 	case "text":
-		contents = []byte(report.RenderText(input))
+		contents = []byte(report.RenderTextReport(built))
 	default:
 		return fmt.Errorf("unsupported report format %q", opts.format)
 	}

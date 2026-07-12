@@ -24,7 +24,8 @@ func TestWriteHTMLReportCreatesIndex(t *testing.T) {
 	t.Parallel()
 	directory := t.TempDir()
 	opts := options{format: "html", output: "coverage-html"}
-	if err := writeReport(opts, report.Input{ModulePath: "example.test/m"}, directory, &bytes.Buffer{}); err != nil {
+	input := report.Input{ModulePath: "example.test/m"}
+	if err := writeReport(opts, input, report.Build(input), directory, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	contents, err := os.ReadFile(filepath.Join(directory, "coverage-html", "index.html"))

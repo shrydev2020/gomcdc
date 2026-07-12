@@ -14,12 +14,21 @@ import (
 // RenderText builds input and returns a deterministic schema-v1 text report
 // ending in a newline.
 func RenderText(input Input) string {
-	return renderText(Build(input))
+	return RenderTextReport(Build(input))
 }
+
+// RenderTextReport renders an already-built report without rebuilding it.
+func RenderTextReport(report Report) string { return renderText(report) }
 
 // WriteText builds input and writes a deterministic schema-v1 text report.
 func WriteText(writer io.Writer, input Input) error {
 	_, err := io.WriteString(writer, RenderText(input))
+	return err
+}
+
+// WriteTextReport writes an already-built report without rebuilding it.
+func WriteTextReport(writer io.Writer, report Report) error {
+	_, err := io.WriteString(writer, RenderTextReport(report))
 	return err
 }
 

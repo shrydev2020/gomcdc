@@ -18,6 +18,12 @@ type htmlMetric struct {
 // WriteHTML writes one self-contained static HTML report.
 func WriteHTML(w io.Writer, input Input) error {
 	report := Build(input)
+	return WriteHTMLReport(w, report, input)
+}
+
+// WriteHTMLReport renders an already-built report. The input is used only for
+// attaching original-source views and is never rebuilt.
+func WriteHTMLReport(w io.Writer, report Report, input Input) error {
 	attachSourceViews(&report, input)
 	return writeHTMLReport(w, report)
 }
