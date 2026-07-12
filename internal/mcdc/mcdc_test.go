@@ -381,6 +381,61 @@ func TestMaskingWitnessRecordsVaryingMaskedConditions(t *testing.T) {
 	}
 }
 
+func TestMaskingSearchesAllCompletionsAndValidatesD19(t *testing.T) {
+	t.Parallel()
+	metadata := decisionMetadata(and(condition(0), or(condition(1), condition(2))))
+	first := completed(1, []cover.ConditionState{conditionFalse, notEvaluated, notEvaluated}, false)
+	second := completed(2, []cover.ConditionState{conditionTrue, conditionTrue, notEvaluated}, true)
+	if got := len(enumeratePivotalCompletions(metadata.ExpressionTree, first, 0)); got < 2 {
+		t.Fatalf("first evaluation completions = %d, want multiple feasible completions", got)
+	}
+	result := (MaskingStrategy{}).Analyze(metadata, []cover.DecisionEvaluation{first, second})
+	witness := result.Conditions[0].Witness
+	if result.Conditions[0].Status != cover.CoverageCovered || witness == nil {
+		t.Fatalf("target status = %q, witness = %#v", result.Conditions[0].Status, witness)
+	}
+	for index := range witness.FirstCompletion {
+		if uint16(index) == 0 || witness.FirstCompletion[index] == witness.SecondCompletion[index] {
+			continue
+		}
+		if !oracleMasked(metadata.ExpressionTree, conditionStatesToBools(witness.FirstCompletion), uint16(index)) || !oracleMasked(metadata.ExpressionTree, conditionStatesToBools(witness.SecondCompletion), uint16(index)) {
+			t.Fatalf("witness violates D19 masking at condition %d: %#v", index, witness)
+		}
+	}
+}
+
+func oracleMasked(expression *cover.BooleanExpression, values []bool, target uint16) bool {
+	return oracleEvaluate(expression, values, -1, false) == oracleEvaluate(expression, values, int(target), !values[target])
+}
+
+func conditionStatesToBools(states []cover.ConditionState) []bool {
+	values := make([]bool, len(states))
+	for index, state := range states {
+		values[index], _ = state.Bool()
+	}
+	return values
+}
+
+func oracleEvaluate(expression *cover.BooleanExpression, values []bool, override int, replacement bool) bool {
+	switch expression.Kind {
+	case cover.BooleanExpressionCondition:
+		if int(expression.ConditionIndex) == override {
+			return replacement
+		}
+		return values[expression.ConditionIndex]
+	case cover.BooleanExpressionConstant:
+		return expression.Constant
+	case cover.BooleanExpressionNot:
+		return !oracleEvaluate(expression.Left, values, override, replacement)
+	case cover.BooleanExpressionAnd:
+		return oracleEvaluate(expression.Left, values, override, replacement) && oracleEvaluate(expression.Right, values, override, replacement)
+	case cover.BooleanExpressionOr:
+		return oracleEvaluate(expression.Left, values, override, replacement) || oracleEvaluate(expression.Right, values, override, replacement)
+	default:
+		return false
+	}
+}
+
 func TestStrategiesAggregateDuplicatesAndChooseDeterministicWitnesses(t *testing.T) {
 	t.Parallel()
 

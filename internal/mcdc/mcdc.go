@@ -175,16 +175,18 @@ func (MaskingStrategy) Analyze(metadata cover.DecisionMetadata, evaluations []co
 				if !candidatePair(left, right, target) {
 					continue
 				}
-				firstCompletion := completions[first][conditionPosition]
-				secondCompletion := completions[second][conditionPosition]
-				if !firstCompletion.pivotal || !secondCompletion.pivotal {
-					continue
-				}
-				witness, covered := maskingWitness(left, right, target, firstCompletion.values, secondCompletion.values)
-				if covered {
-					conditionResult.Status = cover.CoverageCovered
-					conditionResult.Witness = witness
-					break
+				for _, firstCompletion := range completions[first][conditionPosition] {
+					for _, secondCompletion := range completions[second][conditionPosition] {
+						witness, covered := maskingWitness(metadata.ExpressionTree, left, right, target, firstCompletion.values, secondCompletion.values)
+						if covered {
+							conditionResult.Status = cover.CoverageCovered
+							conditionResult.Witness = witness
+							break
+						}
+					}
+					if conditionResult.Witness != nil {
+						break
+					}
 				}
 			}
 			if conditionResult.Witness != nil {
@@ -341,21 +343,66 @@ func candidatePair(first, second cover.DecisionEvaluation, target uint16) bool {
 }
 
 type maskingCompletion struct {
-	values  []bool
-	pivotal bool
+	values []bool
+}
+
+func evaluateCompletion(expression *cover.BooleanExpression, values []bool, states []cover.ConditionState) bool {
+	switch expression.Kind {
+	case cover.BooleanExpressionCondition:
+		value := values[expression.ConditionIndex]
+		if value {
+			states[expression.ConditionIndex] = cover.ConditionTrue
+		} else {
+			states[expression.ConditionIndex] = cover.ConditionFalse
+		}
+		return value
+	case cover.BooleanExpressionConstant:
+		return expression.Constant
+	case cover.BooleanExpressionNot:
+		return !evaluateCompletion(expression.Left, values, states)
+	case cover.BooleanExpressionAnd:
+		left := evaluateCompletion(expression.Left, values, states)
+		if !left {
+			return false
+		}
+		return evaluateCompletion(expression.Right, values, states)
+	case cover.BooleanExpressionOr:
+		left := evaluateCompletion(expression.Left, values, states)
+		if left {
+			return true
+		}
+		return evaluateCompletion(expression.Right, values, states)
+	default:
+		panic("mcdc: validated expression contains an unsupported node")
+	}
+}
+
+func sameConditionStates(left, right []cover.ConditionState) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func maskedAt(expression *cover.BooleanExpression, values []bool, condition uint16) bool {
+	return evaluateFull(expression, values, -1, false) == evaluateFull(expression, values, int(condition), !values[condition])
 }
 
 func maskingCompletions(
 	expression *cover.BooleanExpression,
 	evaluations []cover.DecisionEvaluation,
 	indexes []uint16,
-) [][]maskingCompletion {
-	completions := make([][]maskingCompletion, len(evaluations))
+) [][][]maskingCompletion {
+	completions := make([][][]maskingCompletion, len(evaluations))
 	for evaluationIndex, evaluation := range evaluations {
-		row := make([]maskingCompletion, len(indexes))
+		row := make([][]maskingCompletion, len(indexes))
 		for conditionPosition, target := range indexes {
-			values, pivotal := pivotalCompletion(expression, evaluation, target)
-			row[conditionPosition] = maskingCompletion{values: values, pivotal: pivotal}
+			row[conditionPosition] = enumeratePivotalCompletions(expression, evaluation, target)
 		}
 		completions[evaluationIndex] = row
 	}
@@ -363,6 +410,7 @@ func maskingCompletions(
 }
 
 func maskingWitness(
+	expression *cover.BooleanExpression,
 	first cover.DecisionEvaluation,
 	second cover.DecisionEvaluation,
 	target uint16,
@@ -380,9 +428,13 @@ func maskingWitness(
 			second.Conditions[index] == cover.ConditionNotEvaluated {
 			unobserved = append(unobserved, conditionIndex)
 		}
-		if firstCompletion[index] != secondCompletion[index] {
-			masked = append(masked, conditionIndex)
+		if firstCompletion[index] == secondCompletion[index] {
+			continue
 		}
+		if !maskedAt(expression, firstCompletion, conditionIndex) || !maskedAt(expression, secondCompletion, conditionIndex) {
+			return nil, false
+		}
+		masked = append(masked, conditionIndex)
 	}
 
 	return &cover.MCDCWitness{
