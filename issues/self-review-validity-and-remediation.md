@@ -133,8 +133,8 @@ completion列挙自体は一般に指数的だが、短絡pathとpivotal pathの
 `CollectDetailed`で読む場合、Apple M2 Proで `23.4 ms/op`、`39.9 MB/op`、
 `150,205 allocs/op` だった。生成runtimeについては、writerを非同期化せず、
 `active`、writer map、diagnostic state、package writerのロック責務を分離した。
-Begin recordを書き込んでからactive stateを公開することで、compactionが同じbeginを
-二重出力する競合も防いでいる。生成runtimeの並行評価、compaction、recorder failure
+terminal recordを書き込んでからactive stateを削除することで、compactionとterminalの
+間にbeginが失われる競合を防いでいる。生成runtimeの並行評価、compaction、recorder failure
 fixtureと通常/raceの全テストを通過している。collector benchmarkは維持し、writerの
 単独マイクロベンチマークは別途追加しない限り速度改善の定量根拠にはしない。
 

@@ -655,6 +655,7 @@ type evaluation struct {
 	decisionID uint64
 	conditions []uint8
 	testID string
+	terminalPending bool
 }
 
 type writerState struct {
@@ -666,6 +667,7 @@ type writerState struct {
 	evaluations map[string]record
 	clauses map[string]record
 	seenClauses map[string]struct{}
+	terminalIDs map[uint64]struct{}
 }
 
 type record struct {
@@ -734,14 +736,11 @@ func (hooks Hooks) BeginInto(slot *uint64, decisionID uint64, conditionCount uin
 	id := nextEvaluation.Add(1)
 	if id == 0 { id = nextEvaluation.Add(1) }
 	item := &evaluation{packagePath: hooks.packagePath, decisionID: decisionID, conditions: make([]uint8, int(conditionCount)), testID: "unknown"}
-	*slot = id
-	// Publish the active evaluation only after its begin record is written in
-	// the package writer. Otherwise a concurrent compaction could snapshot the
-	// active entry and emit a second begin record before this write completes.
-	writeEvent(hooks.packagePath, record{Type:"begin", EvaluationID:id, DecisionID:decisionID, ConditionCount:int(conditionCount), TestID:item.testID})
 	activeMu.Lock()
 	active[id] = item
 	activeMu.Unlock()
+	*slot = id
+	writeEvent(hooks.packagePath, record{Type:"begin", EvaluationID:id, DecisionID:decisionID, ConditionCount:int(conditionCount), TestID:item.testID})
 	return proceed
 }
 
@@ -750,7 +749,7 @@ func (hooks Hooks) Condition(evaluationID uint64, index uint16, value bool) (res
 	defer func() { _ = recover() }()
 	activeMu.Lock()
 	item := active[evaluationID]
-	if item == nil || int(index) >= len(item.conditions) {
+	if item == nil || item.terminalPending || int(index) >= len(item.conditions) {
 		activeMu.Unlock()
 		diagnostic(hooks.packagePath, "condition referenced an unknown evaluation or index")
 		return result
@@ -797,28 +796,43 @@ func (hooks Hooks) NoMatch(switchID uint64) {
 func finish(id uint64, result bool, status uint8, skippedDecisionIDs []uint64) {
 	activeMu.Lock()
 	item := active[id]
-	if item == nil {
+	if item == nil || item.terminalPending {
 		activeMu.Unlock()
 		diagnostic("unknown", "terminal referenced an unknown evaluation")
 		return
 	}
-	delete(active, id)
+	item.terminalPending = true
 	event := record{Type:"terminal", EvaluationID:id, DecisionID:item.decisionID, TestID:item.testID, Conditions:append([]uint8(nil), item.conditions...), Result:result, Status:status, SkippedDecisionIDs:append([]uint64(nil), skippedDecisionIDs...)}
-	packagePath := item.packagePath
 	activeMu.Unlock()
-	writeEvent(packagePath, event)
+	writeTerminal(item, event)
 }
 
 func abort(id uint64) {
 	if id == 0 { return }
 	activeMu.Lock()
 	item := active[id]
-	if item == nil { activeMu.Unlock(); return }
-	delete(active, id)
+	if item == nil || item.terminalPending { activeMu.Unlock(); return }
+	item.terminalPending = true
 	event := record{Type:"terminal", EvaluationID:id, DecisionID:item.decisionID, TestID:item.testID, Conditions:append([]uint8(nil), item.conditions...), Status:statusAborted}
-	packagePath := item.packagePath
 	activeMu.Unlock()
-	writeEvent(packagePath, event)
+	writeTerminal(item, event)
+}
+
+func writeTerminal(item *evaluation, event record) {
+	state := writerFor(item.packagePath)
+	if state == nil {
+		activeMu.Lock()
+		if current := active[event.EvaluationID]; current == item { delete(active, event.EvaluationID) }
+		activeMu.Unlock()
+		return
+	}
+	state.mu.Lock()
+	writeEventLocked(state, event)
+	activeMu.Lock()
+	if current := active[event.EvaluationID]; current == item { delete(active, event.EvaluationID) }
+	activeMu.Unlock()
+	delete(state.terminalIDs, event.EvaluationID)
+	state.mu.Unlock()
 }
 
 func recordClause(packagePath string, switchID, clauseID uint64, event string) {
@@ -850,6 +864,7 @@ func writerFor(packagePath string) *writerState {
 		evaluations: make(map[string]record),
 		clauses: make(map[string]record),
 		seenClauses: make(map[string]struct{}),
+		terminalIDs: make(map[uint64]struct{}),
 	}
 	writers[packagePath] = state
 	return state
@@ -887,6 +902,9 @@ func writeEventLocked(state *writerState, event record) {
 		diagnostic(packagePath, "write event file: " + err.Error())
 		return
 	}
+	// Keep this marker only until writeTerminal removes the active evaluation;
+	// it is a transient compaction guard, not an unbounded event history.
+	if event.Type == "terminal" { state.terminalIDs[event.EvaluationID] = struct{}{} }
 	state.eventsSinceCompact++
 	if state.eventsSinceCompact >= compactAfterEvents { compactLocked(state) }
 }
@@ -937,6 +955,7 @@ func compactLocked(state *writerState) {
 	activeEvents := make([]record, 0, len(active))
 	for id, item := range active {
 		if item.packagePath != state.packagePath { continue }
+		if _, terminalRecorded := state.terminalIDs[id]; terminalRecorded { continue }
 		activeEvents = append(activeEvents, record{
 			Type: "begin", RunID: runID, PackagePath: state.packagePath, ProcessID: processID,
 			EvaluationID: id, DecisionID: item.decisionID, ConditionCount: len(item.conditions), TestID: item.testID,

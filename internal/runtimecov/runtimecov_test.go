@@ -266,7 +266,7 @@ func main() {
 		group.Add(1)
 		go func(worker int) {
 			defer group.Done()
-			for call := 0; call < 5; call++ {
+			for call := 0; call < 100; call++ {
 				var slot uint64
 				if hooks.BeginInto(&slot, 7, 2) && hooks.End(slot,
 					hooks.Condition(slot, 0, worker%%2 == 0) &&
