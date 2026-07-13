@@ -6,7 +6,7 @@
 
 `gomcdc test` は Go module の一回の論理的計測要求から、Statement、Function、Decision、Switch Clause Body、Type Switch Clause Body、Select Clause Body、Switch Clause Selection、Type Switch Clause Selection、Condition、Unique-Cause MC/DC、Masking MC/DC の11指標を一つの source model 上へ集約する。
 
-対象は Go 1.26、Go Modules、Linux、macOS とする。対象 source は package pattern を `go list` して得た main module 内の package である。標準 library、外部 module、vendor、本ツール生成source、Go標準形式のgenerated-code commentを持つsourceは対象集合に含めない。`_test.go` は `--include-tests` 指定時だけ AST 系指標へ含め、このflagはStatement/Functionへ影響しない。
+対象は Go 1.26.5、Go Modules、Linux、macOS とする。compiler-aware backendはGo compiler sourceへexact-anchor patchを適用するため、異なるGo patch versionを対応版として扱わない。対象 source は package pattern を `go list` して得た main module 内の package である。標準 library、外部 module、vendor、本ツール生成source、Go標準形式のgenerated-code commentを持つsourceは対象集合に含めない。`_test.go` は `--include-tests` 指定時だけ AST 系指標へ含め、このflagはStatement/Functionへ影響しない。
 
 ## 2. 基本領域
 
@@ -288,6 +288,8 @@ HTMLはmodule summaryからpackageを主navigationとし、package内をfile、f
 受け入れ suite は AND、OR、NOT、nested expression、side effect、evaluation order、conditionless switch、expression switch、type switch、select、empty body、fallthrough、direct selection、no-match、再帰、nested decision、loop、複数 goroutine、panic、recover、defer、`runtime.Goexit`、複数 package、external test package、build tag、test/build failure、timeout、truncated event、partial recovery、source mapping、ユーザー `//line`、生成code除外、全11閾値を含む。`a && b` は Unique-Causeで `a=infeasible`、`b=covered`、Maskingで両condition coveredとなる。
 
 `go test -count=1 ./...`、`go test -race -count=1 ./...`、`go vet ./...` が成功し、fixture module の module 集計と package 集計の整数和が一致することを完成条件とする。
+
+repository CI は Go 1.26.5/Linux でgomcdc自身を計測し、`.github/self-mcdc-baseline.json` のmoduleおよびcritical package別floorを検証する。このbaselineは仕様上のcoverage適合閾値ではなく、検証済みtest suiteからの後退を防ぐ保守契約である。floorを下げる変更は、失われるobligationと理由を明示してreviewしなければならない。
 
 ## 11. 参考資料
 

@@ -37,10 +37,36 @@ jobs:
           --timeout=10m
           --coverage=decision,condition,mcdc-unique,mcdc-masking
           --strict
-          --fail-under-decision=68
-          --fail-under-condition=65
-          --fail-under-mcdc-unique=40
-          --fail-under-mcdc-masking=39
+          --fail-under-decision=72
+          --fail-under-condition=69
+          --fail-under-mcdc-unique=45
+          --fail-under-mcdc-masking=44
           --format=json
           --output=${{ runner.temp }}/gomcdc-self-mcdc.json
           ./...
+      - name: Enforce critical-package MC/DC baselines
+        env:
+          GOMCDC_REPORT: ${{ runner.temp }}/gomcdc-self-mcdc.json
+        run: |
+          jq -e --slurpfile baseline .github/self-mcdc-baseline.json '
+            def percentage($summary; $metric): $summary[$metric].percentage // 0;
+            . as $report
+            | $baseline[0] as $expected
+            | ([
+                $expected.module
+                | to_entries[]
+                | percentage($report.summary; .key) >= .value
+              ] | all)
+              and
+              ([
+                $expected.packages
+                | to_entries[] as $package
+                | ($report.packages | map(select(.path == $package.key)) | first) as $actual
+                | $actual != null
+                  and ([
+                    $package.value
+                    | to_entries[]
+                    | percentage($actual.summary; .key) >= .value
+                  ] | all)
+              ] | all)
+          ' "$GOMCDC_REPORT"

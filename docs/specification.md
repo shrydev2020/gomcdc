@@ -6,7 +6,7 @@ This document defines the semantics and conformance requirements of `gomcdc` 1.0
 
 For one logical `gomcdc test` measurement request, the tool aggregates eleven metrics over one source model: Statement, Function, Decision, Switch Clause Body, Type Switch Clause Body, Select Clause Body, Switch Clause Selection, Type Switch Clause Selection, Condition, Unique-Cause MC/DC, and Masking MC/DC.
 
-The target environment is Go 1.26, Go Modules, Linux, and macOS. Target sources are packages in the main module returned by `go list` for the supplied package patterns. The target set excludes the standard library, external modules, vendor, tool-generated sources, and sources with the standard Go generated-code comment. `_test.go` belongs to AST metrics only with `--include-tests`; that flag does not affect Statement or Function.
+The target environment is Go 1.26.5, Go Modules, Linux, and macOS. Because the compiler-aware backend applies an exact-anchor patch to Go compiler source, it does not treat another Go patch version as supported. Target sources are packages in the main module returned by `go list` for the supplied package patterns. The target set excludes the standard library, external modules, vendor, tool-generated sources, and sources with the standard Go generated-code comment. `_test.go` belongs to AST metrics only with `--include-tests`; that flag does not affect Statement or Function.
 
 ## 2. Basic domains
 
@@ -288,6 +288,8 @@ An implementation conforms only when all conditions hold.
 The acceptance suite includes AND, OR, NOT, nested expressions, side effects, evaluation order, conditionless switch, expression switch, type switch, select, empty bodies, fallthrough, direct selection, no-match, recursion, nested decisions, loops, multiple goroutines, panic, recover, defer, `runtime.Goexit`, multiple packages, external test packages, build tags, test/build failure, timeout, truncated events, partial recovery, source mapping, user `//line`, generated-code exclusion, and all eleven thresholds. For `a && b`, Unique-Cause yields `a=infeasible` and `b=covered`, while Masking covers both conditions.
 
 Completion requires successful `go test -count=1 ./...`, `go test -race -count=1 ./...`, and `go vet ./...`, and integer equality between fixture-module aggregation and the sum of its package aggregations.
+
+Repository CI measures gomcdc itself on Go 1.26.5/Linux and checks the module and critical-package floors in `.github/self-mcdc-baseline.json`. This baseline is a maintenance contract that prevents regression from the verified test suite, not a coverage-conformance threshold defined by this specification. A change that lowers a floor must identify and justify the obligations being lost during review.
 
 ## 11. References
 

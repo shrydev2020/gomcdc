@@ -1,4 +1,4 @@
-// Package compileraware prepares the Go 1.26 compiler producer used for exact
+// Package compileraware prepares the Go 1.26.5 compiler producer used for exact
 // switch dispatch evidence. It patches only the switch-lowering pass in a
 // disposable overlay; the installed GOROOT is never modified.
 package compileraware
@@ -18,6 +18,7 @@ import (
 )
 
 const compilerEnvironment = "GOMCDC_COMPILER"
+const supportedGoVersion = "go1.26.5"
 
 // Toolchain is the measurement-owned toolexec configuration.
 type Toolchain struct {
@@ -35,8 +36,8 @@ func Prepare(ctx context.Context, root string) (Toolchain, error) {
 	if err != nil {
 		return Toolchain{}, err
 	}
-	if !strings.HasPrefix(version, "go1.26.") {
-		return Toolchain{}, fmt.Errorf("compiler-aware clause selection requires Go 1.26.x, got %s", version)
+	if version != supportedGoVersion {
+		return Toolchain{}, fmt.Errorf("compiler-aware clause selection requires %s, got %s", supportedGoVersion, version)
 	}
 
 	realSwitchPath := filepath.Join(goroot, "src", "cmd", "compile", "internal", "walk", "switch.go")
@@ -168,7 +169,7 @@ func setEnvironment(environment []string, key, value string) []string {
 	return append(environment, prefix+value)
 }
 
-// PatchSwitchSource adds dispatch-only probe trampolines to Go 1.26's switch
+// PatchSwitchSource adds dispatch-only probe trampolines to Go 1.26.5's switch
 // lowering. Exact anchors intentionally fail closed when the compiler source
 // changes instead of silently advertising evidence the producer cannot make.
 func PatchSwitchSource(source []byte) ([]byte, error) {

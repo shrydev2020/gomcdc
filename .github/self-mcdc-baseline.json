@@ -1,0 +1,34 @@
+{
+  "module": {
+    "decision": 72,
+    "condition": 69,
+    "mcdcUnique": 45,
+    "mcdcMasking": 44
+  },
+  "packages": {
+    "github.com/shrydev2020/gomcdc/internal/cli": {
+      "mcdcUnique": 46,
+      "mcdcMasking": 46
+    },
+    "github.com/shrydev2020/gomcdc/internal/compileraware": {
+      "mcdcUnique": 45,
+      "mcdcMasking": 41
+    },
+    "github.com/shrydev2020/gomcdc/internal/instrument": {
+      "mcdcUnique": 31,
+      "mcdcMasking": 33
+    },
+    "github.com/shrydev2020/gomcdc/internal/mcdc": {
+      "mcdcUnique": 59,
+      "mcdcMasking": 55
+    },
+    "github.com/shrydev2020/gomcdc/internal/report": {
+      "mcdcUnique": 59,
+      "mcdcMasking": 58
+    },
+    "github.com/shrydev2020/gomcdc/internal/runtimecov": {
+      "mcdcUnique": 40,
+      "mcdcMasking": 41
+    }
+  }
+}

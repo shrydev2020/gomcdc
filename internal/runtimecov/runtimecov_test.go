@@ -161,6 +161,65 @@ func TestCollectDetailedRetainsValidEvidenceAndSynthesizesAbort(t *testing.T) {
 	}
 }
 
+func TestCollectDetailedRejectsMalformedJournalRecords(t *testing.T) {
+	t.Parallel()
+	const (
+		begin      = `{"type":"begin","runId":"run","packagePath":"example.test/p","processId":1,"evaluationId":1,"decisionId":7,"conditionCount":1}`
+		terminal   = `{"type":"terminal","runId":"run","packagePath":"example.test/p","processId":1,"evaluationId":1,"decisionId":7,"conditions":[2],"result":true,"status":0}`
+		evaluation = `{"type":"evaluation","runId":"run","packagePath":"example.test/p","processId":1,"evaluationId":1,"decisionId":7,"conditions":[2],"result":true,"status":0}`
+	)
+	for _, test := range []struct {
+		name            string
+		records         []string
+		wantDiagnostic  string
+		wantEvaluations int
+		wantClauses     int
+	}{
+		{name: "valid begin and terminal", records: []string{begin, terminal}, wantEvaluations: 1},
+		{name: "invalid begin", records: []string{`{"type":"begin","evaluationId":0,"decisionId":7,"conditionCount":1}`}, wantDiagnostic: "invalid begin record"},
+		{name: "duplicate begin", records: []string{begin, begin}, wantDiagnostic: "duplicate begin record", wantEvaluations: 1},
+		{name: "begin after terminal", records: []string{begin, terminal, begin}, wantDiagnostic: "begin record follows a terminal record", wantEvaluations: 1},
+		{name: "invalid terminal", records: []string{`{"type":"terminal","evaluationId":0,"decisionId":7,"status":0}`}, wantDiagnostic: "invalid terminal record"},
+		{name: "duplicate terminal", records: []string{begin, terminal, terminal}, wantDiagnostic: "duplicate terminal record", wantEvaluations: 1},
+		{name: "invalid terminal state", records: []string{begin, `{"type":"terminal","runId":"run","packagePath":"example.test/p","processId":1,"evaluationId":1,"decisionId":7,"conditions":[9],"status":0}`}, wantDiagnostic: "invalid condition state", wantEvaluations: 1},
+		{name: "terminal does not match begin", records: []string{begin, `{"type":"terminal","runId":"run","packagePath":"example.test/p","processId":1,"evaluationId":1,"decisionId":8,"conditions":[2],"status":0}`}, wantDiagnostic: "does not match begin", wantEvaluations: 1},
+		{name: "invalid compacted evaluation", records: []string{`{"type":"evaluation","evaluationId":0,"decisionId":7,"status":0}`}, wantDiagnostic: "invalid self-contained evaluation record"},
+		{name: "duplicate compacted evaluation", records: []string{evaluation, evaluation}, wantDiagnostic: "duplicate self-contained evaluation record", wantEvaluations: 1},
+		{name: "compacted evaluation conflicts with begin", records: []string{begin, evaluation}, wantDiagnostic: "conflicts with begin record", wantEvaluations: 1},
+		{name: "invalid no-match clause", records: []string{`{"type":"clause","event":"no-match-selection"}`}, wantDiagnostic: "invalid clause record"},
+		{name: "invalid clause event", records: []string{`{"type":"clause","clauseId":4,"event":"invented"}`}, wantDiagnostic: "invalid clause record"},
+		{name: "valid clause", records: []string{`{"type":"clause","clauseId":4,"event":"body-execution"}`}, wantClauses: 1},
+		{name: "empty runtime diagnostic", records: []string{`{"type":"diagnostic"}`}, wantDiagnostic: "unspecified failure"},
+		{name: "unknown event type", records: []string{`{"type":"invented"}`}, wantDiagnostic: "unknown event type"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			writeEventFile(t, dataDir, "journal.jsonl", strings.Join(test.records, "\n")+"\n")
+			collected, err := CollectDetailed(dataDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(collected.Evaluations) != test.wantEvaluations || len(collected.Clauses) != test.wantClauses {
+				t.Fatalf("evaluations=%d clauses=%d, want %d/%d; diagnostics=%#v",
+					len(collected.Evaluations), len(collected.Clauses), test.wantEvaluations, test.wantClauses, collected.Diagnostics)
+			}
+			if test.wantDiagnostic == "" {
+				if len(collected.Diagnostics) != 0 {
+					t.Fatalf("valid records produced diagnostics: %#v", collected.Diagnostics)
+				}
+				return
+			}
+			found := false
+			for _, diagnostic := range collected.Diagnostics {
+				found = found || strings.Contains(diagnostic.Message, test.wantDiagnostic)
+			}
+			if !found {
+				t.Fatalf("diagnostics=%#v, want message containing %q", collected.Diagnostics, test.wantDiagnostic)
+			}
+		})
+	}
+}
+
 func TestCollectMissingDirectoryIsIOError(t *testing.T) {
 	_, err := CollectDetailed(filepath.Join(t.TempDir(), "missing"))
 	if err == nil {

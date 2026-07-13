@@ -134,6 +134,87 @@ func TestUniqueCauseStrategy(t *testing.T) {
 	}
 }
 
+func TestUniqueCauseIndexedWitnessMatchesExhaustiveSearch(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name        string
+		evaluations []cover.DecisionEvaluation
+		target      uint16
+	}{
+		{
+			name:        "lexicographically last pair is found after probe limit",
+			evaluations: indexedUniqueCauseEvaluations(64, true, false),
+		},
+		{
+			name:        "large set without a witness remains uncovered",
+			evaluations: indexedUniqueCauseEvaluations(64, false, false),
+		},
+		{
+			name:        "not-evaluated target is excluded from the index",
+			evaluations: indexedUniqueCauseEvaluations(64, true, true),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, gotFound := uniqueCauseWitness(test.evaluations, test.target)
+			wantFirst, wantSecond, wantFound := exhaustiveUniqueCausePair(test.evaluations, test.target)
+			if gotFound != wantFound {
+				t.Fatalf("indexed witness found = %t, exhaustive = %t", gotFound, wantFound)
+			}
+			if !wantFound {
+				if got != nil {
+					t.Fatalf("indexed witness = %#v, want nil", got)
+				}
+				return
+			}
+			if got == nil || got.First.EvaluationID != test.evaluations[wantFirst].EvaluationID ||
+				got.Second.EvaluationID != test.evaluations[wantSecond].EvaluationID {
+				t.Fatalf("indexed witness = %#v, want evaluation indexes (%d,%d)", got, wantFirst, wantSecond)
+			}
+		})
+	}
+}
+
+func indexedUniqueCauseEvaluations(count int, withWitness, includeNotEvaluated bool) []cover.DecisionEvaluation {
+	const conditionCount = 7
+	evaluations := make([]cover.DecisionEvaluation, count)
+	for index := range evaluations {
+		states := make([]cover.ConditionState, conditionCount)
+		states[0] = conditionFalse
+		key := index
+		if index >= count-2 {
+			key = count - 1
+		}
+		for conditionIndex := 1; conditionIndex < conditionCount; conditionIndex++ {
+			states[conditionIndex] = conditionFalse
+			if key&(1<<(conditionIndex-1)) != 0 {
+				states[conditionIndex] = conditionTrue
+			}
+		}
+		evaluations[index] = completed(cover.EvaluationID(index+1), states, false)
+	}
+	if withWitness {
+		last := &evaluations[len(evaluations)-1]
+		last.Conditions[0] = conditionTrue
+		last.Result = true
+	}
+	if includeNotEvaluated {
+		evaluations[0].Conditions[0] = notEvaluated
+	}
+	return evaluations
+}
+
+func exhaustiveUniqueCausePair(evaluations []cover.DecisionEvaluation, target uint16) (int, int, bool) {
+	for first := 0; first < len(evaluations); first++ {
+		for second := first + 1; second < len(evaluations); second++ {
+			if uniqueCausePairMatches(evaluations[first], evaluations[second], target) {
+				return first, second, true
+			}
+		}
+	}
+	return 0, 0, false
+}
+
 func TestMaskingStrategy(t *testing.T) {
 	t.Parallel()
 

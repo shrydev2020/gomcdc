@@ -35,7 +35,7 @@ func TestPrepareBuildsCompilerAwareToolchain(t *testing.T) {
 }
 
 func TestPrepareRejectsUnsupportedGoVersionBeforeReadingCompilerSources(t *testing.T) {
-	for _, version := range []string{"go1.25.9", "go1.27.0"} {
+	for _, version := range []string{"go1.25.9", "go1.26.4", "go1.26.6", "go1.27.0"} {
 		t.Run(version, func(t *testing.T) {
 			fakeBin := t.TempDir()
 			fakeGo := filepath.Join(fakeBin, "go")
@@ -46,7 +46,7 @@ func TestPrepareRejectsUnsupportedGoVersionBeforeReadingCompilerSources(t *testi
 			t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 			_, err := Prepare(context.Background(), t.TempDir())
-			want := "requires Go 1.26.x, got " + version
+			want := "requires " + supportedGoVersion + ", got " + version
 			if err == nil || !strings.Contains(err.Error(), want) {
 				t.Fatalf("Prepare error = %v, want %q", err, want)
 			}
@@ -54,7 +54,71 @@ func TestPrepareRejectsUnsupportedGoVersionBeforeReadingCompilerSources(t *testi
 	}
 }
 
-func TestPatchInstalledGo126SwitchLowering(t *testing.T) {
+func TestPrepareFailsClosedForInvalidSetup(t *testing.T) {
+	t.Run("empty tool root", func(t *testing.T) {
+		if _, err := Prepare(context.Background(), ""); err == nil || !strings.Contains(err.Error(), "tool directory is empty") {
+			t.Fatalf("Prepare error = %v", err)
+		}
+	})
+
+	t.Run("go env failure", func(t *testing.T) {
+		fakeBin := t.TempDir()
+		fakeGo := filepath.Join(fakeBin, "go")
+		if err := os.WriteFile(fakeGo, []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", fakeBin)
+		if _, err := Prepare(context.Background(), t.TempDir()); err == nil || !strings.Contains(err.Error(), "query Go toolchain") {
+			t.Fatalf("Prepare error = %v", err)
+		}
+	})
+
+	t.Run("missing compiler source", func(t *testing.T) {
+		goroot := t.TempDir()
+		setFakeGoEnv(t, goroot, supportedGoVersion)
+		if _, err := Prepare(context.Background(), t.TempDir()); err == nil || !strings.Contains(err.Error(), "read Go "+supportedGoVersion+" switch lowering source") {
+			t.Fatalf("Prepare error = %v", err)
+		}
+	})
+
+	t.Run("incompatible compiler source", func(t *testing.T) {
+		goroot := t.TempDir()
+		switchDir := filepath.Join(goroot, "src", "cmd", "compile", "internal", "walk")
+		if err := os.MkdirAll(switchDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(switchDir, "switch.go"), []byte("package walk\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		setFakeGoEnv(t, goroot, supportedGoVersion)
+		if _, err := Prepare(context.Background(), t.TempDir()); err == nil || !strings.Contains(err.Error(), "compiler source is incompatible") {
+			t.Fatalf("Prepare error = %v", err)
+		}
+	})
+
+	t.Run("tool root is a file", func(t *testing.T) {
+		root := filepath.Join(t.TempDir(), "tool-root")
+		if err := os.WriteFile(root, []byte("not a directory"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Prepare(context.Background(), root); err == nil || !strings.Contains(err.Error(), "create compiler-aware tool directory") {
+			t.Fatalf("Prepare error = %v", err)
+		}
+	})
+}
+
+func setFakeGoEnv(t *testing.T, goroot, version string) {
+	t.Helper()
+	fakeBin := t.TempDir()
+	fakeGo := filepath.Join(fakeBin, "go")
+	script := "#!/bin/sh\nprintf '%s\\n' '" + goroot + "' '" + version + "'\n"
+	if err := os.WriteFile(fakeGo, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fakeBin)
+}
+
+func TestPatchInstalledGo1265SwitchLowering(t *testing.T) {
 	command := exec.Command("go", "env", "GOROOT", "GOVERSION")
 	command.Env = buildEnvironment(os.Environ())
 	output, err := command.Output()
@@ -62,8 +126,8 @@ func TestPatchInstalledGo126SwitchLowering(t *testing.T) {
 		t.Fatalf("go env: %v", err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	if len(lines) != 2 || !strings.HasPrefix(lines[1], "go1.26.") {
-		t.Skipf("installed toolchain is not Go 1.26.x: %q", strings.TrimSpace(string(output)))
+	if len(lines) != 2 || lines[1] != supportedGoVersion {
+		t.Skipf("installed toolchain is not %s: %q", supportedGoVersion, strings.TrimSpace(string(output)))
 	}
 	source, err := os.ReadFile(filepath.Join(lines[0], "src", "cmd", "compile", "internal", "walk", "switch.go"))
 	if err != nil {
