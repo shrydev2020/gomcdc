@@ -19,6 +19,7 @@ type buildContext struct {
 	evaluationsByDecision  map[cover.DecisionID][]cover.DecisionEvaluation
 	notEvaluatedByDecision map[cover.DecisionID]int
 	observationCounts      map[cover.ClauseID]map[cover.ClauseEventKind]int
+	selectedAlternatives   map[cover.ClauseID][]uint16
 	noMatchObservations    map[cover.SwitchID]int
 	packageEvidence        map[string]bool
 	astPackageEvidence     map[string]bool
@@ -42,7 +43,7 @@ func newBuildContext(input Input) *buildContext {
 	report := Report{
 		Version:         SchemaVersion,
 		Module:          input.ModulePath,
-		Run:             Run{Status: input.RunStatus, FailureKind: input.FailureKind, Complete: input.Complete},
+		Run:             Run{Status: input.RunStatus, FailureKind: input.FailureKind, Complete: input.Complete, Results: normalizeRunResults(input.Results)},
 		MeasurementMode: input.MeasurementMode,
 		Measurements:    cloneMeasurementRuns(input.Measurements),
 		Capabilities:    capabilities,
@@ -50,6 +51,7 @@ func newBuildContext(input Input) *buildContext {
 		Instrumentation: buildInstrumentationReport(input, capabilities),
 		Summary:         newSummary(input.Coverage),
 		Packages:        make([]PackageReport, 0),
+		Errors:          cloneReportErrors(input.Errors),
 	}
 
 	decisions := append([]cover.DecisionMetadata(nil), input.Decisions...)
@@ -95,6 +97,7 @@ func newBuildContext(input Input) *buildContext {
 	}
 
 	observationCounts := make(map[cover.ClauseID]map[cover.ClauseEventKind]int)
+	selectedAlternativeSets := make(map[cover.ClauseID]map[uint16]struct{})
 	noMatchObservations := make(map[cover.SwitchID]int)
 	for _, observation := range input.ClauseObservations {
 		if observation.Event == cover.ClauseNoMatchSelection {
@@ -105,10 +108,25 @@ func newBuildContext(input Input) *buildContext {
 			observationCounts[observation.ClauseID] = make(map[cover.ClauseEventKind]int)
 		}
 		observationCounts[observation.ClauseID][observation.Event]++
+		if observation.Event == cover.ClauseDirectSelection && observation.AlternativeKnown {
+			if selectedAlternativeSets[observation.ClauseID] == nil {
+				selectedAlternativeSets[observation.ClauseID] = make(map[uint16]struct{})
+			}
+			selectedAlternativeSets[observation.ClauseID][observation.AlternativeIndex] = struct{}{}
+		}
 		if clause, found := clauseByID[observation.ClauseID]; found && !input.ASTEvidenceIntegrityUnknown {
 			packageEvidence[clause.Package] = true
 			astPackageEvidence[clause.Package] = true
 		}
+	}
+	selectedAlternatives := make(map[cover.ClauseID][]uint16, len(selectedAlternativeSets))
+	for clauseID, indexes := range selectedAlternativeSets {
+		for index := range indexes {
+			selectedAlternatives[clauseID] = append(selectedAlternatives[clauseID], index)
+		}
+		sort.Slice(selectedAlternatives[clauseID], func(i, j int) bool {
+			return selectedAlternatives[clauseID][i] < selectedAlternatives[clauseID][j]
+		})
 	}
 
 	builders := make(map[string]*packageBuilder)
@@ -140,7 +158,47 @@ func newBuildContext(input Input) *buildContext {
 	return &buildContext{
 		report: report, decisions: decisions, clauses: clauses,
 		evaluationsByDecision: evaluationsByDecision, notEvaluatedByDecision: notEvaluatedByDecision,
-		observationCounts: observationCounts, noMatchObservations: noMatchObservations,
+		observationCounts: observationCounts, selectedAlternatives: selectedAlternatives, noMatchObservations: noMatchObservations,
 		packageEvidence: packageEvidence, astPackageEvidence: astPackageEvidence, builders: builders,
 	}
+}
+
+func normalizeRunResults(results RunResults) RunResults {
+	if results.Test == "" {
+		results.Test = ResultNotRun
+	}
+	if results.Measurement == "" {
+		results.Measurement = ResultNotRun
+	}
+	if results.Integrity == "" {
+		results.Integrity = ResultNotRun
+	}
+	if results.Strict == "" {
+		results.Strict = ResultNotRequested
+	}
+	if results.Threshold == "" {
+		results.Threshold = ResultNotRequested
+	}
+	return results
+}
+
+func cloneReportErrors(values []ReportError) []ReportError {
+	cloned := append(make([]ReportError, 0, len(values)), values...)
+	sort.Slice(cloned, func(i, j int) bool {
+		left, right := cloned[i], cloned[j]
+		if left.Phase != right.Phase {
+			return left.Phase < right.Phase
+		}
+		if left.Code != right.Code {
+			return left.Code < right.Code
+		}
+		if left.Package != right.Package {
+			return left.Package < right.Package
+		}
+		if left.Path != right.Path {
+			return left.Path < right.Path
+		}
+		return left.Message < right.Message
+	})
+	return cloned
 }

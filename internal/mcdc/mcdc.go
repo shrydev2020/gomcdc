@@ -28,8 +28,24 @@ var _ MCDCStrategy = UniqueCauseStrategy{}
 var _ MCDCStrategy = MaskingStrategy{}
 
 type analysisIssue struct {
-	status cover.CoverageStatus
-	reason string
+	outcome  cover.CoverageOutcome
+	support  cover.SupportStatus
+	analysis cover.AnalysisStatus
+	reason   string
+}
+
+func incompleteAnalysis(reason string) *analysisIssue {
+	return &analysisIssue{
+		outcome: cover.CoverageOutcomeUnknown, support: cover.SupportSupported,
+		analysis: cover.AnalysisIncomplete, reason: reason,
+	}
+}
+
+func unsupportedAnalysis(reason string) *analysisIssue {
+	return &analysisIssue{
+		outcome: cover.CoverageOutcomeUnknown, support: cover.SupportUnsupported,
+		analysis: cover.AnalysisComplete, reason: reason,
+	}
 }
 
 type preparedEvaluations struct {
@@ -79,7 +95,6 @@ func ValidateCompletedEvaluation(metadata cover.DecisionMetadata, evaluation cov
 func (UniqueCauseStrategy) Analyze(metadata cover.DecisionMetadata, evaluations []cover.DecisionEvaluation) cover.MCDCResult {
 	count, indexes, issue := conditionLayout(metadata, evaluations)
 	result := baseResult(metadata.ID, cover.CoverageMetricMCDCUnique, indexes)
-	defer enrichResult(&result)
 	if issue != nil {
 		applyIssue(&result, issue)
 		return result
@@ -108,12 +123,12 @@ func (UniqueCauseStrategy) Analyze(metadata cover.DecisionMetadata, evaluations 
 	for conditionPosition, target := range indexes {
 		conditionResult := &result.Conditions[conditionPosition]
 		if witness, covered := uniqueCauseWitness(prepared.evaluations, target); covered {
-			conditionResult.Status = cover.CoverageCovered
+			conditionResult.Outcome = cover.CoverageOutcomeCovered
 			conditionResult.Witness = witness
 		}
 		if conditionResult.Witness == nil {
 			if expressionStructureValid && !uniqueCauseStructurallyFeasible(metadata.ExpressionTree, target, count) {
-				conditionResult.Status = cover.CoveragePossiblyInfeasible
+				conditionResult.Analysis = cover.AnalysisInfeasible
 				conditionResult.Reason = "short-circuit evaluation prevents an equal-state Unique-Cause pair for this condition"
 			} else {
 				conditionResult.Reason = "no pair changes only the evaluated target condition and the decision result"
@@ -131,16 +146,12 @@ func (UniqueCauseStrategy) Analyze(metadata cover.DecisionMetadata, evaluations 
 func (MaskingStrategy) Analyze(metadata cover.DecisionMetadata, evaluations []cover.DecisionEvaluation) cover.MCDCResult {
 	count, indexes, issue := conditionLayout(metadata, evaluations)
 	result := baseResult(metadata.ID, cover.CoverageMetricMCDCMasking, indexes)
-	defer enrichResult(&result)
 	if issue != nil {
 		applyIssue(&result, issue)
 		return result
 	}
 	if metadata.ExpressionTree == nil {
-		applyIssue(&result, &analysisIssue{
-			status: cover.CoverageUnknown,
-			reason: "masking MC/DC requires a boolean expression tree",
-		})
+		applyIssue(&result, incompleteAnalysis("masking MC/DC requires a boolean expression tree"))
 		return result
 	}
 	if treeIssue := validateExpression(metadata.ExpressionTree, count); treeIssue != nil {
@@ -171,7 +182,7 @@ func (MaskingStrategy) Analyze(metadata cover.DecisionMetadata, evaluations []co
 					for _, secondCompletion := range completions[second] {
 						witness, covered := findMaskingWitness(metadata.ExpressionTree, left, right, target, firstCompletion.values, secondCompletion.values)
 						if covered {
-							conditionResult.Status = cover.CoverageCovered
+							conditionResult.Outcome = cover.CoverageOutcomeCovered
 							conditionResult.Witness = witness
 							break
 						}
@@ -187,7 +198,7 @@ func (MaskingStrategy) Analyze(metadata cover.DecisionMetadata, evaluations []co
 		}
 		if conditionResult.Witness == nil {
 			if !structurallyPivotal(metadata.ExpressionTree, target, count) {
-				conditionResult.Status = cover.CoveragePossiblyInfeasible
+				conditionResult.Analysis = cover.AnalysisInfeasible
 				conditionResult.Reason = "the boolean expression cannot make this condition pivotal"
 			} else {
 				conditionResult.Reason = "no pair makes the evaluated target pivotal in both completed vectors"
@@ -807,10 +818,9 @@ func conditionLayout(
 		seen := make([]bool, count)
 		for _, condition := range metadata.Conditions {
 			if int(condition.Index) >= count || seen[condition.Index] {
-				return count, indexesForCount(count), &analysisIssue{
-					status: cover.CoverageUnknown,
-					reason: "condition metadata indexes must be unique and contiguous from zero",
-				}
+				return count, indexesForCount(count), incompleteAnalysis(
+					"condition metadata indexes must be unique and contiguous from zero",
+				)
 			}
 			seen[condition.Index] = true
 		}
@@ -823,14 +833,13 @@ func conditionLayout(
 			return len(indexes), indexes, issue
 		}
 		if len(indexes) == 0 {
-			return 0, nil, &analysisIssue{status: cover.CoverageUnknown, reason: "decision has no atomic conditions"}
+			return 0, nil, incompleteAnalysis("decision has no atomic conditions")
 		}
 		for position, index := range indexes {
 			if int(index) != position {
-				return len(indexes), indexes, &analysisIssue{
-					status: cover.CoverageUnknown,
-					reason: "expression condition indexes must be contiguous from zero",
-				}
+				return len(indexes), indexes, incompleteAnalysis(
+					"expression condition indexes must be contiguous from zero",
+				)
 			}
 		}
 		return len(indexes), indexes, nil
@@ -846,14 +855,13 @@ func conditionLayout(
 			continue
 		}
 		if len(evaluation.Conditions) != count {
-			return count, indexesForCount(count), &analysisIssue{
-				status: cover.CoverageUnknown,
-				reason: "condition metadata is absent and evaluation vector lengths disagree",
-			}
+			return count, indexesForCount(count), incompleteAnalysis(
+				"condition metadata is absent and evaluation vector lengths disagree",
+			)
 		}
 	}
 	if count <= 0 {
-		return 0, nil, &analysisIssue{status: cover.CoverageUnknown, reason: "condition metadata is absent"}
+		return 0, nil, incompleteAnalysis("condition metadata is absent")
 	}
 	return count, indexesForCount(count), nil
 }
@@ -891,10 +899,10 @@ func inspectExpression(
 	visiting map[*cover.BooleanExpression]bool,
 ) *analysisIssue {
 	if expression == nil {
-		return &analysisIssue{status: cover.CoverageUnknown, reason: "boolean expression contains a nil operand"}
+		return incompleteAnalysis("boolean expression contains a nil operand")
 	}
 	if visiting[expression] {
-		return &analysisIssue{status: cover.CoverageUnknown, reason: "boolean expression contains a cycle"}
+		return incompleteAnalysis("boolean expression contains a cycle")
 	}
 	visiting[expression] = true
 	defer delete(visiting, expression)
@@ -902,36 +910,33 @@ func inspectExpression(
 	switch expression.Kind {
 	case cover.BooleanExpressionCondition:
 		if expression.Left != nil || expression.Right != nil {
-			return &analysisIssue{status: cover.CoverageUnknown, reason: "condition expression must be a leaf"}
+			return incompleteAnalysis("condition expression must be a leaf")
 		}
 		if _, duplicate := seen[expression.ConditionIndex]; duplicate {
-			return &analysisIssue{status: cover.CoverageUnknown, reason: "each atomic occurrence must have a unique condition index"}
+			return incompleteAnalysis("each atomic occurrence must have a unique condition index")
 		}
 		seen[expression.ConditionIndex] = struct{}{}
 		return nil
 	case cover.BooleanExpressionConstant:
 		if expression.Left != nil || expression.Right != nil {
-			return &analysisIssue{status: cover.CoverageUnknown, reason: "constant expression must be a leaf"}
+			return incompleteAnalysis("constant expression must be a leaf")
 		}
 		return nil
 	case cover.BooleanExpressionNot:
 		if expression.Left == nil || expression.Right != nil {
-			return &analysisIssue{status: cover.CoverageUnknown, reason: "not expression must have exactly one operand"}
+			return incompleteAnalysis("not expression must have exactly one operand")
 		}
 		return inspectExpression(expression.Left, seen, visiting)
 	case cover.BooleanExpressionAnd, cover.BooleanExpressionOr:
 		if expression.Left == nil || expression.Right == nil {
-			return &analysisIssue{status: cover.CoverageUnknown, reason: "and/or expression must have two operands"}
+			return incompleteAnalysis("and/or expression must have two operands")
 		}
 		if issue := inspectExpression(expression.Left, seen, visiting); issue != nil {
 			return issue
 		}
 		return inspectExpression(expression.Right, seen, visiting)
 	default:
-		return &analysisIssue{
-			status: cover.CoverageUnsupported,
-			reason: fmt.Sprintf("unsupported boolean expression kind %q", expression.Kind),
-		}
+		return unsupportedAnalysis(fmt.Sprintf("unsupported boolean expression kind %q", expression.Kind))
 	}
 }
 
@@ -941,17 +946,11 @@ func validateExpression(expression *cover.BooleanExpression, count int) *analysi
 		return issue
 	}
 	if len(indexes) != count {
-		return &analysisIssue{
-			status: cover.CoverageUnknown,
-			reason: "boolean expression and condition metadata have different condition counts",
-		}
+		return incompleteAnalysis("boolean expression and condition metadata have different condition counts")
 	}
 	for position, index := range indexes {
 		if int(index) != position {
-			return &analysisIssue{
-				status: cover.CoverageUnknown,
-				reason: "boolean expression condition indexes must be contiguous from zero",
-			}
+			return incompleteAnalysis("boolean expression condition indexes must be contiguous from zero")
 		}
 	}
 	return nil
@@ -1077,29 +1076,36 @@ func baseResult(decisionID cover.DecisionID, metric cover.CoverageMetric, indexe
 	for position, index := range indexes {
 		conditions[position] = cover.MCDCConditionResult{
 			ConditionIndex: index,
-			Status:         cover.CoverageNotCovered,
+			Outcome:        cover.CoverageOutcomeNotCovered,
+			Support:        cover.SupportSupported,
+			Analysis:       cover.AnalysisComplete,
 		}
 	}
 	return cover.MCDCResult{
-		DecisionID: decisionID,
-		Metric:     metric,
-		Status:     cover.CoverageNotCovered,
-		Conditions: conditions,
+		DecisionID: decisionID, Metric: metric,
+		Outcome: cover.CoverageOutcomeNotCovered, Support: cover.SupportSupported,
+		Analysis: cover.AnalysisComplete, Conditions: conditions,
 	}
 }
 
 func applyIssue(result *cover.MCDCResult, issue *analysisIssue) {
-	result.Status = issue.status
+	result.Outcome = issue.outcome
+	result.Support = issue.support
+	result.Analysis = issue.analysis
 	result.Reason = issue.reason
 	for index := range result.Conditions {
-		result.Conditions[index].Status = issue.status
+		result.Conditions[index].Outcome = issue.outcome
+		result.Conditions[index].Support = issue.support
+		result.Conditions[index].Analysis = issue.analysis
 		result.Conditions[index].Reason = issue.reason
 	}
 }
 
 func finishResult(result *cover.MCDCResult) {
 	if len(result.Conditions) == 0 {
-		result.Status = cover.CoverageUnknown
+		result.Outcome = cover.CoverageOutcomeUnknown
+		result.Support = cover.SupportSupported
+		result.Analysis = cover.AnalysisIncomplete
 		if result.Reason == "" {
 			result.Reason = "decision has no atomic conditions"
 		}
@@ -1107,50 +1113,51 @@ func finishResult(result *cover.MCDCResult) {
 	}
 	allCovered := true
 	hasUnsupported := false
+	hasUnknownSupport := false
+	hasAnalysisIncomplete := false
 	hasNotCovered := false
 	hasPossiblyInfeasible := false
 	for _, condition := range result.Conditions {
-		allCovered = allCovered && condition.Status == cover.CoverageCovered
-		hasUnsupported = hasUnsupported || condition.Status == cover.CoverageUnsupported
-		hasNotCovered = hasNotCovered || condition.Status == cover.CoverageNotCovered
-		hasPossiblyInfeasible = hasPossiblyInfeasible || condition.Status == cover.CoveragePossiblyInfeasible
+		allCovered = allCovered && condition.Outcome == cover.CoverageOutcomeCovered &&
+			condition.Support == cover.SupportSupported && condition.Analysis == cover.AnalysisComplete
+		hasUnsupported = hasUnsupported || condition.Support == cover.SupportUnsupported
+		hasUnknownSupport = hasUnknownSupport || condition.Support == cover.SupportUnknown
+		hasAnalysisIncomplete = hasAnalysisIncomplete || condition.Analysis == cover.AnalysisIncomplete
+		hasNotCovered = hasNotCovered || condition.Outcome == cover.CoverageOutcomeNotCovered &&
+			condition.Analysis == cover.AnalysisComplete
+		hasPossiblyInfeasible = hasPossiblyInfeasible || condition.Analysis == cover.AnalysisInfeasible
 	}
 	switch {
 	case allCovered:
-		result.Status = cover.CoverageCovered
+		result.Outcome = cover.CoverageOutcomeCovered
+		result.Support = cover.SupportSupported
+		result.Analysis = cover.AnalysisComplete
 	case hasUnsupported:
-		result.Status = cover.CoverageUnsupported
+		result.Outcome = cover.CoverageOutcomeUnknown
+		result.Support = cover.SupportUnsupported
+		result.Analysis = cover.AnalysisComplete
+	case hasUnknownSupport:
+		result.Outcome = cover.CoverageOutcomeUnknown
+		result.Support = cover.SupportUnknown
+		result.Analysis = cover.AnalysisIncomplete
+	case hasAnalysisIncomplete:
+		result.Outcome = cover.CoverageOutcomeUnknown
+		result.Support = cover.SupportSupported
+		result.Analysis = cover.AnalysisIncomplete
 	case hasNotCovered:
-		result.Status = cover.CoverageNotCovered
+		result.Outcome = cover.CoverageOutcomeNotCovered
+		result.Support = cover.SupportSupported
+		result.Analysis = cover.AnalysisComplete
 	case hasPossiblyInfeasible:
-		result.Status = cover.CoveragePossiblyInfeasible
+		result.Outcome = cover.CoverageOutcomeNotCovered
+		result.Support = cover.SupportSupported
+		result.Analysis = cover.AnalysisInfeasible
 		if result.Reason == "" {
 			result.Reason = "one or more MC/DC obligations are structurally infeasible under the selected strategy"
 		}
 	default:
-		result.Status = cover.CoverageNotCovered
-	}
-}
-
-func enrichResult(result *cover.MCDCResult) {
-	result.Outcome, result.Support, result.Analysis = decomposeStatus(result.Status)
-	for index := range result.Conditions {
-		result.Conditions[index].Outcome, result.Conditions[index].Support, result.Conditions[index].Analysis =
-			decomposeStatus(result.Conditions[index].Status)
-	}
-}
-
-func decomposeStatus(status cover.CoverageStatus) (cover.CoverageOutcome, cover.SupportStatus, cover.AnalysisStatus) {
-	switch status {
-	case cover.CoverageCovered:
-		return cover.CoverageOutcomeCovered, cover.SupportSupported, cover.AnalysisComplete
-	case cover.CoverageNotCovered:
-		return cover.CoverageOutcomeNotCovered, cover.SupportSupported, cover.AnalysisComplete
-	case cover.CoverageUnsupported:
-		return cover.CoverageOutcomeUnknown, cover.SupportUnsupported, cover.AnalysisComplete
-	case cover.CoveragePossiblyInfeasible:
-		return cover.CoverageOutcomeNotCovered, cover.SupportSupported, cover.AnalysisInfeasible
-	default:
-		return cover.CoverageOutcomeUnknown, cover.SupportUnknown, cover.AnalysisIncomplete
+		result.Outcome = cover.CoverageOutcomeUnknown
+		result.Support = cover.SupportUnknown
+		result.Analysis = cover.AnalysisIncomplete
 	}
 }

@@ -8,3 +8,27 @@ func GeneratedGate(a, b bool) bool {
 	}
 	return false
 }
+
+type userHooks struct{}
+
+func (userHooks) CompilerDirectClause(uint64, uint64, uint64) {
+	userMarkerCalls++
+}
+
+var (
+	userMarker      userHooks
+	userMarkerCalls int
+)
+
+// UserNamedCompilerMarker proves that the compiler-aware producer recognizes
+// the injected runtime package, not a user method with the same suffix.
+func UserNamedCompilerMarker(value int) int {
+	userMarkerCalls = 0
+	switch value {
+	case 1:
+		fallthrough
+	case 2:
+		userMarker.CompilerDirectClause(1, 2, 0)
+	}
+	return userMarkerCalls
+}

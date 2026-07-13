@@ -61,6 +61,15 @@ func TestIntegratedFixtureReportsAllMetricsAcrossPackages(t *testing.T) {
 	if all.Run.Status != cover.RunPassed || !all.Run.Complete {
 		t.Fatalf("run = %#v", all.Run)
 	}
+	if all.Run.Results != (report.RunResults{
+		Test: report.ResultPassed, Measurement: report.ResultPassed, Integrity: report.ResultPassed,
+		Strict: report.ResultNotRequested, Threshold: report.ResultNotRequested,
+	}) {
+		t.Fatalf("independent run results = %#v", all.Run.Results)
+	}
+	if len(all.Errors) != 0 {
+		t.Fatalf("successful report errors = %#v", all.Errors)
+	}
 	if all.MeasurementMode != report.MeasurementDualRunStandardCover || len(all.Measurements) != 2 {
 		t.Fatalf("dual measurement provenance = mode %q runs %#v", all.MeasurementMode, all.Measurements)
 	}
@@ -72,7 +81,7 @@ func TestIntegratedFixtureReportsAllMetricsAcrossPackages(t *testing.T) {
 			t.Fatalf("measurement %q shared package status = %q, want %q", measurement.Name, got, gotest.PackageSkipped)
 		}
 	}
-	if all.Capabilities.Status(backend.CapabilityDirectCaseSelection) != backend.CapabilityUnsupportedByBackend || all.Instrumentation.Total.Discovered == 0 || !all.Instrumentation.HasGaps() {
+	if all.Capabilities.Status(backend.CapabilityDirectCaseSelection) != backend.CapabilitySupported || all.Instrumentation.Total.Discovered == 0 || all.Instrumentation.HasGaps() {
 		t.Fatalf("backend capability/instrumentation accounting = capabilities %#v instrumentation %#v", all.Capabilities, all.Instrumentation)
 	}
 	if len(all.Packages) != 4 {
@@ -82,11 +91,7 @@ func TestIntegratedFixtureReportsAllMetricsAcrossPackages(t *testing.T) {
 		if !metric.Enabled {
 			t.Fatalf("default all metric %s = %#v", name, metric)
 		}
-		if name == "switchClauseSelection" || name == "typeSwitchClauseSelection" {
-			if metric.Total != 0 || metric.Unsupported == 0 {
-				t.Fatalf("unsupported selection metric %s = %#v", name, metric)
-			}
-		} else if metric.Total == 0 {
+		if metric.Total == 0 {
 			t.Fatalf("default all metric %s has empty denominator: %#v", name, metric)
 		}
 	}
@@ -97,6 +102,19 @@ func TestIntegratedFixtureReportsAllMetricsAcrossPackages(t *testing.T) {
 	}
 
 	allow := findDecisionInFunction(t, all, "Allow", "a && b")
+	if len(allow.DecisionID) != 18 || !strings.HasPrefix(allow.DecisionID, "0x") {
+		t.Fatalf("Allow decision ID = %q", allow.DecisionID)
+	}
+	conditionIDs := make(map[string]struct{}, len(allow.Conditions))
+	for _, condition := range allow.Conditions {
+		if len(condition.ConditionID) != 18 || !strings.HasPrefix(condition.ConditionID, "0x") {
+			t.Fatalf("condition ID = %q", condition.ConditionID)
+		}
+		if _, duplicate := conditionIDs[condition.ConditionID]; duplicate {
+			t.Fatalf("duplicate condition ID = %q", condition.ConditionID)
+		}
+		conditionIDs[condition.ConditionID] = struct{}{}
+	}
 	if !allow.DecisionCoverage.True || !allow.DecisionCoverage.False {
 		t.Fatalf("Allow decision outcomes = %#v", allow.DecisionCoverage)
 	}
@@ -110,9 +128,12 @@ func TestIntegratedFixtureReportsAllMetricsAcrossPackages(t *testing.T) {
 	if allow.Conditions[0].MCDCMasking.Witness == nil {
 		t.Fatal("masking MC/DC witness is missing")
 	}
-	generated := findDecisionInFunction(t, all, "GeneratedGate", "a && b")
-	if !generated.DecisionCoverage.True || !generated.DecisionCoverage.False {
-		t.Fatalf("user-generated source decision outcomes = %#v", generated.DecisionCoverage)
+	for _, packageReport := range all.Packages {
+		for _, file := range packageReport.Files {
+			if file.Path == "allow/generated.go" {
+				t.Fatalf("generated source was retained in the target set: %#v", file)
+			}
+		}
 	}
 	initFunctions := 0
 	for _, function := range findFile(t, all, "allow/init.go").Functions {
@@ -145,6 +166,25 @@ func TestIntegratedFixtureReportsAllMetricsAcrossPackages(t *testing.T) {
 	}
 	if !hasCoveredSelectClause(all) {
 		t.Fatal("select clause body coverage is missing")
+	}
+	expressionSwitch := findFunction(t, all, "ExpressionSwitch")
+	if len(expressionSwitch.Clauses) != 3 {
+		t.Fatalf("ExpressionSwitch clauses = %#v", expressionSwitch.Clauses)
+	}
+	fallthroughOnly := expressionSwitch.Clauses[1]
+	if fallthroughOnly.BodyCoverage.Covered != 1 || fallthroughOnly.SelectionCoverage.Covered != 0 || fallthroughOnly.DirectSelections != 0 {
+		t.Fatalf("fallthrough was conflated with direct selection: %#v", fallthroughOnly)
+	}
+	noDefault := findFunction(t, all, "NoDefault")
+	if got := noDefault.Clauses[0].SelectedAlternatives; len(got) != 2 || got[0] != 0 || got[1] != 1 {
+		t.Fatalf("expression case alternative evidence = %#v", got)
+	}
+	typeSwitch := findFunction(t, all, "TypeSwitch")
+	if got := typeSwitch.Clauses[1].SelectedAlternatives; len(got) != 2 || got[0] != 0 || got[1] != 1 {
+		t.Fatalf("type case alternative evidence = %#v", got)
+	}
+	if len(noDefault.NoMatches) != 1 || noDefault.NoMatches[0].SelectionCoverage.Covered != 1 {
+		t.Fatalf("no-match dispatch evidence = %#v", noDefault.NoMatches)
 	}
 	for _, packageReport := range all.Packages {
 		for _, file := range packageReport.Files {
@@ -188,7 +228,7 @@ func TestIntegratedFixtureReportsAllMetricsAcrossPackages(t *testing.T) {
 func TestThresholdFailureHasDistinctExitCode(t *testing.T) {
 	configureIntegrationEnvironment(t)
 	root := fixturePath(t, "integration")
-	built, stderr, code := runFixture(t, root, "--coverage=decision", "--include-tests", "--fail-under-decision=100", "--format=json", "./...")
+	built, stderr, code := runFixture(t, root, "--coverage=decision", "--include-tests", "--strict", "--fail-under-decision=100", "--format=json", "./...")
 	if code != ExitCoverageThreshold {
 		t.Fatalf("exit = %d, want %d\nstderr:\n%s", code, ExitCoverageThreshold, stderr)
 	}
@@ -197,6 +237,37 @@ func TestThresholdFailureHasDistinctExitCode(t *testing.T) {
 	}
 	if !hasTestSourceDecision(built) {
 		t.Fatal("--include-tests did not add _test.go decisions")
+	}
+	if len(built.Errors) != 1 || built.Errors[0].Phase != "threshold" || built.Errors[0].Code != "coverage-threshold-failed" {
+		t.Fatalf("threshold report errors = %#v", built.Errors)
+	}
+	if built.Run.Results.Test != report.ResultPassed || built.Run.Results.Measurement != report.ResultPassed ||
+		built.Run.Results.Integrity != report.ResultPassed || built.Run.Results.Strict != report.ResultPassed ||
+		built.Run.Results.Threshold != report.ResultFailed {
+		t.Fatalf("threshold result axes = %#v", built.Run.Results)
+	}
+}
+
+func TestCompilerAwareMeasurementSupportsWorkDirWithSpaces(t *testing.T) {
+	configureIntegrationEnvironment(t)
+	root := fixturePath(t, "integration")
+	parent := filepath.Join(t.TempDir(), "workspace with spaces")
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	built, stderr, code := runFixture(
+		t,
+		root,
+		"--coverage=switch-clause-selection",
+		"--workdir="+parent,
+		"--format=json",
+		"./routing",
+	)
+	if code != ExitSuccess {
+		t.Fatalf("compiler-aware measurement with spaced workdir exit=%d\nstderr:\n%s", code, stderr)
+	}
+	if built.Summary.SwitchClauseSelection.Covered == 0 {
+		t.Fatalf("compiler-aware selection evidence is missing: %#v", built.Summary.SwitchClauseSelection)
 	}
 }
 
@@ -218,12 +289,33 @@ func hasTestSourceDecision(built report.Report) bool {
 func TestBuildFailureStillProducesPartialMultiPackageReport(t *testing.T) {
 	configureIntegrationEnvironment(t)
 	root := fixturePath(t, "partial")
-	built, stderr, code := runFixture(t, root, "--format=json", "./...")
+	built, stderr, code := runFixture(
+		t, root,
+		"--strict", "--fail-under-switch-clause-selection=100", "--format=json", "./...",
+	)
 	if code != ExitMeasurementFailed {
 		t.Fatalf("exit = %d, want measurement failure %d\nstderr:\n%s", code, ExitMeasurementFailed, stderr)
 	}
 	if built.Run.Status != cover.RunFailed || built.Run.FailureKind != cover.RunFailureBuild || built.Run.Complete {
 		t.Fatalf("partial run = %#v", built.Run)
+	}
+	hasAnalysisError := false
+	for _, reportError := range built.Errors {
+		hasAnalysisError = hasAnalysisError || reportError.Phase == "analysis"
+	}
+	if !hasAnalysisError {
+		t.Fatalf("partial report omitted its analysis error: %#v", built.Errors)
+	}
+	if built.Run.Results != (report.RunResults{
+		Test: report.ResultFailed, Measurement: report.ResultFailed, Integrity: report.ResultPassed,
+		Strict: report.ResultFailed, Threshold: report.ResultFailed,
+	}) {
+		t.Fatalf("combined measurement/strict/threshold results = %#v", built.Run.Results)
+	}
+	for _, code := range []string{"strict-coverage-gap", "coverage-threshold-failed"} {
+		if !hasReportErrorCode(built, code) {
+			t.Fatalf("partial report errors omit %q: %#v", code, built.Errors)
+		}
 	}
 	good := findPackage(t, built, "example.test/gomcdc-partial/good")
 	if !good.Evidence || good.Summary.Decision.Covered != good.Summary.Decision.Total {
@@ -239,6 +331,115 @@ func TestBuildFailureStillProducesPartialMultiPackageReport(t *testing.T) {
 	if malformed.Status != "build-failed" || malformed.Evidence {
 		t.Fatalf("malformed package = %#v", malformed)
 	}
+}
+
+func TestFailedAndInterruptedRunsRetainEvidenceAndIndependentResults(t *testing.T) {
+	configureIntegrationEnvironment(t)
+	root := fixturePath(t, "failure")
+
+	t.Run("test failure takes precedence over threshold", func(t *testing.T) {
+		t.Setenv("GOMCDC_FAILURE_MODE", "fail")
+		built, stderr, code := runFixture(
+			t, root,
+			"--coverage=decision", "--strict", "--fail-under-decision=100", "--format=json", "./unstable",
+		)
+		if code != ExitTestsFailed {
+			t.Fatalf("exit=%d, want %d\nstderr:\n%s", code, ExitTestsFailed, stderr)
+		}
+		wantResults := report.RunResults{
+			Test: report.ResultFailed, Measurement: report.ResultPassed, Integrity: report.ResultPassed,
+			Strict: report.ResultPassed, Threshold: report.ResultFailed,
+		}
+		if built.Run.Status != cover.RunFailed || built.Run.FailureKind != cover.RunFailureTest || built.Run.Complete || built.Run.Results != wantResults {
+			t.Fatalf("failed run = %#v", built.Run)
+		}
+		assertPartialDecisionEvidence(t, built)
+		for _, code := range []string{"go-test-test", "coverage-threshold-failed"} {
+			if !hasReportErrorCode(built, code) {
+				t.Fatalf("report errors omit %q: %#v", code, built.Errors)
+			}
+		}
+	})
+
+	t.Run("truncated tail is recoverable after test failure", func(t *testing.T) {
+		t.Setenv("GOMCDC_FAILURE_MODE", "truncate")
+		built, stderr, code := runFixture(t, root, "--coverage=decision", "--format=json", "./unstable")
+		if code != ExitTestsFailed {
+			t.Fatalf("exit=%d, want %d\nstderr:\n%s", code, ExitTestsFailed, stderr)
+		}
+		if built.Run.Results.Test != report.ResultFailed || built.Run.Results.Integrity != report.ResultPassed {
+			t.Fatalf("truncated-tail results = %#v", built.Run.Results)
+		}
+		assertPartialDecisionEvidence(t, built)
+		if !hasReportErrorCode(built, "runtime-recoverable-interruption") {
+			t.Fatalf("recoverable diagnostic is missing: %#v", built.Errors)
+		}
+	})
+
+	t.Run("integrity failure takes precedence over test and threshold", func(t *testing.T) {
+		t.Setenv("GOMCDC_FAILURE_MODE", "corrupt")
+		built, stderr, code := runFixture(
+			t, root,
+			"--coverage=decision", "--fail-under-decision=100", "--format=json", "./unstable",
+		)
+		if code != ExitMeasurementFailed {
+			t.Fatalf("exit=%d, want %d\nstderr:\n%s", code, ExitMeasurementFailed, stderr)
+		}
+		wantResults := report.RunResults{
+			Test: report.ResultFailed, Measurement: report.ResultPassed, Integrity: report.ResultFailed,
+			Strict: report.ResultNotRequested, Threshold: report.ResultFailed,
+		}
+		if built.Run.Results != wantResults {
+			t.Fatalf("integrity-failure results = %#v", built.Run.Results)
+		}
+		if built.Summary.Decision.Covered != 0 || built.Summary.Decision.Total != 0 || built.Summary.Decision.Unknown != 2 {
+			t.Fatalf("corrupt evidence was reported as coverage: %#v", built.Summary.Decision)
+		}
+		for _, code := range []string{"runtime-integrity-error", "go-test-test", "coverage-threshold-failed"} {
+			if !hasReportErrorCode(built, code) {
+				t.Fatalf("report errors omit %q: %#v", code, built.Errors)
+			}
+		}
+	})
+
+	t.Run("timeout remains distinct from ordinary test failure", func(t *testing.T) {
+		t.Setenv("GOMCDC_FAILURE_MODE", "timeout")
+		built, stderr, code := runFixture(
+			t, root,
+			"--coverage=decision", "--strict", "--fail-under-decision=100", "--format=json", "./unstable",
+			"--", "-test.timeout=250ms",
+		)
+		if code != ExitTestsFailed {
+			t.Fatalf("exit=%d, want %d\nstderr:\n%s", code, ExitTestsFailed, stderr)
+		}
+		wantResults := report.RunResults{
+			Test: report.ResultTimeout, Measurement: report.ResultPassed, Integrity: report.ResultPassed,
+			Strict: report.ResultPassed, Threshold: report.ResultFailed,
+		}
+		if built.Run.Status != cover.RunTimeout || built.Run.FailureKind != cover.RunFailureTimeout || built.Run.Results != wantResults {
+			t.Fatalf("timeout run = %#v", built.Run)
+		}
+		assertPartialDecisionEvidence(t, built)
+		if !hasReportErrorCode(built, "go-test-timeout") {
+			t.Fatalf("timeout error is missing: %#v", built.Errors)
+		}
+	})
+}
+
+func assertPartialDecisionEvidence(t *testing.T, built report.Report) {
+	t.Helper()
+	if built.Summary.Decision.Covered != 1 || built.Summary.Decision.Total != 2 || built.Summary.Decision.Unknown != 0 {
+		t.Fatalf("partial decision evidence = %#v", built.Summary.Decision)
+	}
+}
+
+func hasReportErrorCode(built report.Report, code string) bool {
+	for _, item := range built.Errors {
+		if item.Code == code {
+			return true
+		}
+	}
+	return false
 }
 
 func TestValidationDropsImpossibleCompletedEvidence(t *testing.T) {
@@ -306,20 +507,26 @@ func TestValidationKeepsConditionlessSwitchNotEvaluatedEvidence(t *testing.T) {
 	}
 }
 
-func TestRejectsOverlayFromExplicitFlagsAndGOFLAGS(t *testing.T) {
+func TestRejectsMeasurementOwnedFlagsFromExplicitFlagsAndGOFLAGS(t *testing.T) {
 	for _, test := range []struct {
 		name    string
 		goFlags string
 		args    []string
+		want    string
 	}{
-		{name: "explicit", args: []string{"test", ".", "--", "-overlay=/tmp/overlay.json"}},
-		{name: "GOFLAGS", goFlags: `-tags=integration "-overlay=/tmp/a b.json"`, args: []string{"test", "."}},
+		{name: "explicit-overlay", args: []string{"test", ".", "--", "-overlay=/tmp/overlay.json"}, want: "-overlay"},
+		{name: "GOFLAGS-overlay", goFlags: `-tags=integration "-overlay=/tmp/a b.json"`, args: []string{"test", "."}, want: "-overlay"},
+		{name: "explicit-toolexec", args: []string{"test", ".", "--", "-toolexec=/tmp/tool"}, want: "-toolexec"},
+		{name: "GOFLAGS-toolexec", goFlags: "-toolexec=/tmp/tool", args: []string{"test", "."}, want: "-toolexec"},
+		{name: "explicit-count", args: []string{"test", ".", "--", "-count=2"}, want: "-count"},
+		{name: "GOFLAGS-coverprofile", goFlags: "-coverprofile=user.out", args: []string{"test", "."}, want: "-coverprofile"},
+		{name: "explicit-json", args: []string{"test", ".", "--", "-json=false"}, want: "-json"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Setenv("GOFLAGS", test.goFlags)
 			var stdout, stderr bytes.Buffer
 			code := runAt(context.Background(), t.TempDir(), test.args, &stdout, &stderr)
-			if code != ExitInvalidUsage || !strings.Contains(stderr.String(), "-overlay is unsupported") {
+			if code != ExitInvalidUsage || !strings.Contains(stderr.String(), test.want) {
 				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 			}
 		})
@@ -363,6 +570,20 @@ func TestRuntimeDiagnosticSeverityDistinguishesInterruptionFromCorruption(t *tes
 	failed.RuntimeDiagnostics = []string{"disk unavailable"}
 	if !runtimeDiagnosticsInvalidate(nil, failed) {
 		t.Fatal("runtime recorder failure did not invalidate coverage")
+	}
+}
+
+func TestRuntimeDiagnosticReportMessageDoesNotExposeEventDetails(t *testing.T) {
+	t.Parallel()
+	for _, severity := range []runtimecov.DiagnosticSeverity{
+		runtimecov.DiagnosticRecoverable,
+		runtimecov.DiagnosticIntegrity,
+		"future-severity",
+	} {
+		message := runtimeDiagnosticReportMessage(severity)
+		if message == "" || strings.Contains(message, "/") {
+			t.Fatalf("report message for %q = %q", severity, message)
+		}
 	}
 }
 
@@ -472,6 +693,21 @@ func findDecisionInFunction(t *testing.T, built report.Report, functionName, exp
 	}
 	t.Fatalf("decision %s:%q not found", functionName, expression)
 	return report.DecisionReport{}
+}
+
+func findFunction(t *testing.T, built report.Report, name string) report.FunctionReport {
+	t.Helper()
+	for _, packageReport := range built.Packages {
+		for _, file := range packageReport.Files {
+			for _, function := range file.Functions {
+				if function.Name == name {
+					return function
+				}
+			}
+		}
+	}
+	t.Fatalf("function %q not found", name)
+	return report.FunctionReport{}
 }
 
 func hasAbortedEvaluation(built report.Report) bool {

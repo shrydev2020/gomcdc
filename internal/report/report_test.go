@@ -2,6 +2,7 @@ package report_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"reflect"
 	"slices"
 	"strings"
@@ -52,8 +53,16 @@ func TestBuildLeavesHTMLSourceProjectionToWriteHTML(t *testing.T) {
 		t.Fatal("Build attached an HTML-only source projection")
 	}
 	var html bytes.Buffer
-	if err := report.WriteHTML(&html, input); err != nil {
-		t.Fatalf("WriteHTML: %v", err)
+	projected := report.WithSourceViews(built, input.SourceFiles)
+	if source := built.Packages[0].Files[0].Source; source != nil {
+		t.Fatal("WithSourceViews mutated its input report")
+	}
+	cleared := report.WithSourceViews(projected, nil)
+	if source := cleared.Packages[0].Files[0].Source; source != nil {
+		t.Fatal("WithSourceViews retained a stale source projection")
+	}
+	if err := report.WriteHTMLReport(&html, projected); err != nil {
+		t.Fatalf("WriteHTMLReport: %v", err)
 	}
 	if !strings.Contains(html.String(), "package p") {
 		t.Fatal("WriteHTML omitted the source projection")
@@ -65,6 +74,147 @@ func TestBuildLeavesHTMLSourceProjectionToWriteHTML(t *testing.T) {
 	}
 	if strings.Contains(html.String(), "source-view-$pi-$fi") {
 		t.Fatal("WriteHTML leaked unexpanded template variables into radio names")
+	}
+}
+
+func TestJSONAlwaysCarriesTypedErrorsWithoutSourceSnapshot(t *testing.T) {
+	t.Parallel()
+	input := report.Input{
+		ModulePath: "example.com/m",
+		SourceFiles: []report.SourceFileInput{{
+			PackagePath: "example.com/m/p", Path: "p.go", Source: []byte("private source sentinel"),
+		}},
+		Errors: []report.ReportError{{
+			Phase: "analysis", Code: "source-analysis-failed", Message: "source analysis did not complete",
+			Package: "example.com/m/p", Path: "p.go",
+		}},
+	}
+	encoded, err := report.RenderJSON(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	for _, required := range []string{`"errors": [`, `"phase": "analysis"`, `"path": "p.go"`} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("JSON missing %q:\n%s", required, text)
+		}
+	}
+	if strings.Contains(text, "private source sentinel") {
+		t.Fatal("JSON leaked the HTML source snapshot")
+	}
+	empty, err := report.RenderJSON(report.Input{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(empty), `"errors": []`) {
+		t.Fatalf("empty JSON report omitted its errors array:\n%s", empty)
+	}
+}
+
+func TestJSONSchemaUsesExactSpecificationKeys(t *testing.T) {
+	t.Parallel()
+	encoded, err := report.RenderJSON(report.Input{
+		Coverage: config.AllCoverage(),
+		Errors: []report.ReportError{{
+			Phase: "test", Code: "fixture", Message: "fixture", Package: "example.com/m/p", Path: "p.go",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &root); err != nil {
+		t.Fatal(err)
+	}
+	assertJSONKeys(t, "root", root, []string{
+		"version", "module", "run", "measurementMode", "measurements",
+		"capabilities", "backendCapabilities", "instrumentationCoverage",
+		"summary", "packages", "errors",
+	})
+	var run map[string]json.RawMessage
+	if err := json.Unmarshal(root["run"], &run); err != nil {
+		t.Fatal(err)
+	}
+	assertJSONKeys(t, "run", run, []string{"status", "failureKind", "complete", "results"})
+	var results map[string]json.RawMessage
+	if err := json.Unmarshal(run["results"], &results); err != nil {
+		t.Fatal(err)
+	}
+	assertJSONKeys(t, "run.results", results, []string{"test", "measurement", "integrity", "strict", "threshold"})
+	var resultValues map[string]report.ResultStatus
+	if err := json.Unmarshal(run["results"], &resultValues); err != nil {
+		t.Fatal(err)
+	}
+	if resultValues["test"] != report.ResultNotRun || resultValues["strict"] != report.ResultNotRequested {
+		t.Fatalf("run.results defaults are outside the D28 enum: %#v", resultValues)
+	}
+	var summary map[string]json.RawMessage
+	if err := json.Unmarshal(root["summary"], &summary); err != nil {
+		t.Fatal(err)
+	}
+	assertJSONKeys(t, "summary", summary, []string{
+		"statement", "function", "decision", "switchClauseBody", "typeSwitchClauseBody",
+		"selectClauseBody", "switchClauseSelection", "typeSwitchClauseSelection",
+		"condition", "mcdcUnique", "mcdcMasking",
+	})
+	var metric map[string]json.RawMessage
+	if err := json.Unmarshal(summary["decision"], &metric); err != nil {
+		t.Fatal(err)
+	}
+	assertJSONKeys(t, "summary.decision", metric, []string{
+		"enabled", "covered", "total", "percentage", "unsupported", "unknown", "infeasible", "analysisIncomplete",
+	})
+	var instrumentation map[string]json.RawMessage
+	if err := json.Unmarshal(root["instrumentationCoverage"], &instrumentation); err != nil {
+		t.Fatal(err)
+	}
+	assertJSONKeys(t, "instrumentationCoverage", instrumentation, []string{"total", "metrics"})
+	var instrumentationTotal map[string]json.RawMessage
+	if err := json.Unmarshal(instrumentation["total"], &instrumentationTotal); err != nil {
+		t.Fatal(err)
+	}
+	assertJSONKeys(t, "instrumentationCoverage.total", instrumentationTotal, []string{
+		"discovered", "supported", "instrumented", "unsupported", "unknown", "percentage",
+	})
+	var errors []map[string]json.RawMessage
+	if err := json.Unmarshal(root["errors"], &errors); err != nil {
+		t.Fatal(err)
+	}
+	if len(errors) != 1 {
+		t.Fatalf("errors length = %d, want 1", len(errors))
+	}
+	assertJSONKeys(t, "errors[0]", errors[0], []string{"phase", "code", "message", "package", "path"})
+}
+
+func assertJSONKeys(t *testing.T, name string, value map[string]json.RawMessage, want []string) {
+	t.Helper()
+	got := make([]string, 0, len(value))
+	for key := range value {
+		got = append(got, key)
+	}
+	slices.Sort(got)
+	want = slices.Clone(want)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("%s keys = %v, want %v", name, got, want)
+	}
+}
+
+func TestMCDCAnalysisIncompleteIsSeparateFromUnknownSupport(t *testing.T) {
+	t.Parallel()
+	decision := singleConditionDecision(99, "example.com/m/p", "p.go", "Malformed")
+	decision.ExpressionTree = nil
+	built := report.Build(report.Input{
+		ModulePath: "example.com/m",
+		Coverage:   config.CoverageSet{config.MetricMCDCMasking: true},
+		Decisions:  []cover.DecisionMetadata{decision},
+		PackageStatuses: map[string]string{
+			"example.com/m/p": "passed",
+		},
+	})
+	metric := built.Summary.MCDCMasking
+	if metric.AnalysisIncomplete != 1 || metric.Unknown != 0 || metric.Total != 0 {
+		t.Fatalf("MC/DC analysis-incomplete summary = %#v", metric)
 	}
 }
 
@@ -132,7 +282,7 @@ func TestANDShortCircuitDistinguishesUniqueAndMasking(t *testing.T) {
 	}
 
 	text := report.RenderText(input)
-	for _, required := range []string{"Unique-Cause MC/DC", "Masking MC/DC", "witness=", "[false,not evaluated] -> false", "[true,true] -> true", "completions=([false,true] [true,true])"} {
+	for _, required := range []string{"Unique-Cause MC/DC", "Masking MC/DC", "witness=", "[false,not-evaluated] -> false", "[true,true] -> true", "completions=([false,true] [true,true])"} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("text report missing %q:\n%s", required, text)
 		}
@@ -374,7 +524,7 @@ func TestProducerIntegrityFailureForcesSurvivingEvidenceToUnknown(t *testing.T) 
 	}
 }
 
-func TestClauseCoverageUsesBodyEvidenceAndNeverInfersSelection(t *testing.T) {
+func TestClauseCoverageKeepsBodyAndSelectionEvidenceDistinct(t *testing.T) {
 	t.Parallel()
 
 	clauses := []cover.ClauseMetadata{
@@ -395,14 +545,15 @@ func TestClauseCoverageUsesBodyEvidenceAndNeverInfersSelection(t *testing.T) {
 	got := built.Packages[0].Files[0].Functions[0].Clauses
 	assertMetric(t, "switch clause body", built.Summary.SwitchClauseBody, true, 1, 1, 100, 0, 0, 0, 0)
 	assertMetric(t, "select clause body", built.Summary.SelectClauseBody, true, 1, 1, 100, 0, 0, 0, 0)
-	assertMetric(t, "switch clause selection", built.Summary.SwitchClauseSelection, true, 0, 0, 0, 2, 0, 0, 0)
+	assertMetric(t, "switch clause selection", built.Summary.SwitchClauseSelection, true, 0, 2, 0, 0, 0, 0, 0)
 	if got[0].Role != cover.ClauseCase || got[0].BodyExecutions != 1 || got[0].BodyCoverage.Covered != 1 {
 		t.Fatalf("fallthrough case = %#v", got[0])
 	}
 	if got[1].Role != cover.ClauseDefault {
 		t.Fatalf("clause roles/order = %#v", got)
 	}
-	if text := report.RenderText(input); !strings.Contains(text, "Select Clause Body Coverage") || strings.Contains(text, "direct-selection=") {
+	if text := report.RenderText(input); !strings.Contains(text, "Select Clause Body Coverage") ||
+		!strings.Contains(text, "direct-selections=0 selected-alternatives=[]") {
 		t.Fatalf("text does not label select coverage:\n%s", text)
 	}
 }
@@ -412,6 +563,12 @@ func TestBuildDoesNotInventMissingRunProvenance(t *testing.T) {
 	built := report.Build(report.Input{})
 	if built.MeasurementMode != "" || built.Run.FailureKind != "" {
 		t.Fatalf("missing provenance was inferred: mode=%q failureKind=%q", built.MeasurementMode, built.Run.FailureKind)
+	}
+	if built.Run.Results != (report.RunResults{
+		Test: report.ResultNotRun, Measurement: report.ResultNotRun, Integrity: report.ResultNotRun,
+		Strict: report.ResultNotRequested, Threshold: report.ResultNotRequested,
+	}) {
+		t.Fatalf("missing result axes were not normalized: %#v", built.Run.Results)
 	}
 }
 
@@ -442,9 +599,37 @@ func TestZeroMetricsAndDisabledMetricsStayPresent(t *testing.T) {
 		"Switch Clause Selection Coverage", "Type Switch Clause Selection Coverage",
 		"Condition Coverage", "Unique-Cause MC/DC", "Masking MC/DC",
 	} {
-		if !strings.Contains(text, metric+": enabled=false 0/0 (n/a)") {
+		if !strings.Contains(text, metric+": enabled=false n/a") {
 			t.Fatalf("text missing disabled %s:\n%s", metric, text)
 		}
+	}
+}
+
+func TestTextMetricUsesSpecificationCoverageForm(t *testing.T) {
+	t.Parallel()
+
+	percentage := 75.0
+	text := report.RenderTextReport(report.Report{
+		Summary: report.Summary{
+			Statement: report.MetricSummary{
+				Enabled: true, Covered: 3, Total: 4, Percentage: &percentage,
+			},
+		},
+	})
+	if !strings.Contains(text, "Statement Coverage: enabled=true 3 / 4 = 75.00%") {
+		t.Fatalf("text does not use covered / total = percentage form:\n%s", text)
+	}
+}
+
+func TestJSONReportNormalizesNilErrorsToArray(t *testing.T) {
+	t.Parallel()
+
+	encoded, err := report.RenderJSONReport(report.Report{})
+	if err != nil {
+		t.Fatalf("RenderJSONReport: %v", err)
+	}
+	if !bytes.Contains(encoded, []byte(`"errors": []`)) {
+		t.Fatalf("errors must be a JSON array:\n%s", encoded)
 	}
 }
 
@@ -470,11 +655,11 @@ func TestInstrumentationCoverageAccountsForUnsupportedAndUnknownEntities(t *test
 		InstrumentationUnknown: 1,
 	})
 
-	if got := built.Capabilities.Status(backend.CapabilityDirectCaseSelection); got != backend.CapabilityUnsupportedByBackend {
+	if got := built.Capabilities.Status(backend.CapabilityDirectCaseSelection); got != backend.CapabilitySupported {
 		t.Fatalf("direct selection capability = %q", got)
 	}
 	want := backend.InstrumentationCoverage{
-		Discovered: 7, Supported: 3, Instrumented: 3, Unsupported: 1, Unknown: 3, Percentage: 42.86,
+		Discovered: 7, Supported: 4, Instrumented: 4, Unsupported: 0, Unknown: 3, Percentage: 57.14,
 	}
 	if got := built.Instrumentation.Total; got != want {
 		t.Fatalf("instrumentation total = %#v, want %#v", got, want)
@@ -489,12 +674,44 @@ func TestInstrumentationCoverageAccountsForUnsupportedAndUnknownEntities(t *test
 	})
 	for _, required := range []string{
 		"Backend capabilities:",
-		"directCaseSelection: unsupported-by-backend",
-		"Instrumentation coverage (requested metric entities): discovered=1 supported=0 instrumented=0 unsupported=1 unknown=0",
+		"directCaseSelection: supported",
+		"Instrumentation coverage (requested metric entities): discovered=1 supported=1 instrumented=1 unsupported=0 unknown=0",
 	} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("text report missing %q:\n%s", required, text)
 		}
+	}
+}
+
+func TestRepeatedConditionOccurrencesRemainSupportedAcrossInstrumentationAndSummary(t *testing.T) {
+	t.Parallel()
+	decision := andDecision(301, "example.com/m/p", "p.go", "Repeated")
+	decision.Expression = "a && a"
+	decision.Conditions[1].Expression = "a"
+	built := report.Build(report.Input{
+		ModulePath: "example.com/m",
+		Coverage:   config.CoverageSet{config.MetricMCDCMasking: true},
+		Decisions:  []cover.DecisionMetadata{decision},
+		Evaluations: []cover.DecisionEvaluation{
+			completedEvaluation(301, 1, false, cover.ConditionFalse, cover.ConditionNotEvaluated),
+			completedEvaluation(301, 2, true, cover.ConditionTrue, cover.ConditionTrue),
+		},
+		PackageStatuses:    map[string]string{"example.com/m/p": "passed"},
+		ASTPackageStatuses: map[string]string{"example.com/m/p": "passed"},
+	})
+	var instrumentation backend.InstrumentationCoverage
+	for _, metric := range built.Instrumentation.Metrics {
+		if metric.Metric == string(config.MetricMCDCMasking) {
+			instrumentation = metric.Coverage
+		}
+	}
+	if instrumentation != (backend.InstrumentationCoverage{
+		Discovered: 2, Supported: 2, Instrumented: 2, Percentage: 100,
+	}) {
+		t.Fatalf("repeated-occurrence instrumentation = %#v", instrumentation)
+	}
+	if built.Summary.MCDCMasking.Unknown != 0 || built.Summary.MCDCMasking.Total != 2 {
+		t.Fatalf("repeated-occurrence summary = %#v", built.Summary.MCDCMasking)
 	}
 }
 
@@ -595,8 +812,8 @@ func andDecision(id cover.DecisionID, packagePath, file, function string) cover.
 	decision := singleConditionDecision(id, packagePath, file, function)
 	decision.Expression = "a && b"
 	decision.Conditions = []cover.ConditionMetadata{
-		{Index: 0, Expression: "a", Location: location(file, 10)},
-		{Index: 1, Expression: "b", Location: location(file, 10)},
+		{ID: cover.ConditionID(uint64(id)*10 + 1), Index: 0, Expression: "a", Location: location(file, 10)},
+		{ID: cover.ConditionID(uint64(id)*10 + 2), Index: 1, Expression: "b", Location: location(file, 10)},
 	}
 	decision.ExpressionTree = cover.NewAndExpression(cover.NewConditionExpression(0), cover.NewConditionExpression(1))
 	return decision
@@ -606,7 +823,9 @@ func singleConditionDecision(id cover.DecisionID, packagePath, file, function st
 	return cover.DecisionMetadata{
 		ID: id, Package: packagePath, Function: function, Kind: cover.DecisionIf,
 		Location: cover.SourceLocation{File: file, Start: cover.Position{Line: 10, Column: 2}, End: cover.Position{Line: 10, Column: 8}}, Expression: "a",
-		Conditions:     []cover.ConditionMetadata{{Index: 0, Expression: "a", Location: location(file, 10)}},
+		Conditions: []cover.ConditionMetadata{{
+			ID: cover.ConditionID(uint64(id)*10 + 1), Index: 0, Expression: "a", Location: location(file, 10),
+		}},
 		ExpressionTree: cover.NewConditionExpression(0),
 	}
 }
@@ -659,12 +878,13 @@ func assertMetric(
 	enabled bool,
 	covered, total int,
 	percentage float64,
-	unsupported, unknown, _ int, infeasible int,
+	unsupported, unknown, analysisIncomplete int, infeasible int,
 ) {
 	t.Helper()
 	want := report.MetricSummary{
 		Enabled: enabled, Covered: covered, Total: total,
 		Unsupported: unsupported, Unknown: unknown, PossiblyInfeasible: infeasible,
+		AnalysisIncomplete: analysisIncomplete,
 	}
 	if total > 0 {
 		want.Percentage = &percentage

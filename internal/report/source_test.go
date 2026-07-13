@@ -84,8 +84,8 @@ func TestSourceAnnotationsUseConditionOccurrenceIDs(t *testing.T) {
 	file := FileReport{Functions: []FunctionReport{{Decisions: []DecisionReport{{
 		DecisionID: "decision-1",
 		Conditions: []ConditionReport{
-			{Index: 0, Expression: "a", Location: location, True: true, NotEvaluated: 2, MCDCUnique: MCDCConditionReport{Status: "not covered"}, MCDCMasking: MCDCConditionReport{Status: "covered"}},
-			{Index: 1, Expression: "b", Location: location},
+			{ConditionID: "0x0000000000000001", Index: 0, Expression: "a", Location: location, True: true, NotEvaluated: 2, MCDCUnique: MCDCConditionReport{Status: "not-covered"}, MCDCMasking: MCDCConditionReport{Status: "covered"}},
+			{ConditionID: "0x0000000000000002", Index: 1, Expression: "b", Location: location},
 		},
 	}}}}}
 	annotations := sourceAnnotations(file, []byte("ab"))
@@ -100,20 +100,20 @@ func TestSourceAnnotationsUseConditionOccurrenceIDs(t *testing.T) {
 		ids[annotation.EntityID] = true
 	}
 	for _, want := range []string{
-		"decision-1:condition:0",
-		"decision-1:condition:0:mcdc-unique",
-		"decision-1:condition:0:mcdc-masking",
-		"decision-1:condition:1",
-		"decision-1:condition:1:mcdc-unique",
-		"decision-1:condition:1:mcdc-masking",
+		"0x0000000000000001",
+		"0x0000000000000001:mcdc-unique",
+		"0x0000000000000001:mcdc-masking",
+		"0x0000000000000002",
+		"0x0000000000000002:mcdc-unique",
+		"0x0000000000000002:mcdc-masking",
 	} {
 		if !ids[want] {
 			t.Errorf("missing annotation ID %q", want)
 		}
 	}
 	for _, annotation := range annotations {
-		if annotation.Metric == "condition" && annotation.EntityID == "decision-1:condition:0" {
-			for _, required := range []string{"Condition #0: a", "true: covered", "false: not covered", "not evaluated: 2", "Unique-Cause MC/DC: not covered", "Masking MC/DC: covered"} {
+		if annotation.Metric == "condition" && annotation.EntityID == "0x0000000000000001" {
+			for _, required := range []string{"Condition #0: a", "true: covered", "false: not covered", "not evaluated: 2", "Unique-Cause MC/DC: not-covered", "Masking MC/DC: covered"} {
 				if !strings.Contains(annotation.Tooltip, required) {
 					t.Errorf("condition tooltip missing %q: %q", required, annotation.Tooltip)
 				}

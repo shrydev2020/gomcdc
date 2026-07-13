@@ -23,7 +23,7 @@ func TestUniqueCauseStrategy(t *testing.T) {
 		name        string
 		metadata    cover.DecisionMetadata
 		evaluations []cover.DecisionEvaluation
-		want        []cover.CoverageStatus
+		want        []string
 		wantAborted int
 		wantInvalid int
 	}{
@@ -34,7 +34,7 @@ func TestUniqueCauseStrategy(t *testing.T) {
 				completed(1, []cover.ConditionState{conditionFalse}, false),
 				completed(2, []cover.ConditionState{conditionTrue}, true),
 			},
-			want: []cover.CoverageStatus{cover.CoverageCovered},
+			want: []string{string(cover.CoverageCovered)},
 		},
 		{
 			name:     "AND preserves not evaluated as a distinct value",
@@ -44,7 +44,7 @@ func TestUniqueCauseStrategy(t *testing.T) {
 				completed(2, []cover.ConditionState{conditionTrue, conditionTrue}, true),
 				completed(3, []cover.ConditionState{conditionTrue, conditionFalse}, false),
 			},
-			want: []cover.CoverageStatus{cover.CoveragePossiblyInfeasible, cover.CoverageCovered},
+			want: []string{string(cover.CoveragePossiblyInfeasible), string(cover.CoverageCovered)},
 		},
 		{
 			name:     "OR preserves not evaluated as a distinct value",
@@ -54,7 +54,7 @@ func TestUniqueCauseStrategy(t *testing.T) {
 				completed(2, []cover.ConditionState{conditionFalse, conditionTrue}, true),
 				completed(3, []cover.ConditionState{conditionFalse, conditionFalse}, false),
 			},
-			want: []cover.CoverageStatus{cover.CoveragePossiblyInfeasible, cover.CoverageCovered},
+			want: []string{string(cover.CoveragePossiblyInfeasible), string(cover.CoverageCovered)},
 		},
 		{
 			name: "nested a AND b OR c",
@@ -68,10 +68,10 @@ func TestUniqueCauseStrategy(t *testing.T) {
 				completed(3, []cover.ConditionState{conditionTrue, conditionFalse, conditionFalse}, false),
 				completed(4, []cover.ConditionState{conditionTrue, conditionFalse, conditionTrue}, true),
 			},
-			want: []cover.CoverageStatus{
-				cover.CoveragePossiblyInfeasible,
-				cover.CoveragePossiblyInfeasible,
-				cover.CoverageCovered,
+			want: []string{
+				string(cover.CoveragePossiblyInfeasible),
+				string(cover.CoveragePossiblyInfeasible),
+				string(cover.CoverageCovered),
 			},
 		},
 		{
@@ -87,7 +87,7 @@ func TestUniqueCauseStrategy(t *testing.T) {
 				completed(1, []cover.ConditionState{conditionFalse, notEvaluated}, false),
 				completed(2, []cover.ConditionState{conditionTrue, notEvaluated}, true),
 			},
-			want: []cover.CoverageStatus{cover.CoverageCovered, cover.CoverageNotCovered},
+			want: []string{string(cover.CoverageCovered), string(cover.CoverageNotCovered)},
 		},
 		{
 			name:     "aborted and invalid evaluations never establish coverage",
@@ -102,7 +102,7 @@ func TestUniqueCauseStrategy(t *testing.T) {
 				},
 				completedFor(99, 3, []cover.ConditionState{conditionTrue}, true),
 			},
-			want:        []cover.CoverageStatus{cover.CoverageNotCovered},
+			want:        []string{string(cover.CoverageNotCovered)},
 			wantAborted: 1,
 			wantInvalid: 1,
 		},
@@ -113,7 +113,7 @@ func TestUniqueCauseStrategy(t *testing.T) {
 				completed(1, []cover.ConditionState{conditionFalse}, true),
 				completed(2, []cover.ConditionState{conditionTrue}, false),
 			},
-			want: []cover.CoverageStatus{cover.CoverageCovered},
+			want: []string{string(cover.CoverageCovered)},
 		},
 	}
 
@@ -141,8 +141,8 @@ func TestMaskingStrategy(t *testing.T) {
 		name        string
 		metadata    cover.DecisionMetadata
 		evaluations []cover.DecisionEvaluation
-		want        []cover.CoverageStatus
-		wantOverall cover.CoverageStatus
+		want        []string
+		wantOverall string
 		wantInvalid int
 	}{
 		{
@@ -152,8 +152,8 @@ func TestMaskingStrategy(t *testing.T) {
 				completed(1, []cover.ConditionState{conditionFalse}, false),
 				completed(2, []cover.ConditionState{conditionTrue}, true),
 			},
-			want:        []cover.CoverageStatus{cover.CoverageCovered},
-			wantOverall: cover.CoverageCovered,
+			want:        []string{string(cover.CoverageCovered)},
+			wantOverall: string(cover.CoverageCovered),
 		},
 		{
 			name:     "AND short circuit",
@@ -163,8 +163,8 @@ func TestMaskingStrategy(t *testing.T) {
 				completed(2, []cover.ConditionState{conditionTrue, conditionTrue}, true),
 				completed(3, []cover.ConditionState{conditionTrue, conditionFalse}, false),
 			},
-			want:        []cover.CoverageStatus{cover.CoverageCovered, cover.CoverageCovered},
-			wantOverall: cover.CoverageCovered,
+			want:        []string{string(cover.CoverageCovered), string(cover.CoverageCovered)},
+			wantOverall: string(cover.CoverageCovered),
 		},
 		{
 			name:     "OR short circuit",
@@ -174,8 +174,8 @@ func TestMaskingStrategy(t *testing.T) {
 				completed(2, []cover.ConditionState{conditionFalse, conditionTrue}, true),
 				completed(3, []cover.ConditionState{conditionFalse, conditionFalse}, false),
 			},
-			want:        []cover.CoverageStatus{cover.CoverageCovered, cover.CoverageCovered},
-			wantOverall: cover.CoverageCovered,
+			want:        []string{string(cover.CoverageCovered), string(cover.CoverageCovered)},
+			wantOverall: string(cover.CoverageCovered),
 		},
 		{
 			name: "nested a AND b OR c",
@@ -189,12 +189,12 @@ func TestMaskingStrategy(t *testing.T) {
 				completed(3, []cover.ConditionState{conditionTrue, conditionFalse, conditionFalse}, false),
 				completed(4, []cover.ConditionState{conditionTrue, conditionFalse, conditionTrue}, true),
 			},
-			want: []cover.CoverageStatus{
-				cover.CoverageCovered,
-				cover.CoverageCovered,
-				cover.CoverageCovered,
+			want: []string{
+				string(cover.CoverageCovered),
+				string(cover.CoverageCovered),
+				string(cover.CoverageCovered),
 			},
-			wantOverall: cover.CoverageCovered,
+			wantOverall: string(cover.CoverageCovered),
 		},
 		{
 			name: "target must be pivotal in both vectors",
@@ -206,12 +206,12 @@ func TestMaskingStrategy(t *testing.T) {
 				completed(1, []cover.ConditionState{conditionFalse, notEvaluated, conditionFalse}, false),
 				completed(2, []cover.ConditionState{conditionTrue, conditionFalse, conditionTrue}, true),
 			},
-			want: []cover.CoverageStatus{
-				cover.CoverageNotCovered,
-				cover.CoverageNotCovered,
-				cover.CoverageCovered,
+			want: []string{
+				string(cover.CoverageNotCovered),
+				string(cover.CoverageNotCovered),
+				string(cover.CoverageCovered),
 			},
-			wantOverall: cover.CoverageNotCovered,
+			wantOverall: string(cover.CoverageNotCovered),
 		},
 		{
 			name: "differing conditions may be collectively masked",
@@ -223,12 +223,12 @@ func TestMaskingStrategy(t *testing.T) {
 				completed(1, []cover.ConditionState{conditionFalse, notEvaluated, conditionFalse}, false),
 				completed(2, []cover.ConditionState{conditionTrue, conditionFalse, conditionTrue}, true),
 			},
-			want: []cover.CoverageStatus{
-				cover.CoverageNotCovered,
-				cover.CoverageNotCovered,
-				cover.CoverageCovered,
+			want: []string{
+				string(cover.CoverageNotCovered),
+				string(cover.CoverageNotCovered),
+				string(cover.CoverageCovered),
 			},
-			wantOverall: cover.CoverageNotCovered,
+			wantOverall: string(cover.CoverageNotCovered),
 		},
 		{
 			name:     "aborted evaluations are ignored",
@@ -237,8 +237,8 @@ func TestMaskingStrategy(t *testing.T) {
 				completed(1, []cover.ConditionState{conditionFalse}, false),
 				aborted(2, []cover.ConditionState{conditionTrue}),
 			},
-			want:        []cover.CoverageStatus{cover.CoverageNotCovered},
-			wantOverall: cover.CoverageNotCovered,
+			want:        []string{string(cover.CoverageNotCovered)},
+			wantOverall: string(cover.CoverageNotCovered),
 		},
 		{
 			name: "constant sibling makes target structurally non-pivotal",
@@ -250,8 +250,8 @@ func TestMaskingStrategy(t *testing.T) {
 				completed(1, []cover.ConditionState{conditionFalse}, false),
 				completed(2, []cover.ConditionState{conditionTrue}, false),
 			},
-			want:        []cover.CoverageStatus{cover.CoveragePossiblyInfeasible},
-			wantOverall: cover.CoveragePossiblyInfeasible,
+			want:        []string{string(cover.CoveragePossiblyInfeasible)},
+			wantOverall: string(cover.CoveragePossiblyInfeasible),
 		},
 		{
 			name: "structurally impossible short circuit vector is invalid",
@@ -263,8 +263,8 @@ func TestMaskingStrategy(t *testing.T) {
 				completed(1, []cover.ConditionState{conditionFalse, conditionTrue}, false),
 				completed(2, []cover.ConditionState{conditionTrue, conditionTrue}, true),
 			},
-			want:        []cover.CoverageStatus{cover.CoverageNotCovered, cover.CoverageNotCovered},
-			wantOverall: cover.CoverageNotCovered,
+			want:        []string{string(cover.CoverageNotCovered), string(cover.CoverageNotCovered)},
+			wantOverall: string(cover.CoverageNotCovered),
 			wantInvalid: 1,
 		},
 		{
@@ -274,8 +274,8 @@ func TestMaskingStrategy(t *testing.T) {
 				completed(1, []cover.ConditionState{conditionFalse}, true),
 				completed(2, []cover.ConditionState{conditionTrue}, true),
 			},
-			want:        []cover.CoverageStatus{cover.CoverageNotCovered},
-			wantOverall: cover.CoverageNotCovered,
+			want:        []string{string(cover.CoverageNotCovered)},
+			wantOverall: string(cover.CoverageNotCovered),
 			wantInvalid: 1,
 		},
 		{
@@ -288,8 +288,8 @@ func TestMaskingStrategy(t *testing.T) {
 				completed(1, []cover.ConditionState{conditionFalse}, false),
 				completed(2, []cover.ConditionState{conditionTrue}, true),
 			},
-			want:        []cover.CoverageStatus{cover.CoverageUnknown},
-			wantOverall: cover.CoverageUnknown,
+			want:        []string{string(cover.CoverageAnalysisIncomplete)},
+			wantOverall: string(cover.CoverageAnalysisIncomplete),
 		},
 		{
 			name: "unsupported expression structure is explicit",
@@ -298,8 +298,8 @@ func TestMaskingStrategy(t *testing.T) {
 				Conditions:     []cover.ConditionMetadata{{Index: 0}},
 				ExpressionTree: &cover.BooleanExpression{Kind: "xor"},
 			},
-			want:        []cover.CoverageStatus{cover.CoverageUnsupported},
-			wantOverall: cover.CoverageUnsupported,
+			want:        []string{string(cover.SupportUnsupported)},
+			wantOverall: string(cover.SupportUnsupported),
 		},
 	}
 
@@ -310,8 +310,8 @@ func TestMaskingStrategy(t *testing.T) {
 			t.Parallel()
 			got := strategy.Analyze(test.metadata, test.evaluations)
 			assertConditionStatuses(t, got, test.want)
-			if got.Status != test.wantOverall {
-				t.Fatalf("Status = %q, want %q", got.Status, test.wantOverall)
+			if status := mcdcResultStatus(got); status != test.wantOverall {
+				t.Fatalf("Status = %q, want %q", status, test.wantOverall)
 			}
 			if got.InvalidEvaluations != test.wantInvalid {
 				t.Fatalf("InvalidEvaluations = %d, want %d", got.InvalidEvaluations, test.wantInvalid)
@@ -356,7 +356,7 @@ func TestMaskingTreatsRepeatedSourceTextAsSeparateOccurrences(t *testing.T) {
 		completed(1, []cover.ConditionState{conditionFalse, notEvaluated}, false),
 		completed(2, []cover.ConditionState{conditionTrue, conditionTrue}, true),
 	})
-	if result.Conditions[0].Status != cover.CoverageCovered || result.Conditions[0].Witness == nil {
+	if mcdcConditionStatus(result.Conditions[0]) != string(cover.CoverageCovered) || result.Conditions[0].Witness == nil {
 		t.Fatalf("repeated-condition masking result = %#v", result)
 	}
 }
@@ -391,8 +391,8 @@ func TestMaskingSearchesAllCompletionsAndValidatesD19(t *testing.T) {
 	}
 	result := (MaskingStrategy{}).Analyze(metadata, []cover.DecisionEvaluation{first, second})
 	witness := result.Conditions[0].Witness
-	if result.Conditions[0].Status != cover.CoverageCovered || witness == nil {
-		t.Fatalf("target status = %q, witness = %#v", result.Conditions[0].Status, witness)
+	if mcdcConditionStatus(result.Conditions[0]) != string(cover.CoverageCovered) || witness == nil {
+		t.Fatalf("target status = %q, witness = %#v", mcdcConditionStatus(result.Conditions[0]), witness)
 	}
 	for index := range witness.FirstCompletion {
 		if uint16(index) == 0 || witness.FirstCompletion[index] == witness.SecondCompletion[index] {
@@ -502,8 +502,8 @@ func TestMaskingLargeReadOnceExpressionHasNoCompletionLimit(t *testing.T) {
 		completed(1, first, true),
 		completed(2, second, false),
 	})
-	if result.Conditions[0].Status != cover.CoverageCovered {
-		t.Fatalf("condition 0 status = %q, want covered", result.Conditions[0].Status)
+	if status := mcdcConditionStatus(result.Conditions[0]); status != string(cover.CoverageCovered) {
+		t.Fatalf("condition 0 status = %q, want covered", status)
 	}
 	witness := result.Conditions[0].Witness
 	if witness == nil {
@@ -618,7 +618,7 @@ func TestMalformedMetadataIsNotSilentlyUncovered(t *testing.T) {
 	tests := []struct {
 		name     string
 		metadata cover.DecisionMetadata
-		want     cover.CoverageStatus
+		want     string
 	}{
 		{
 			name: "duplicate metadata index",
@@ -629,7 +629,7 @@ func TestMalformedMetadataIsNotSilentlyUncovered(t *testing.T) {
 					{Index: 0},
 				},
 			},
-			want: cover.CoverageUnknown,
+			want: string(cover.CoverageAnalysisIncomplete),
 		},
 		{
 			name: "duplicate expression leaf",
@@ -638,7 +638,7 @@ func TestMalformedMetadataIsNotSilentlyUncovered(t *testing.T) {
 				Conditions:     []cover.ConditionMetadata{{Index: 0}},
 				ExpressionTree: and(condition(0), condition(0)),
 			},
-			want: cover.CoverageUnknown,
+			want: string(cover.CoverageAnalysisIncomplete),
 		},
 		{
 			name: "cyclic expression",
@@ -651,7 +651,7 @@ func TestMalformedMetadataIsNotSilentlyUncovered(t *testing.T) {
 					ExpressionTree: cycle,
 				}
 			}(),
-			want: cover.CoverageUnknown,
+			want: string(cover.CoverageAnalysisIncomplete),
 		},
 	}
 
@@ -660,8 +660,8 @@ func TestMalformedMetadataIsNotSilentlyUncovered(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			result := (MaskingStrategy{}).Analyze(test.metadata, nil)
-			if result.Status != test.want {
-				t.Fatalf("Status = %q, want %q (%s)", result.Status, test.want, result.Reason)
+			if status := mcdcResultStatus(result); status != test.want {
+				t.Fatalf("Status = %q, want %q (%s)", status, test.want, result.Reason)
 			}
 		})
 	}
@@ -770,19 +770,47 @@ func aborted(evaluationID cover.EvaluationID, states []cover.ConditionState) cov
 	}
 }
 
-func assertConditionStatuses(t *testing.T, result cover.MCDCResult, want []cover.CoverageStatus) {
+func assertConditionStatuses(t *testing.T, result cover.MCDCResult, want []string) {
 	t.Helper()
 	if len(result.Conditions) != len(want) {
 		t.Fatalf("got %d condition results, want %d: %#v", len(result.Conditions), len(want), result)
 	}
 	for index, wantStatus := range want {
-		if result.Conditions[index].Status != wantStatus {
+		status := mcdcConditionStatus(result.Conditions[index])
+		if status != wantStatus {
 			t.Errorf("condition %d status = %q, want %q (reason: %s)",
 				index,
-				result.Conditions[index].Status,
+				status,
 				wantStatus,
 				result.Conditions[index].Reason,
 			)
 		}
+	}
+}
+
+func mcdcResultStatus(result cover.MCDCResult) string {
+	return mcdcStatus(result.Outcome, result.Support, result.Analysis)
+}
+
+func mcdcConditionStatus(result cover.MCDCConditionResult) string {
+	return mcdcStatus(result.Outcome, result.Support, result.Analysis)
+}
+
+func mcdcStatus(outcome cover.CoverageOutcome, support cover.SupportStatus, analysis cover.AnalysisStatus) string {
+	switch {
+	case support == cover.SupportUnsupported:
+		return string(cover.SupportUnsupported)
+	case support == cover.SupportUnknown:
+		return string(cover.SupportUnknown)
+	case analysis == cover.AnalysisIncomplete:
+		return string(cover.CoverageAnalysisIncomplete)
+	case analysis == cover.AnalysisInfeasible:
+		return string(cover.CoveragePossiblyInfeasible)
+	case outcome == cover.CoverageOutcomeCovered:
+		return string(cover.CoverageCovered)
+	case outcome == cover.CoverageOutcomeNotCovered:
+		return string(cover.CoverageNotCovered)
+	default:
+		return string(cover.SupportUnknown)
 	}
 }

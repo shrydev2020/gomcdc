@@ -11,7 +11,7 @@ func TestConditionStatePreservesNotEvaluated(t *testing.T) {
 		wantEvaluated bool
 		wantString    string
 	}{
-		{ConditionNotEvaluated, false, false, "not evaluated"},
+		{ConditionNotEvaluated, false, false, "not-evaluated"},
 		{ConditionFalse, false, true, "false"},
 		{ConditionTrue, true, true, "true"},
 	}

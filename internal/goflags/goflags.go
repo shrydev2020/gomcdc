@@ -139,5 +139,7 @@ func WithoutMeasurementFlags(value string) (string, error) {
 		"coverpkg":     true,
 		"coverprofile": true,
 		"json":         false,
+		"overlay":      true,
+		"toolexec":     true,
 	})
 }

@@ -32,6 +32,8 @@ type reportAssembly struct {
 	instrumentationUnknown int
 	integrityFailure       bool
 	analysisIncomplete     bool
+	errors                 []report.ReportError
+	measurementDiagnostics []measurementDiagnostic
 }
 
 // assembleReportInput turns measurement results into the canonical report
@@ -42,19 +44,35 @@ func assembleReportInput(assembly reportAssembly) report.Input {
 	packageStatuses := packageStatuses(assembly.loaded, assembly.standardResult, assembly.astResult, overallStatus)
 	astPackageStatuses := astPackageStatuses(assembly.loaded, assembly.astResult)
 
+	errors := append([]report.ReportError(nil), assembly.errors...)
+	for _, diagnostic := range assembly.measurementDiagnostics {
+		errors = append(errors, report.ReportError{
+			Phase: diagnostic.phase, Code: diagnostic.code, Message: diagnostic.message,
+		})
+	}
+	errors = append(errors, measurementRunErrors("standard-cover", assembly.standardResult)...)
+	errors = append(errors, measurementRunErrors("ast", assembly.astResult)...)
+
 	return report.Input{
-		ModulePath:                  assembly.loaded.ModulePath,
-		SourceFiles:                 sourceFileInputs(assembly.sources),
-		Coverage:                    assembly.coverage,
-		Decisions:                   assembly.decisions,
-		Evaluations:                 assembly.collection.Evaluations,
-		NotEvaluatedDecisions:       assembly.collection.NotEvaluatedDecisions,
-		Clauses:                     assembly.clauses,
-		NoMatches:                   assembly.noMatches,
-		ClauseObservations:          assembly.collection.Clauses,
-		C0:                          assembly.c0,
-		RunStatus:                   overallStatus,
-		FailureKind:                 overallFailure,
+		ModulePath:            assembly.loaded.ModulePath,
+		SourceFiles:           sourceFileInputs(assembly.sources),
+		Coverage:              assembly.coverage,
+		Decisions:             assembly.decisions,
+		Evaluations:           assembly.collection.Evaluations,
+		NotEvaluatedDecisions: assembly.collection.NotEvaluatedDecisions,
+		Clauses:               assembly.clauses,
+		NoMatches:             assembly.noMatches,
+		ClauseObservations:    assembly.collection.Clauses,
+		C0:                    assembly.c0,
+		RunStatus:             overallStatus,
+		FailureKind:           overallFailure,
+		Results: report.RunResults{
+			Test:        testResultStatus(overallStatus),
+			Measurement: passFailResult(!assembly.analysisIncomplete),
+			Integrity:   passFailResult(!assembly.integrityFailure),
+			Strict:      report.ResultNotRequested,
+			Threshold:   report.ResultNotRequested,
+		},
 		MeasurementMode:             measurementMode(assembly.standardCoverRequested, assembly.astRequested),
 		Measurements:                measurementRuns(assembly.standardResult, assembly.astResult),
 		Backend:                     backend.OrchestratedBackend{},
@@ -62,10 +80,43 @@ func assembleReportInput(assembly reportAssembly) report.Input {
 		ASTEvidenceIntegrityUnknown: assembly.astEvidenceUnknown,
 		C0EvidenceIntegrityUnknown:  assembly.c0EvidenceUnknown,
 		InstrumentationUnknown:      assembly.instrumentationUnknown,
+		Errors:                      errors,
 		Complete:                    overallStatus == cover.RunPassed && !assembly.integrityFailure && !assembly.analysisIncomplete,
 		PackageStatuses:             packageStatuses,
 		ASTPackageStatuses:          astPackageStatuses,
 	}
+}
+
+func testResultStatus(status cover.RunStatus) report.ResultStatus {
+	switch status {
+	case cover.RunPassed:
+		return report.ResultPassed
+	case cover.RunFailed:
+		return report.ResultFailed
+	case cover.RunTimeout:
+		return report.ResultTimeout
+	default:
+		return report.ResultNotRun
+	}
+}
+
+func passFailResult(passed bool) report.ResultStatus {
+	if passed {
+		return report.ResultPassed
+	}
+	return report.ResultFailed
+}
+
+func measurementRunErrors(name string, result *gotest.Result) []report.ReportError {
+	if result == nil || result.Status == cover.RunPassed {
+		return nil
+	}
+	code := "go-test-" + string(result.FailureKind)
+	message := name + " go test failed"
+	if result.Status == cover.RunTimeout {
+		message = name + " go test timed out"
+	}
+	return []report.ReportError{{Phase: "test", Code: code, Message: message}}
 }
 
 func measurementMode(standardCoverRequested, astRequested bool) report.MeasurementMode {

@@ -28,6 +28,7 @@ type Options struct {
 	DataDirEnv    string
 	DataDir       string
 	Environment   map[string]string
+	Toolexec      string
 	JSON          bool
 	// DisableCover forces the AST measurement to remain free of cmd/cover
 	// instrumentation, including flags inherited through GOFLAGS.
@@ -72,6 +73,18 @@ func Run(ctx context.Context, opts Options) Result {
 	}
 	if opts.DisableCover {
 		args = append(args, "-cover=false")
+	}
+	if opts.Toolexec != "" {
+		quoted, err := quoteGoCommandArgument(opts.Toolexec)
+		if err != nil {
+			return Result{
+				Status:      cover.RunFailed,
+				FailureKind: cover.RunFailureCommand,
+				Err:         fmt.Errorf("encode -toolexec path: %w", err),
+				Packages:    make(map[string]PackageStatus),
+			}
+		}
+		args = append(args, "-toolexec="+quoted)
 	}
 	args = append(args, "-count=1")
 	if len(binaryArgs) > 0 {
@@ -140,6 +153,23 @@ func Run(ctx context.Context, opts Options) Result {
 		status = cover.RunTimeout
 	}
 	return Result{Status: status, FailureKind: failureKind, Err: fmt.Errorf("go test failed: %w", err), Packages: packageStatuses, RuntimeDiagnostics: runtimeDiagnostics(events)}
+}
+
+// quoteGoCommandArgument mirrors the single-argument subset of cmd/go's
+// quoted.Join. The -toolexec flag is a command string even when passed as one
+// OS argument, so paths containing whitespace must retain explicit quotes for
+// cmd/go's second parsing step.
+func quoteGoCommandArgument(argument string) (string, error) {
+	if !strings.ContainsAny(argument, " \t\n\r") {
+		return argument, nil
+	}
+	if !strings.Contains(argument, "'") {
+		return "'" + argument + "'", nil
+	}
+	if !strings.Contains(argument, `"`) {
+		return `"` + argument + `"`, nil
+	}
+	return "", fmt.Errorf("argument %q contains whitespace and both quote characters", argument)
 }
 
 func splitBinaryArgs(arguments []string) (goArguments, binaryArguments []string) {

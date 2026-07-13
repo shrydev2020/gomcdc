@@ -37,6 +37,11 @@ type clauseLocation struct {
 	start, end int
 }
 
+type noMatchLocation struct {
+	kind       cover.ClauseKind
+	start, end int
+}
+
 // FileMapping maps analysis of an original file to its unchanged copied path.
 type FileMapping struct {
 	CopyPath string
@@ -47,13 +52,14 @@ type FileMapping struct {
 // include every build-active source and test file whose identifiers may collide
 // with the generated package-wide helper.
 type PackageOptions struct {
-	Directory         string
-	PackageName       string
-	PackagePath       string
-	RuntimeImportPath string
-	TestOnly          bool
-	ActiveFiles       []string
-	Files             []FileMapping
+	Directory               string
+	PackageName             string
+	PackagePath             string
+	RuntimeImportPath       string
+	CompilerClauseSelection bool
+	TestOnly                bool
+	ActiveFiles             []string
+	Files                   []FileMapping
 }
 
 // PackageResult identifies the generated bridge and helper used by rewritten
@@ -72,6 +78,7 @@ type SourceMap struct {
 	InstrumentedFile string
 	OriginalFile     string
 	GeneratedFile    string
+	CompilerFile     string
 	GeneratedRegions []GeneratedRegion
 	LineMappings     []analyzer.LineMapping
 }
@@ -124,7 +131,7 @@ func InstrumentPackage(options PackageOptions) (PackageResult, error) {
 		if len(mapping.Analysis.Decisions) == 0 && len(mapping.Analysis.Clauses) == 0 {
 			continue
 		}
-		data, mode, sourceMap, err := transformCopiedFile(mapping.CopyPath, mapping.Analysis, helperName)
+		data, mode, sourceMap, err := transformCopiedFile(mapping.CopyPath, mapping.Analysis, helperName, options.CompilerClauseSelection)
 		if err != nil {
 			return PackageResult{}, err
 		}
@@ -164,7 +171,7 @@ func InstrumentFile(copyPath string, analysis analyzer.File, helperName string) 
 	if len(analysis.Decisions) == 0 && len(analysis.Clauses) == 0 {
 		return nil
 	}
-	data, mode, _, err := transformCopiedFile(copyPath, analysis, helperName)
+	data, mode, _, err := transformCopiedFile(copyPath, analysis, helperName, false)
 	if err != nil {
 		return err
 	}
@@ -302,7 +309,7 @@ type %sEvaluationID = %sRuntime.EvaluationID
 	}
 }
 
-func transformCopiedFile(copyPath string, analysis analyzer.File, helperName string) ([]byte, os.FileMode, SourceMap, error) {
+func transformCopiedFile(copyPath string, analysis analyzer.File, helperName string, compilerClauseSelection bool) ([]byte, os.FileMode, SourceMap, error) {
 	if copyPath == "" {
 		return nil, 0, SourceMap{}, errors.New("instrument copied file: copy path is empty")
 	}
@@ -326,7 +333,7 @@ func transformCopiedFile(copyPath string, analysis analyzer.File, helperName str
 	if err != nil {
 		return nil, 0, SourceMap{}, fmt.Errorf("instrument copied file %q: parse: %w", copyPath, err)
 	}
-	transformer, err := newFileTransformer(fset, helperName, analysis)
+	transformer, err := newFileTransformer(fset, helperName, analysis, compilerClauseSelection)
 	if err != nil {
 		return nil, 0, SourceMap{}, fmt.Errorf("instrument copied file %q: %w", copyPath, err)
 	}
@@ -344,10 +351,11 @@ func transformCopiedFile(copyPath string, analysis analyzer.File, helperName str
 		InstrumentedFile: copyPath,
 		OriginalFile:     filepath.ToSlash(analysis.RelativePath),
 		GeneratedFile:    filepath.ToSlash(filepath.Join(".gomcdc", "generated", fmt.Sprintf("%x.go", generatedIdentity[:12]))),
+		CompilerFile:     filepath.ToSlash(filepath.Join(".gomcdc", "compiler", fmt.Sprintf("%x.go", generatedIdentity[:12]))),
 		GeneratedRegions: append([]GeneratedRegion(nil), transformer.generatedRegions...),
 		LineMappings:     append([]analyzer.LineMapping(nil), analysis.LineMappings...),
 	}
-	formatted := mapGeneratedStatements(output.Bytes(), helperName, sourceMap.OriginalFile, sourceMap.GeneratedFile)
+	formatted := mapGeneratedStatements(output.Bytes(), helperName, sourceMap.OriginalFile, sourceMap.GeneratedFile, sourceMap.CompilerFile)
 	if _, err := parser.ParseFile(token.NewFileSet(), copyPath, formatted, parser.ParseComments|parser.AllErrors); err != nil {
 		return nil, 0, SourceMap{}, fmt.Errorf("instrument copied file %q: validate transformed source: %w", copyPath, err)
 	}
@@ -364,7 +372,7 @@ type logicalLine struct {
 // original line. Some Go cover versions retain the physical filename anyway;
 // SourceMap.GeneratedRegions is the authoritative exclusion mechanism when the
 // compiler profile retains physical filenames.
-func mapGeneratedStatements(source []byte, helperName, originalFile, generatedFile string) []byte {
+func mapGeneratedStatements(source []byte, helperName, originalFile, generatedFile, compilerFile string) []byte {
 	lines := strings.Split(string(source), "\n")
 	positions := make([]logicalLine, len(lines))
 	current := logicalLine{file: originalFile, line: 1}
@@ -382,7 +390,11 @@ func mapGeneratedStatements(source []byte, helperName, originalFile, generatedFi
 	resetNeeded := false
 	for index, line := range lines {
 		if generatedStatementLine(line, helperName) {
-			fmt.Fprintf(&output, "//line %s:%d\n", generatedFile, virtualLine)
+			virtualFile := generatedFile
+			if compilerMarkerStatementLine(line, helperName) {
+				virtualFile = compilerFile
+			}
+			fmt.Fprintf(&output, "//line %s:%d\n", virtualFile, virtualLine)
 			output.WriteString(line)
 			output.WriteByte('\n')
 			virtualLine++
@@ -434,7 +446,7 @@ func generatedStatementLine(line, helperName string) bool {
 		strings.HasPrefix(trimmed, "defer "+helperName+".AbortSlots(") {
 		return true
 	}
-	for _, method := range []string{"SelectClause"} {
+	for _, method := range []string{"SelectClause", "CompilerDirectClause", "CompilerNoMatch"} {
 		if strings.HasPrefix(trimmed, helperName+"."+method+"(") {
 			return true
 		}
@@ -442,16 +454,25 @@ func generatedStatementLine(line, helperName string) bool {
 	return false
 }
 
+func compilerMarkerStatementLine(line, helperName string) bool {
+	trimmed := strings.TrimSpace(line)
+	return strings.HasPrefix(trimmed, helperName+".CompilerDirectClause(") ||
+		strings.HasPrefix(trimmed, helperName+".CompilerNoMatch(")
+}
+
 type fileTransformer struct {
-	fset             *token.FileSet
-	helperName       string
-	decisions        map[decisionLocation]analyzer.Decision
-	clauses          map[clauseLocation]analyzer.Clause
-	matchedDec       map[decisionLocation]bool
-	matchedCla       map[cover.ClauseID]bool
-	funcs            map[*ast.BlockStmt]bool
-	originalFile     string
-	generatedRegions []GeneratedRegion
+	fset              *token.FileSet
+	helperName        string
+	decisions         map[decisionLocation]analyzer.Decision
+	clauses           map[clauseLocation]analyzer.Clause
+	noMatches         map[noMatchLocation]cover.NoMatchMetadata
+	matchedDec        map[decisionLocation]bool
+	matchedCla        map[cover.ClauseID]bool
+	matchedNoMatch    map[cover.SwitchID]bool
+	funcs             map[*ast.BlockStmt]bool
+	originalFile      string
+	compilerSelection bool
+	generatedRegions  []GeneratedRegion
 }
 
 type functionState struct {
@@ -460,16 +481,19 @@ type functionState struct {
 	slotCount   int
 }
 
-func newFileTransformer(fset *token.FileSet, helperName string, analysis analyzer.File) (*fileTransformer, error) {
+func newFileTransformer(fset *token.FileSet, helperName string, analysis analyzer.File, compilerClauseSelection bool) (*fileTransformer, error) {
 	transformer := &fileTransformer{
-		fset:         fset,
-		helperName:   helperName,
-		decisions:    make(map[decisionLocation]analyzer.Decision, len(analysis.Decisions)),
-		clauses:      make(map[clauseLocation]analyzer.Clause, len(analysis.Clauses)),
-		matchedDec:   make(map[decisionLocation]bool, len(analysis.Decisions)),
-		matchedCla:   make(map[cover.ClauseID]bool, len(analysis.Clauses)),
-		funcs:        make(map[*ast.BlockStmt]bool),
-		originalFile: analysis.RelativePath,
+		fset:              fset,
+		helperName:        helperName,
+		decisions:         make(map[decisionLocation]analyzer.Decision, len(analysis.Decisions)),
+		clauses:           make(map[clauseLocation]analyzer.Clause, len(analysis.Clauses)),
+		noMatches:         make(map[noMatchLocation]cover.NoMatchMetadata, len(analysis.NoMatches)),
+		matchedDec:        make(map[decisionLocation]bool, len(analysis.Decisions)),
+		matchedCla:        make(map[cover.ClauseID]bool, len(analysis.Clauses)),
+		matchedNoMatch:    make(map[cover.SwitchID]bool, len(analysis.NoMatches)),
+		funcs:             make(map[*ast.BlockStmt]bool),
+		originalFile:      analysis.RelativePath,
+		compilerSelection: compilerClauseSelection,
 	}
 	for _, decision := range analysis.Decisions {
 		key := decisionLocation{kind: decision.Metadata.Kind, start: decision.Condition.Start, end: decision.Condition.End}
@@ -484,6 +508,13 @@ func newFileTransformer(fset *token.FileSet, helperName string, analysis analyze
 			return nil, fmt.Errorf("duplicate analyzed %s clause at bytes %d:%d", clause.Metadata.Role, key.start, key.end)
 		}
 		transformer.clauses[key] = clause
+	}
+	for _, noMatch := range analysis.NoMatches {
+		key := noMatchLocation{kind: noMatch.Kind, start: noMatch.Location.StartOffset, end: noMatch.Location.EndOffset}
+		if _, exists := transformer.noMatches[key]; exists {
+			return nil, fmt.Errorf("duplicate analyzed %s no-match at bytes %d:%d", noMatch.Kind, key.start, key.end)
+		}
+		transformer.noMatches[key] = noMatch
 	}
 	return transformer, nil
 }
@@ -519,6 +550,9 @@ func (transformer *fileTransformer) transform(file *ast.File) error {
 	}
 	if len(transformer.matchedCla) != len(transformer.clauses) {
 		return fmt.Errorf("matched %d of %d analyzed clauses", len(transformer.matchedCla), len(transformer.clauses))
+	}
+	if transformer.compilerSelection && len(transformer.matchedNoMatch) != len(transformer.noMatches) {
+		return fmt.Errorf("matched %d of %d analyzed no-match switches", len(transformer.matchedNoMatch), len(transformer.noMatches))
 	}
 	return nil
 }
@@ -703,8 +737,42 @@ func (state *functionState) transformCaseClauses(kind cover.ClauseKind, statemen
 			return nil, err
 		}
 		entry := &ast.ExprStmt{X: state.call("SelectClause", idLiteral(uint64(metadata.ID)), idLiteral(uint64(metadata.SwitchID)))}
-		state.transformer.recordGenerated("switch-clause-probe", clause, 1)
-		clause.Body = append([]ast.Stmt{entry}, body...)
+		probes := []ast.Stmt{entry}
+		if state.transformer.compilerSelection && (kind == cover.ClauseExpressionSwitch || kind == cover.ClauseTypeSwitch) {
+			alternative := uint64(0)
+			if role == cover.ClauseDefault {
+				alternative = ^uint64(0)
+			}
+			direct := &ast.ExprStmt{X: state.call(
+				"CompilerDirectClause",
+				idLiteral(uint64(metadata.ID)),
+				idLiteral(uint64(metadata.SwitchID)),
+				idLiteral(alternative),
+			)}
+			probes = append([]ast.Stmt{direct}, probes...)
+		}
+		state.transformer.recordGenerated("switch-clause-probe", clause, uint32(len(probes)))
+		clause.Body = append(probes, body...)
+	}
+	if state.transformer.compilerSelection && (kind == cover.ClauseExpressionSwitch || kind == cover.ClauseTypeSwitch) {
+		noMatch, found, err := state.transformer.matchNoMatch(kind, statement)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			marker := &ast.ExprStmt{X: state.call("CompilerNoMatch", idLiteral(uint64(noMatch.SwitchID)))}
+			position := statement.End() - 1
+			synthetic := &ast.CaseClause{Case: position, Colon: position, Body: []ast.Stmt{marker}}
+			switch current := statement.(type) {
+			case *ast.SwitchStmt:
+				current.Body.List = append(current.Body.List, synthetic)
+			case *ast.TypeSwitchStmt:
+				current.Body.List = append(current.Body.List, synthetic)
+			default:
+				return nil, fmt.Errorf("cannot append no-match marker to %T", statement)
+			}
+			state.transformer.recordGenerated("switch-no-match-probe", statement, 1)
+		}
 	}
 	return []ast.Stmt{statement}, nil
 }
@@ -829,6 +897,21 @@ func (transformer *fileTransformer) matchClause(kind cover.ClauseKind, role cove
 	}
 	transformer.matchedCla[clause.Metadata.ID] = true
 	return clause.Metadata, nil
+}
+
+func (transformer *fileTransformer) matchNoMatch(kind cover.ClauseKind, node ast.Node) (cover.NoMatchMetadata, bool, error) {
+	start := transformer.fset.PositionFor(node.Pos(), false).Offset
+	end := transformer.fset.PositionFor(node.End(), false).Offset
+	key := noMatchLocation{kind: kind, start: start, end: end}
+	noMatch, found := transformer.noMatches[key]
+	if !found {
+		return cover.NoMatchMetadata{}, false, nil
+	}
+	if transformer.matchedNoMatch[noMatch.SwitchID] {
+		return cover.NoMatchMetadata{}, false, fmt.Errorf("source %s no-match switch at bytes %d:%d matched more than once", kind, start, end)
+	}
+	transformer.matchedNoMatch[noMatch.SwitchID] = true
+	return noMatch, true, nil
 }
 
 func (transformer *fileTransformer) recordGenerated(kind string, anchor ast.Node, count uint32) {

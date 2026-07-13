@@ -2,12 +2,12 @@
 
 [日本語](README.ja.md)
 
-gomcdc is a Go coverage tool for statement, function, decision, condition,
-clause body, clause selection, Unique-Cause MC/DC, and Masking MC/DC analysis.
+gomcdc combines statement, function, decision, condition, clause body, clause
+selection, Unique-Cause MC/DC, and Masking MC/DC coverage in one report.
 
 ## Requirements
 
-- Go 1.26.5 or a later security-patched Go 1.26 release
+- Go 1.26.5
 - Go Modules
 - macOS or Linux
 
@@ -26,7 +26,7 @@ gomcdc test --format html --output coverage-html ./...
 
 The HTML report is written to coverage-html/index.html.
 
-Each file page shows the original source bytes with byte-range annotations for
+Each file section shows the original source bytes with byte-range annotations for
 statement, decision, condition, clause, and both MC/DC strategies.
 
 ## Development

@@ -7,6 +7,7 @@ import (
 	cover "github.com/shrydev2020/gomcdc/internal/coverage"
 	"github.com/shrydev2020/gomcdc/internal/gotest"
 	"github.com/shrydev2020/gomcdc/internal/loader"
+	"github.com/shrydev2020/gomcdc/internal/report"
 	"github.com/shrydev2020/gomcdc/internal/runtimecov"
 )
 
@@ -26,6 +27,12 @@ func TestAssembleReportInputPreservesMeasurementBoundaries(t *testing.T) {
 	}
 	if input.RunStatus != cover.RunFailed || input.FailureKind != cover.RunFailureTest || input.Complete {
 		t.Fatalf("run state = %#v", input)
+	}
+	if input.Results != (report.RunResults{
+		Test: report.ResultFailed, Measurement: report.ResultPassed, Integrity: report.ResultPassed,
+		Strict: report.ResultNotRequested, Threshold: report.ResultNotRequested,
+	}) {
+		t.Fatalf("independent results = %#v", input.Results)
 	}
 	if got := input.PackageStatuses["example.test/m/p"]; got != string(gotest.PackageFailed) {
 		t.Fatalf("package status = %q", got)

@@ -7,6 +7,10 @@ import "fmt"
 // DecisionID identifies a decision within one source revision.
 type DecisionID uint64
 
+// ConditionID identifies one atomic condition occurrence within one source
+// revision.
+type ConditionID uint64
+
 // EvaluationID identifies one dynamic evaluation of a decision. Producers
 // should make it unique within a coverage run. EvaluationIdentity also carries
 // process provenance so separately produced package data cannot be merged by a
@@ -102,23 +106,24 @@ type ClauseMetadata struct {
 	DecisionIDs      []DecisionID   `json:"decisionIds,omitempty"`
 }
 
-// ClauseEventKind keeps body execution distinct from exact case selection.
-// The AST backend emits only ClauseBodyExecution; ClauseDirectSelection is
-// reserved for a future compiler-aware backend that can prove selection.
+// ClauseEventKind keeps AST body execution distinct from exact compiler-aware
+// dispatch selection.
 type ClauseEventKind string
 
 const (
-	ClauseDirectSelection ClauseEventKind = "direct-selection"
-	ClauseBodyExecution   ClauseEventKind = "body-execution"
+	ClauseDirectSelection  ClauseEventKind = "direct-selection"
+	ClauseBodyExecution    ClauseEventKind = "body-execution"
 	ClauseNoMatchSelection ClauseEventKind = "no-match-selection"
 )
 
-// ClauseObservation is one runtime clause event. The formal AST metric uses
-// only body executions.
+// ClauseObservation is one runtime clause event. AlternativeKnown distinguishes
+// case alternative zero from default/no-match events, which have no alternative.
 type ClauseObservation struct {
-	SwitchID SwitchID        `json:"switchId,omitempty"`
-	ClauseID ClauseID        `json:"clauseId,omitempty"`
-	Event    ClauseEventKind `json:"event"`
+	SwitchID         SwitchID        `json:"switchId,omitempty"`
+	ClauseID         ClauseID        `json:"clauseId,omitempty"`
+	Event            ClauseEventKind `json:"event"`
+	AlternativeIndex uint16          `json:"alternativeIndex,omitempty"`
+	AlternativeKnown bool            `json:"alternativeKnown,omitempty"`
 }
 
 // DecisionNotEvaluatedObservation records that a source decision was skipped
@@ -137,6 +142,7 @@ type DecisionNotEvaluatedObservation struct {
 // ConditionMetadata describes one atomic condition in a decision. Index is
 // the stable, zero-based position used by runtime evaluation vectors.
 type ConditionMetadata struct {
+	ID         ConditionID    `json:"id"`
 	Index      uint16         `json:"index"`
 	Expression string         `json:"expression"`
 	Location   SourceLocation `json:"location"`
@@ -257,7 +263,7 @@ func (s ConditionState) Bool() (value bool, evaluated bool) {
 func (s ConditionState) String() string {
 	switch s {
 	case ConditionNotEvaluated:
-		return "not evaluated"
+		return "not-evaluated"
 	case ConditionFalse:
 		return "false"
 	case ConditionTrue:
@@ -331,15 +337,15 @@ const (
 	CoverageMetricMCDCMasking               CoverageMetric = "mcdc-masking"
 )
 
-// CoverageStatus keeps evidence-backed results distinct from unsupported,
-// unknown, aborted, and potentially infeasible cases.
+// CoverageStatus is the normative coverage axis. Backend support and analysis
+// completeness are represented independently by SupportStatus and
+// AnalysisStatus.
 type CoverageStatus string
 
 const (
 	CoverageCovered            CoverageStatus = "covered"
-	CoverageNotCovered         CoverageStatus = "not covered"
-	CoverageUnsupported        CoverageStatus = "unsupported"
-	CoverageUnknown            CoverageStatus = "unknown"
+	CoverageNotCovered         CoverageStatus = "not-covered"
+	CoverageAnalysisIncomplete CoverageStatus = "analysis-incomplete"
 	CoveragePossiblyInfeasible CoverageStatus = "infeasible"
 )
 
@@ -349,7 +355,7 @@ type CoverageOutcome string
 
 const (
 	CoverageOutcomeCovered    CoverageOutcome = "covered"
-	CoverageOutcomeNotCovered CoverageOutcome = "not covered"
+	CoverageOutcomeNotCovered CoverageOutcome = "not-covered"
 	CoverageOutcomeUnknown    CoverageOutcome = "unknown"
 )
 
@@ -357,7 +363,7 @@ type SupportStatus string
 
 const (
 	SupportSupported   SupportStatus = "supported"
-	SupportUnsupported SupportStatus = "unsupported"
+	SupportUnsupported SupportStatus = "unsupported-by-backend"
 	SupportUnknown     SupportStatus = "unknown"
 )
 
@@ -403,7 +409,6 @@ type MCDCWitness struct {
 // MCDCConditionResult records coverage and evidence for one atomic condition.
 type MCDCConditionResult struct {
 	ConditionIndex uint16          `json:"conditionIndex"`
-	Status         CoverageStatus  `json:"-"`
 	Outcome        CoverageOutcome `json:"outcome"`
 	Support        SupportStatus   `json:"support"`
 	Analysis       AnalysisStatus  `json:"analysis"`
@@ -415,7 +420,6 @@ type MCDCConditionResult struct {
 type MCDCResult struct {
 	DecisionID          DecisionID            `json:"decisionId"`
 	Metric              CoverageMetric        `json:"metric"`
-	Status              CoverageStatus        `json:"-"`
 	Outcome             CoverageOutcome       `json:"outcome"`
 	Support             SupportStatus         `json:"support"`
 	Analysis            AnalysisStatus        `json:"analysis"`
@@ -430,7 +434,9 @@ type MCDCResult struct {
 func (r MCDCResult) CoveredConditions() int {
 	covered := 0
 	for _, condition := range r.Conditions {
-		if condition.Status == CoverageCovered {
+		if condition.Outcome == CoverageOutcomeCovered &&
+			condition.Support == SupportSupported &&
+			condition.Analysis == AnalysisComplete {
 			covered++
 		}
 	}

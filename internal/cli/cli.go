@@ -105,24 +105,28 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		fmt.Fprintf(stderr, "gomcdc: %v\n", err)
 		return ExitInvalidUsage
 	}
+	if conflict := measurementFlag(opts.goTestArgs); conflict != "" {
+		writeMeasurementFlagError(stderr, conflict, "go test arguments")
+		return ExitInvalidUsage
+	}
 	buildFlags, err := loader.BuildFlags(opts.goTestArgs)
 	if err != nil {
 		fmt.Fprintf(stderr, "gomcdc: %v\n", err)
 		return ExitInvalidUsage
 	}
 	rawGOFLAGS := os.Getenv("GOFLAGS")
-	goFlagsOverlay, goFlagsErr := goflags.Contains(rawGOFLAGS, "overlay")
+	goFlagWords, goFlagsErr := goflags.Split(rawGOFLAGS)
 	if goFlagsErr != nil {
 		fmt.Fprintf(stderr, "gomcdc: parse GOFLAGS: %v\n", goFlagsErr)
+		return ExitInvalidUsage
+	}
+	if conflict := measurementFlag(goFlagWords); conflict != "" {
+		writeMeasurementFlagError(stderr, conflict, "GOFLAGS")
 		return ExitInvalidUsage
 	}
 	filteredGOFLAGS, goFlagsErr := goflags.WithoutMeasurementFlags(rawGOFLAGS)
 	if goFlagsErr != nil {
 		fmt.Fprintf(stderr, "gomcdc: parse GOFLAGS: %v\n", goFlagsErr)
-		return ExitInvalidUsage
-	}
-	if usesOverlay(buildFlags) || goFlagsOverlay {
-		fmt.Fprintln(stderr, "gomcdc: go test -overlay is unsupported because it prevents reliable original-source mapping")
 		return ExitInvalidUsage
 	}
 	loaded, err := loader.Load(ctx, loader.Options{
@@ -138,6 +142,8 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	}
 
 	var sources []sourceInstrumentation
+	var generatedFiles []c0map.GeneratedFile
+	var reportErrors []report.ReportError
 	analysisIncomplete := false
 	analysisUnknown := 0
 	for _, file := range loaded.Files {
@@ -162,6 +168,14 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 			fmt.Fprintf(stderr, "gomcdc: source analysis skipped %q: %v\n", relative, analysisErr)
 			analysisIncomplete = true
 			analysisUnknown++
+			reportErrors = append(reportErrors, report.ReportError{
+				Phase: "analysis", Code: "source-analysis-failed", Message: "source analysis did not complete",
+				Package: file.PackagePath, Path: filepath.ToSlash(relative),
+			})
+			continue
+		}
+		if analysis.Generated {
+			generatedFiles = append(generatedFiles, c0map.GeneratedFile{Path: filepath.ToSlash(relative)})
 			continue
 		}
 		sources = append(sources, sourceInstrumentation{loaded: file, analysis: analysis})
@@ -177,6 +191,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 
 	needsC0 := opts.metrics.Enabled(config.MetricStatement) || opts.metrics.Enabled(config.MetricFunction)
 	needsASTRun := needsASTRuntime(opts.metrics)
+	needsCompilerSelection := opts.metrics.Enabled(config.MetricSwitchClauseSelection) || opts.metrics.Enabled(config.MetricTypeSwitchClauseSelection)
 	var decisions []cover.DecisionMetadata
 	var clauses []cover.ClauseMetadata
 	var noMatches []cover.NoMatchMetadata
@@ -194,8 +209,8 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	measurement, workspaces, measurementErr := measure(measurementRequest{
 		context: ctx, timeout: opts.timeout, goTestArgs: opts.goTestArgs, json: jsonMode,
 		workDirParent: opts.workDirParent, keepWorkDir: opts.keepWorkDir,
-		loaded: loaded, sources: sources, decisions: decisions, clauses: clauses, noMatches: noMatches,
-		needsC0: needsC0, needsAST: needsASTRun,
+		loaded: loaded, sources: sources, generated: generatedFiles, decisions: decisions, clauses: clauses, noMatches: noMatches,
+		needsC0: needsC0, needsAST: needsASTRun, compilerClauseSelection: needsCompilerSelection,
 	}, stderr)
 	if workspaces != nil {
 		defer func() {
@@ -216,25 +231,45 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		standardCoverRequested: needsC0, astRequested: needsASTRun,
 		astEvidenceUnknown: measurement.astEvidenceIntegrityUnknown, c0EvidenceUnknown: measurement.c0EvidenceIntegrityUnknown,
 		instrumentationUnknown: analysisUnknown, integrityFailure: measurement.integrityFailure, analysisIncomplete: analysisIncomplete,
+		errors: reportErrors, measurementDiagnostics: measurement.diagnostics,
 	})
 	built := report.Build(input)
-	if err := writeReport(opts, input, built, workingDir, stdout); err != nil {
+	strictFailure := opts.strict && (built.Instrumentation.HasGaps() || summaryAnalysisIncomplete(built.Summary) > 0)
+	thresholds := thresholdFailures(opts, built.Summary)
+	input.Results.Strict = requestedResult(opts.strict, !strictFailure)
+	input.Results.Threshold = requestedResult(thresholdRequested(opts), len(thresholds) == 0)
+	if strictFailure {
+		input.Errors = append(input.Errors, report.ReportError{
+			Phase: "validation", Code: "strict-coverage-gap", Message: "requested coverage contains unsupported, unknown, analysis-incomplete, or uninstrumented entities",
+		})
+	}
+	for _, threshold := range thresholds {
+		input.Errors = append(input.Errors, report.ReportError{
+			Phase: "threshold", Code: "coverage-threshold-failed", Message: threshold,
+		})
+	}
+	built = report.Build(input)
+	if opts.format == "html" {
+		built = report.WithSourceViews(built, input.SourceFiles)
+	}
+	if err := writeReport(opts, built, workingDir, stdout); err != nil {
 		fmt.Fprintf(stderr, "gomcdc: report generation failed: %v\n", err)
 		return ExitMeasurementFailed
 	}
 	if measurement.integrityFailure {
 		return classifyExit(false, true, false, false)
 	}
-	if opts.strict && built.Instrumentation.HasGaps() {
+	if strictFailure {
 		coverage := built.Instrumentation.Total
 		fmt.Fprintf(
 			stderr,
-			"gomcdc: strict instrumentation coverage failed: discovered=%d supported=%d instrumented=%d unsupported=%d unknown=%d\n",
+			"gomcdc: strict coverage failed: discovered=%d supported=%d instrumented=%d unsupported=%d unknown=%d analysis-incomplete=%d\n",
 			coverage.Discovered,
 			coverage.Supported,
 			coverage.Instrumented,
 			coverage.Unsupported,
 			coverage.Unknown,
+			summaryAnalysisIncomplete(built.Summary),
 		)
 		return classifyExit(false, true, false, false)
 	}
@@ -250,13 +285,50 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		}
 		return classifyExit(false, false, true, false)
 	}
-	if failures := thresholdFailures(opts, built.Summary); len(failures) > 0 {
-		for _, failure := range failures {
+	if len(thresholds) > 0 {
+		for _, failure := range thresholds {
 			fmt.Fprintln(stderr, failure)
 		}
 		return classifyExit(false, false, false, true)
 	}
 	return classifyExit(false, false, false, false)
+}
+
+func requestedResult(requested, passed bool) report.ResultStatus {
+	if !requested {
+		return report.ResultNotRequested
+	}
+	return passFailResult(passed)
+}
+
+func thresholdRequested(opts options) bool {
+	return opts.failUnderStatement.set ||
+		opts.failUnderFunction.set ||
+		opts.failUnderDecision.set ||
+		opts.failUnderSwitchClauseBody.set ||
+		opts.failUnderTypeSwitchClauseBody.set ||
+		opts.failUnderSelectClauseBody.set ||
+		opts.failUnderSwitchClauseSelection.set ||
+		opts.failUnderTypeSwitchClauseSelection.set ||
+		opts.failUnderCondition.set ||
+		opts.failUnderMCDCUnique.set ||
+		opts.failUnderMCDCMasking.set
+}
+
+func summaryAnalysisIncomplete(summary report.Summary) int {
+	metrics := []report.MetricSummary{
+		summary.Statement, summary.Function, summary.Decision,
+		summary.SwitchClauseBody, summary.TypeSwitchClauseBody, summary.SelectClauseBody,
+		summary.SwitchClauseSelection, summary.TypeSwitchClauseSelection,
+		summary.Condition, summary.MCDCUnique, summary.MCDCMasking,
+	}
+	total := 0
+	for _, metric := range metrics {
+		if metric.Enabled {
+			total += metric.AnalysisIncomplete
+		}
+	}
+	return total
 }
 
 func sourceFileInputs(sources []sourceInstrumentation) []report.SourceFileInput {
@@ -279,7 +351,7 @@ type packageInstrumentation struct {
 	files       []instrument.FileMapping
 }
 
-func instrumentPackages(moduleDir string, sources []sourceInstrumentation, runtimeImportPath string) ([]instrument.PackageResult, error) {
+func instrumentPackages(moduleDir string, sources []sourceInstrumentation, runtimeImportPath string, compilerClauseSelection bool) ([]instrument.PackageResult, error) {
 	groups := make(map[string]*packageInstrumentation)
 	for _, item := range sources {
 		if len(item.analysis.Decisions) == 0 && len(item.analysis.Clauses) == 0 {
@@ -317,13 +389,14 @@ func instrumentPackages(moduleDir string, sources []sourceInstrumentation, runti
 			return nil, err
 		}
 		result, err := instrument.InstrumentPackage(instrument.PackageOptions{
-			Directory:         group.directory,
-			PackageName:       group.packageName,
-			PackagePath:       group.packagePath,
-			RuntimeImportPath: runtimeImportPath,
-			TestOnly:          group.testOnly,
-			ActiveFiles:       activeFiles,
-			Files:             group.files,
+			Directory:               group.directory,
+			PackageName:             group.packageName,
+			PackagePath:             group.packagePath,
+			RuntimeImportPath:       runtimeImportPath,
+			CompilerClauseSelection: compilerClauseSelection,
+			TestOnly:                group.testOnly,
+			ActiveFiles:             activeFiles,
+			Files:                   group.files,
 		})
 		if err != nil {
 			return nil, err
@@ -410,7 +483,7 @@ func measurementRuns(standard, ast *gotest.Result) []report.MeasurementRun {
 		}
 		measurements = append(measurements, report.MeasurementRun{
 			Name: name,
-			Run: report.Run{
+			Run: report.TestRun{
 				Status:      result.Status,
 				FailureKind: result.FailureKind,
 				Complete:    result.Status == cover.RunPassed,
@@ -455,14 +528,33 @@ func testRunsFailed(results ...*gotest.Result) bool {
 	return false
 }
 
-func usesOverlay(buildFlags []string) bool {
-	for _, argument := range buildFlags {
-		name := strings.TrimLeft(argument, "-")
-		if name == "overlay" || strings.HasPrefix(name, "overlay=") {
-			return true
+var measurementFlags = map[string]struct{}{
+	"count": {}, "cover": {}, "coverprofile": {}, "covermode": {},
+	"coverpkg": {}, "json": {}, "overlay": {}, "toolexec": {},
+}
+
+func measurementFlag(arguments []string) string {
+	for _, argument := range arguments {
+		if argument == "-args" || argument == "--args" {
+			break
+		}
+		if !strings.HasPrefix(argument, "-") {
+			continue
+		}
+		name := goflags.Name(argument)
+		if _, forbidden := measurementFlags[name]; forbidden {
+			return name
 		}
 	}
-	return false
+	return ""
+}
+
+func writeMeasurementFlagError(stderr io.Writer, name, source string) {
+	if name == "overlay" {
+		fmt.Fprintf(stderr, "gomcdc: go test -overlay from %s is unsupported because it prevents reliable original-source mapping\n", source)
+		return
+	}
+	fmt.Fprintf(stderr, "gomcdc: go test -%s from %s conflicts with gomcdc measurement ownership\n", name, source)
 }
 
 func goTestJSONEnabled(arguments []string) bool {
@@ -537,9 +629,9 @@ func validateObservations(
 	for _, decision := range decisions {
 		knownDecisions[decision.ID] = decision
 	}
-	knownClauses := make(map[cover.ClauseID]struct{}, len(clauses))
+	knownClauses := make(map[cover.ClauseID]cover.ClauseMetadata, len(clauses))
 	for _, clause := range clauses {
-		knownClauses[clause.ID] = struct{}{}
+		knownClauses[clause.ID] = clause
 	}
 	knownNoMatches := make(map[cover.SwitchID]struct{})
 	for _, noMatch := range noMatches {
@@ -671,19 +763,48 @@ func validateObservations(
 	}
 	for _, observation := range collection.Clauses {
 		if observation.Event == cover.ClauseNoMatchSelection {
-			if _, exists := knownNoMatches[observation.SwitchID]; !exists {
+			if _, exists := knownNoMatches[observation.SwitchID]; !exists || observation.AlternativeKnown {
 				validationErrors = append(validationErrors, fmt.Errorf("event contains unknown no-match switch ID 0x%016x", uint64(observation.SwitchID)))
 				continue
 			}
 			validated.Clauses = append(validated.Clauses, observation)
 			continue
 		}
-		if _, exists := knownClauses[observation.ClauseID]; !exists {
+		metadata, exists := knownClauses[observation.ClauseID]
+		if !exists {
 			validationErrors = append(validationErrors, fmt.Errorf("event contains unknown clause ID 0x%016x", uint64(observation.ClauseID)))
 			continue
 		}
-		if observation.Event != cover.ClauseBodyExecution {
-			validationErrors = append(validationErrors, fmt.Errorf("AST backend clause 0x%016x has unsupported event %q", uint64(observation.ClauseID), observation.Event))
+		if observation.SwitchID != 0 && observation.SwitchID != metadata.SwitchID {
+			validationErrors = append(validationErrors, fmt.Errorf("clause 0x%016x has inconsistent switch ID", uint64(observation.ClauseID)))
+			continue
+		}
+		switch observation.Event {
+		case cover.ClauseBodyExecution:
+			if observation.AlternativeKnown {
+				validationErrors = append(validationErrors, fmt.Errorf("clause 0x%016x body event carries a case alternative", uint64(observation.ClauseID)))
+				continue
+			}
+		case cover.ClauseDirectSelection:
+			if metadata.Kind != cover.ClauseExpressionSwitch && metadata.Kind != cover.ClauseTypeSwitch {
+				validationErrors = append(validationErrors, fmt.Errorf("clause 0x%016x kind %q cannot carry direct-selection evidence", uint64(observation.ClauseID), metadata.Kind))
+				continue
+			}
+			alternatives := len(metadata.Expressions)
+			if metadata.Kind == cover.ClauseTypeSwitch {
+				alternatives = len(metadata.Types)
+			}
+			if metadata.Role == cover.ClauseDefault {
+				if observation.AlternativeKnown {
+					validationErrors = append(validationErrors, fmt.Errorf("default clause 0x%016x carries a case alternative", uint64(observation.ClauseID)))
+					continue
+				}
+			} else if !observation.AlternativeKnown || int(observation.AlternativeIndex) >= alternatives {
+				validationErrors = append(validationErrors, fmt.Errorf("clause 0x%016x carries an invalid case alternative", uint64(observation.ClauseID)))
+				continue
+			}
+		default:
+			validationErrors = append(validationErrors, fmt.Errorf("clause 0x%016x has unsupported event %q", uint64(observation.ClauseID), observation.Event))
 			continue
 		}
 		validated.Clauses = append(validated.Clauses, observation)
@@ -735,6 +856,17 @@ func formatRuntimeDiagnostic(diagnostic runtimecov.Diagnostic) string {
 		return fmt.Sprintf("%s: %s", severity, diagnostic.Message)
 	}
 	return fmt.Sprintf("%s: %s: %s", severity, location, diagnostic.Message)
+}
+
+func runtimeDiagnosticReportMessage(severity runtimecov.DiagnosticSeverity) string {
+	switch severity {
+	case runtimecov.DiagnosticRecoverable:
+		return "runtime coverage event stream was interrupted"
+	case runtimecov.DiagnosticIntegrity:
+		return "runtime coverage event stream failed integrity validation"
+	default:
+		return "runtime coverage event stream reported a diagnostic"
+	}
 }
 
 func runtimeDiagnosticsInvalidate(diagnostics []runtimecov.Diagnostic, astResult *gotest.Result) bool {
@@ -800,7 +932,7 @@ func belowThreshold(metric report.MetricSummary, threshold float64) bool {
 	return float64(metric.Covered)*100 < threshold*float64(metric.Total)
 }
 
-func writeReport(opts options, input report.Input, built report.Report, workingDir string, stdout io.Writer) error {
+func writeReport(opts options, built report.Report, workingDir string, stdout io.Writer) error {
 	if opts.format == "html" {
 		outputDir := opts.output
 		if !filepath.IsAbs(outputDir) {
@@ -819,7 +951,7 @@ func writeReport(opts options, input report.Input, built report.Report, workingD
 			_ = file.Close()
 			_ = os.Remove(tempPath)
 		}
-		if err := report.WriteHTMLReport(file, built, input); err != nil {
+		if err := report.WriteHTMLReport(file, built); err != nil {
 			cleanup()
 			return err
 		}

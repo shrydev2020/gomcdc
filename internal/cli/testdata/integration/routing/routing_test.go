@@ -3,7 +3,9 @@ package routing
 import "testing"
 
 func TestClauses(t *testing.T) {
-	for _, value := range []int{1, 2, 9} {
+	// case 2 is reached only by fallthrough, so its body and direct-selection
+	// obligations must remain observably distinct.
+	for _, value := range []int{1, 9} {
 		ExpressionSwitch(value)
 	}
 	for _, value := range []int{1, 2, 9} {

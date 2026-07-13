@@ -204,7 +204,7 @@ Each test process writes to a distinct file whose name contains a collision-free
 
 ### D26. go test
 
-At least one package pattern is required. The CLI invokes `go test -count=1`. User or GOFLAGS settings for `-count`, `-cover`, `-coverprofile`, `-covermode`, `-coverpkg`, `-json`, or `-overlay` are CLI errors. Non-conflicting arguments after `--` apply with the same meaning to analysis and every run. Analysis and tests use identical GOOS, GOARCH, build tags, CGO, and module settings. A go.work with multiple active main modules is outside the target set.
+At least one package pattern is required. The CLI invokes `go test -count=1`. User or GOFLAGS settings for `-count`, `-cover`, `-coverprofile`, `-covermode`, `-coverpkg`, `-json`, `-overlay`, or `-toolexec` are CLI errors. Non-conflicting arguments after `--` apply with the same meaning to analysis and every run. Analysis and tests use identical GOOS, GOARCH, build tags, CGO, and module settings. A go.work with multiple active main modules is outside the target set.
 
 ## 8. External forms
 
@@ -233,9 +233,11 @@ Each metric has exactly one `--fail-under-<metric>` threshold flag. A threshold 
 
 Precedence is `4 > 2 > 1 > 3 > 0`. The overall result retains separate test, measurement, integrity, strict, and threshold fields.
 
+`run.results` contains `test`, `measurement`, `integrity`, `strict`, and `threshold`. Each value is one of `passed`, `failed`, `timeout`, `not-run`, or `not-requested`; only test uses `timeout`. Strict and threshold are `not-requested` when their corresponding policy was not specified, and exit-code precedence never overwrites another result field.
+
 ### D29. JSON
 
-The root contains `version`, `module`, `run`, `measurementMode`, `measurements`, `instrumentationCoverage`, `summary`, `packages`, and `errors`. During draft, version is `1.0-draft`.
+The root contains `version`, `module`, `run`, `measurementMode`, `measurements`, `capabilities`, `backendCapabilities`, `instrumentationCoverage`, `summary`, `packages`, and `errors`. `capabilities` is the tool-wide aggregate, while `backendCapabilities` exposes the per-producer authority required by D21. During draft, version is `1.0-draft`.
 
 The summary keys are `statement`, `function`, `decision`, `switchClauseBody`, `typeSwitchClauseBody`, `selectClauseBody`, `switchClauseSelection`, `typeSwitchClauseSelection`, `condition`, `mcdcUnique`, and `mcdcMasking`.
 
@@ -259,7 +261,7 @@ One instrumented run collects all non-standard-cover evidence with one source in
 
 The tool builds and tests a trusted target module with the current user's authority. The temporary workspace is not a security sandbox, and evidence authenticity is not guaranteed against malicious target code. Temporary directories and event files are readable and writable only by the current user. Source copying prevents symlinks and hardlinks from writing outside the workspace. Normal reports contain no user absolute local path.
 
-The tool defines coverage semantics only and claims no DO-178C compliance, tool qualification, or safety certification. Windows, assembly, cgo internals, compiler IR, path coverage, and distributed test execution are outside v1.
+The tool defines coverage semantics only and claims no DO-178C compliance, tool qualification, or safety certification. Windows, assembly, cgo internals, coverage whose obligations are compiler IR, path coverage, and distributed test execution are outside v1.
 
 ## 9. Conformance conditions
 

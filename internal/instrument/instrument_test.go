@@ -71,8 +71,11 @@ func Allow(a, b bool) bool {
 	if !strings.Contains(text, "if value := 1; __fixtureHit.BeginInto(") {
 		t.Fatalf("if init statement changed unexpectedly:\n%s", text)
 	}
-	if !strings.Contains(text, "(a) == (0 == 0)") || !strings.Contains(text, "(b) == (0 == 0)") || !strings.Contains(text, "(!a) == (0 == 0)") {
+	if !strings.Contains(text, "(a) == (0 == 0)") || !strings.Contains(text, "(b) == (0 == 0)") {
 		t.Fatalf("condition was not normalized as required:\n%s", text)
+	}
+	if strings.Contains(text, "(!a) == (0 == 0)") {
+		t.Fatalf("negation was recorded as part of the atom instead of the expression tree:\n%s", text)
 	}
 	if strings.Contains(text, "for __fixtureHit.BeginInto") && strings.Count(text, "for __fixtureHit.BeginInto") != 1 {
 		t.Fatalf("unconditional for loop was instrumented:\n%s", text)
@@ -574,7 +577,7 @@ func TestCoverageFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.SourceMaps) != 1 || !strings.HasPrefix(result.SourceMaps[0].GeneratedFile, ".gomcdc/generated/") || len(result.SourceMaps[0].GeneratedRegions) == 0 {
+	if len(result.SourceMaps) != 1 || !strings.HasPrefix(result.SourceMaps[0].GeneratedFile, ".gomcdc/generated/") || !strings.HasPrefix(result.SourceMaps[0].CompilerFile, ".gomcdc/compiler/") || len(result.SourceMaps[0].GeneratedRegions) == 0 {
 		t.Fatalf("SourceMaps = %#v", result.SourceMaps)
 	}
 	if len(result.GeneratedFiles) != 1 || result.GeneratedFiles[0] != result.BridgePath {

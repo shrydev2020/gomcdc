@@ -215,9 +215,26 @@ func (StandardCoverBackend) Capabilities() CapabilitySet {
 	}
 }
 
-// OrchestratedBackend is the v1 tool-level union of the standard-cover and AST
-// producers. A capability is supported when at least one concrete producer
-// supports it; an explicit unsupported status is retained otherwise.
+// CompilerAwareBackend relocates generated switch markers while lowering the
+// compiler IR, so dispatch selection remains distinct from body fallthrough.
+type CompilerAwareBackend struct{}
+
+var _ InstrumentationBackend = CompilerAwareBackend{}
+
+func (CompilerAwareBackend) Capabilities() CapabilitySet {
+	return CapabilitySet{
+		CapabilitySwitchClauseSelection:             CapabilitySupported,
+		CapabilityTypeSwitchClauseSelection:         CapabilitySupported,
+		CapabilityExpressionSwitchMatchedExpression: CapabilitySupported,
+		CapabilityTypeSwitchMatchedTypeAlternative:  CapabilitySupported,
+		CapabilityDirectCaseSelection:               CapabilitySupported,
+	}
+}
+
+// OrchestratedBackend is the v1 tool-level union of the standard-cover, AST,
+// and compiler-aware producers. A capability is supported when at least one
+// concrete producer supports it; an explicit unsupported status is retained
+// otherwise.
 type OrchestratedBackend struct{}
 
 var _ InstrumentationBackend = OrchestratedBackend{}
@@ -226,6 +243,7 @@ func (OrchestratedBackend) Capabilities() CapabilitySet {
 	return MergeCapabilitySets(
 		(StandardCoverBackend{}).Capabilities(),
 		(ASTBackend{}).Capabilities(),
+		(CompilerAwareBackend{}).Capabilities(),
 	)
 }
 
@@ -233,6 +251,7 @@ func (OrchestratedBackend) Capabilities() CapabilitySet {
 func V1Producers() []ProducerCapabilities {
 	return []ProducerCapabilities{
 		{Backend: "ast", Capabilities: (ASTBackend{}).Capabilities()},
+		{Backend: "compiler-aware", Capabilities: (CompilerAwareBackend{}).Capabilities()},
 		{Backend: "standard-cover", Capabilities: (StandardCoverBackend{}).Capabilities()},
 	}
 }

@@ -52,6 +52,59 @@ func TestWriteHTMLMarksPartialReport(t *testing.T) {
 	}
 }
 
+func TestWriteHTMLDistinguishesAnalysisIncomplete(t *testing.T) {
+	t.Parallel()
+	metric := MetricSummary{Enabled: true, AnalysisIncomplete: 1}
+	var output bytes.Buffer
+	if err := writeHTMLReport(&output, Report{
+		Module: "m", Run: Run{Status: cover.RunPassed, Complete: true},
+		Summary: Summary{MCDCUnique: metric},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	html := output.String()
+	for _, required := range []string{"status-analysis-incomplete", "analysis-incomplete 1"} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("HTML omitted %q", required)
+		}
+	}
+}
+
+func TestReportsExposeClauseSelectionEvidence(t *testing.T) {
+	t.Parallel()
+	metric := MetricSummary{Enabled: true, Covered: 1, Total: 1}
+	value := Report{
+		Module: "m",
+		Run:    Run{Status: cover.RunPassed, Complete: true},
+		Packages: []PackageReport{{
+			Path: "m/p",
+			Files: []FileReport{{
+				Path: "p.go",
+				Functions: []FunctionReport{{
+					Name: "Switch",
+					Clauses: []ClauseReport{{
+						Kind:                 cover.ClauseExpressionSwitch,
+						Role:                 cover.ClauseCase,
+						DirectSelections:     2,
+						SelectedAlternatives: []uint16{0, 2},
+						SelectionCoverage:    metric,
+					}},
+				}},
+			}},
+		}},
+	}
+	var output bytes.Buffer
+	if err := writeHTMLReport(&output, value); err != nil {
+		t.Fatal(err)
+	}
+	if html := output.String(); !strings.Contains(html, "direct selections 2 · alternatives [0 2]") {
+		t.Fatalf("HTML omits clause-selection evidence: %s", html)
+	}
+	if text := RenderTextReport(value); !strings.Contains(text, "direct-selections=2 selected-alternatives=[0 2]") {
+		t.Fatalf("text omits clause-selection evidence:\n%s", text)
+	}
+}
+
 func TestWriteHTMLPresentsHumanReadableTriageHierarchy(t *testing.T) {
 	t.Parallel()
 	percentage := 75.0

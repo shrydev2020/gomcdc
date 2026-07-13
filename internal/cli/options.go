@@ -79,7 +79,7 @@ func parseOptions(args []string, errOut io.Writer) (options, error) {
 	fs.Var(&opts.excludes, "exclude", "exclude module-relative glob; repeatable; ** is supported")
 	fs.BoolVar(&opts.includeTests, "include-tests", false, "include active _test.go decisions in the denominator")
 	fs.BoolVar(&opts.keepWorkDir, "keep-workdir", false, "keep the instrumented temporary workspace")
-	fs.BoolVar(&opts.strict, "strict", false, "fail when a requested source entity is unsupported, unknown, or not instrumented")
+	fs.BoolVar(&opts.strict, "strict", false, "fail when a requested source entity is unsupported, unknown, analysis-incomplete, or not instrumented")
 	fs.StringVar(&opts.workDirParent, "workdir", "", "parent directory for the temporary workspace")
 	fs.DurationVar(&opts.timeout, "timeout", 10*time.Minute, "maximum duration of the go test subprocess (0 disables)")
 	fs.Var(&opts.failUnderStatement, "fail-under-statement", "minimum statement coverage percentage")

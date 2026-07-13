@@ -17,14 +17,13 @@ type htmlMetric struct {
 
 // WriteHTML writes one self-contained static HTML report.
 func WriteHTML(w io.Writer, input Input) error {
-	report := Build(input)
-	return WriteHTMLReport(w, report, input)
+	built := WithSourceViews(Build(input), input.SourceFiles)
+	return WriteHTMLReport(w, built)
 }
 
-// WriteHTMLReport renders an already-built report. The input is used only for
-// attaching original-source views and is never rebuilt.
-func WriteHTMLReport(w io.Writer, report Report, input Input) error {
-	attachSourceViews(&report, input)
+// WriteHTMLReport renders an already-built report without consulting the
+// measurement input or executing additional analysis, builds, or tests.
+func WriteHTMLReport(w io.Writer, report Report) error {
 	return writeHTMLReport(w, report)
 }
 
@@ -124,6 +123,8 @@ func htmlMetricStatus(metric MetricSummary) string {
 	switch {
 	case !metric.Enabled:
 		return "disabled"
+	case metric.AnalysisIncomplete > 0:
+		return "analysis-incomplete"
 	case metric.Unknown > 0:
 		return "unknown"
 	case metric.Unsupported > 0:
@@ -148,7 +149,7 @@ func htmlSummaryGaps(summary Summary) int {
 			continue
 		}
 		gaps += metric.Summary.Total - metric.Summary.Covered
-		gaps += metric.Summary.Unknown + metric.Summary.Unsupported + metric.Summary.PossiblyInfeasible
+		gaps += metric.Summary.Unknown + metric.Summary.Unsupported + metric.Summary.PossiblyInfeasible + metric.Summary.AnalysisIncomplete
 	}
 	return gaps
 }
@@ -174,7 +175,7 @@ func htmlMetricClass(m MetricSummary) string {
 	switch {
 	case !m.Enabled:
 		return "disabled"
-	case m.Unknown > 0 || m.Unsupported > 0:
+	case m.Unknown > 0 || m.Unsupported > 0 || m.AnalysisIncomplete > 0:
 		return "attention"
 	case m.Total == 0:
 		return "empty"

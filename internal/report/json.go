@@ -32,6 +32,9 @@ func WriteJSON(writer io.Writer, input Input) error {
 
 // WriteJSONReport writes an already-built report without rebuilding it.
 func WriteJSONReport(writer io.Writer, report Report) error {
+	if report.Errors == nil {
+		report.Errors = []ReportError{}
+	}
 	encoder := json.NewEncoder(writer)
 	encoder.SetEscapeHTML(false)
 	encoder.SetIndent("", "  ")

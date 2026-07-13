@@ -23,6 +23,9 @@ func TestBooleanDecisions(t *testing.T) {
 	if !GeneratedGate(true, true) || GeneratedGate(false, true) || GeneratedGate(true, false) {
 		t.Fatal("unexpected GeneratedGate result")
 	}
+	if got := UserNamedCompilerMarker(1); got != 1 {
+		t.Fatalf("user marker call after fallthrough = %d, want 1", got)
+	}
 	if !Any(true, false) || !Any(false, true) || Any(false, false) {
 		t.Fatal("unexpected Any result")
 	}

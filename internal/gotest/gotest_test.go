@@ -187,14 +187,39 @@ func TestRunOverridesCountAndCoverProfile(t *testing.T) {
 		CoverProfile:  "/tmp/tool.out",
 		CoverPackages: []string{"example.test/p", "example.test/shared"},
 		Environment:   map[string]string{"RUN_ID": "abc"},
+		Toolexec:      "/tmp/tool exec",
 		Output:        &output,
 	})
 	if result.Status != cover.RunPassed {
 		t.Fatalf("Run() = %#v", result)
 	}
-	want := "test example.test/p -run TestX -coverprofile=/tmp/tool.out -coverpkg=example.test/p,example.test/shared -count=1 -args -custom"
+	want := "test example.test/p -run TestX -coverprofile=/tmp/tool.out -coverpkg=example.test/p,example.test/shared -toolexec='/tmp/tool exec' -count=1 -args -custom"
 	if got := strings.TrimSpace(output.String()); got != want {
 		t.Fatalf("args = %q, want %q", got, want)
+	}
+}
+
+func TestQuoteGoCommandArgument(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		argument  string
+		want      string
+		wantError bool
+	}{
+		{name: "plain", argument: "/tmp/tool", want: "/tmp/tool"},
+		{name: "space", argument: "/tmp/tool exec", want: "'/tmp/tool exec'"},
+		{name: "single quote", argument: "/tmp/tool's exec", want: `"/tmp/tool's exec"`},
+		{name: "both quotes", argument: `/tmp/tool's "exec`, wantError: true},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			got, err := quoteGoCommandArgument(test.argument)
+			if (err != nil) != test.wantError || got != test.want {
+				t.Fatalf("quoteGoCommandArgument(%q) = %q, %v; want %q, error=%t", test.argument, got, err, test.want, test.wantError)
+			}
+		})
 	}
 }
 

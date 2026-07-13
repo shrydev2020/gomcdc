@@ -132,6 +132,7 @@ func Evaluate(a, b, c bool, value any, ch chan int) {
 	if got, want := len(first.Conditions), 3; got != want {
 		t.Fatalf("first condition count = %d, want %d", got, want)
 	}
+	conditionIDs := make(map[cover.ConditionID]struct{})
 	for index, expression := range []string{"a", "b", "c"} {
 		condition := first.Conditions[index]
 		if condition.Metadata.Index != uint16(index) || condition.Metadata.Expression != expression {
@@ -140,13 +141,24 @@ func Evaluate(a, b, c bool, value any, ch chan int) {
 		if condition.Span.Start >= condition.Span.End {
 			t.Errorf("condition[%d] span = %#v", index, condition.Span)
 		}
+		if condition.Metadata.ID == 0 {
+			t.Errorf("condition[%d] has zero ID", index)
+		}
+		conditionIDs[condition.Metadata.ID] = struct{}{}
+	}
+	if len(conditionIDs) != len(first.Conditions) {
+		t.Fatalf("condition occurrence IDs are not unique: %#v", first.Conditions)
 	}
 	tree := first.Metadata.ExpressionTree
 	if tree == nil || tree.Kind != cover.BooleanExpressionAnd || tree.Right == nil || tree.Right.Kind != cover.BooleanExpressionOr {
 		t.Fatalf("first expression tree = %#v", tree)
 	}
-	if got := file.Decisions[1].Conditions[0].Metadata.Expression; got != "!a" {
-		t.Errorf("simple negation atom = %q, want !a", got)
+	simpleNot := file.Decisions[1].Metadata.ExpressionTree
+	if got := file.Decisions[1].Conditions[0].Metadata.Expression; got != "a" {
+		t.Errorf("simple negation atom = %q, want a", got)
+	}
+	if simpleNot == nil || simpleNot.Kind != cover.BooleanExpressionNot || simpleNot.Left == nil || simpleNot.Left.Kind != cover.BooleanExpressionCondition {
+		t.Fatalf("simple negation tree = %#v", simpleNot)
 	}
 	compoundNot := file.Decisions[2].Metadata.ExpressionTree
 	if compoundNot == nil || compoundNot.Kind != cover.BooleanExpressionNot || compoundNot.Left == nil || compoundNot.Left.Kind != cover.BooleanExpressionAnd {
@@ -275,7 +287,7 @@ func F(value bool) { if value {} }
 	}
 }
 
-func TestGeneratedFileRemainsInCoverageAndIdentifiersAreAvailable(t *testing.T) {
+func TestAnalyzeFileExcludesGeneratedSourceObligations(t *testing.T) {
 	t.Parallel()
 
 	moduleDir := t.TempDir()
@@ -299,8 +311,8 @@ func __gomcdcHooks(value bool) {
 	if !file.Generated {
 		t.Fatal("Generated = false")
 	}
-	if len(file.Decisions) != 1 {
-		t.Fatalf("len(Decisions) = %d, want 1", len(file.Decisions))
+	if len(file.Decisions) != 0 || len(file.Clauses) != 0 {
+		t.Fatalf("generated obligations: decisions=%d clauses=%d", len(file.Decisions), len(file.Clauses))
 	}
 	if !slices.Contains(file.Identifiers, "__gomcdcHooks") {
 		t.Fatalf("Identifiers = %v", file.Identifiers)

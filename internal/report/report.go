@@ -41,6 +41,7 @@ type Input struct {
 	C0                    *c0.Report
 	RunStatus             cover.RunStatus
 	FailureKind           cover.RunFailureKind
+	Results               RunResults
 	MeasurementMode       MeasurementMode
 	Measurements          []MeasurementRun
 	Backend               backend.InstrumentationBackend
@@ -53,6 +54,7 @@ type Input struct {
 	// InstrumentationUnknown counts requested source units whose static
 	// analysis did not complete, so their entity denominator is unknowable.
 	InstrumentationUnknown int
+	Errors                 []ReportError
 	Complete               bool
 	PackageStatuses        map[string]string
 	ASTPackageStatuses     map[string]string
@@ -70,21 +72,63 @@ type Report struct {
 	Instrumentation backend.InstrumentationReport  `json:"instrumentationCoverage"`
 	Summary         Summary                        `json:"summary"`
 	Packages        []PackageReport                `json:"packages"`
+	Errors          []ReportError                  `json:"errors"`
+}
+
+// ReportError is one deterministic, machine-readable failure attached to a
+// partial or unsuccessful report. Path is module-relative when present.
+type ReportError struct {
+	Phase   string `json:"phase"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Package string `json:"package,omitempty"`
+	Path    string `json:"path,omitempty"`
 }
 
 // MeasurementRun prevents dual-run standard C0 and AST evidence from being
 // presented as though they came from one test execution.
 type MeasurementRun struct {
 	Name     string            `json:"name"`
-	Run      Run               `json:"run"`
+	Run      TestRun           `json:"run"`
 	Packages map[string]string `json:"packages"`
 }
 
-// Run describes test execution independently from coverage.
+// ResultStatus is one independent D28 outcome axis. Not-requested is distinct
+// from not-run so callers never have to infer whether a policy was enabled.
+type ResultStatus string
+
+const (
+	ResultPassed       ResultStatus = "passed"
+	ResultFailed       ResultStatus = "failed"
+	ResultTimeout      ResultStatus = "timeout"
+	ResultNotRun       ResultStatus = "not-run"
+	ResultNotRequested ResultStatus = "not-requested"
+)
+
+// RunResults preserves the five independent outcomes required by D28 even
+// when the process exit code collapses them according to precedence.
+type RunResults struct {
+	Test        ResultStatus `json:"test"`
+	Measurement ResultStatus `json:"measurement"`
+	Integrity   ResultStatus `json:"integrity"`
+	Strict      ResultStatus `json:"strict"`
+	Threshold   ResultStatus `json:"threshold"`
+}
+
+// TestRun describes one go test execution independently from coverage and
+// from the overall policy results.
+type TestRun struct {
+	Status      cover.RunStatus      `json:"status"`
+	FailureKind cover.RunFailureKind `json:"failureKind"`
+	Complete    bool                 `json:"complete"`
+}
+
+// Run describes the aggregate test execution and independent D28 outcomes.
 type Run struct {
 	Status      cover.RunStatus      `json:"status"`
 	FailureKind cover.RunFailureKind `json:"failureKind"`
 	Complete    bool                 `json:"complete"`
+	Results     RunResults           `json:"results"`
 }
 
 // Summary always exposes every supported metric.
@@ -113,6 +157,7 @@ type MetricSummary struct {
 	Unsupported        int      `json:"unsupported"`
 	Unknown            int      `json:"unknown"`
 	PossiblyInfeasible int      `json:"infeasible"`
+	AnalysisIncomplete int      `json:"analysisIncomplete"`
 }
 
 // PackageReport contains one package's status, evidence marker, and hierarchy.
@@ -177,6 +222,7 @@ type DecisionCoverage struct {
 
 // ConditionReport contains observed states and strategy-specific MC/DC data.
 type ConditionReport struct {
+	ConditionID  string               `json:"conditionId"`
 	Index        uint16               `json:"index"`
 	Expression   string               `json:"expression"`
 	Location     cover.SourceLocation `json:"location"`
@@ -238,22 +284,23 @@ type EvaluationReport struct {
 	Result       bool     `json:"result"`
 }
 
-// ClauseReport contains only source-body execution evidence. Exact case
-// selection is deliberately unsupported by the AST backend.
+// ClauseReport keeps source-body and compiler dispatch evidence separate.
 type ClauseReport struct {
-	ClauseID          string               `json:"clauseId"`
-	GroupID           string               `json:"groupId"`
-	SwitchID          string               `json:"switchId"`
-	Kind              cover.ClauseKind     `json:"kind"`
-	Role              cover.ClauseRole     `json:"role"`
-	Index             uint16               `json:"index"`
-	Location          cover.SourceLocation `json:"location"`
-	Expressions       []string             `json:"expressions"`
-	Types             []string             `json:"types"`
-	DecisionIDs       []string             `json:"decisionIds"`
-	BodyExecutions    int                  `json:"bodyExecutions"`
-	BodyCoverage      MetricSummary        `json:"bodyCoverage"`
-	SelectionCoverage MetricSummary        `json:"selectionCoverage"`
+	ClauseID             string               `json:"clauseId"`
+	GroupID              string               `json:"groupId"`
+	SwitchID             string               `json:"switchId"`
+	Kind                 cover.ClauseKind     `json:"kind"`
+	Role                 cover.ClauseRole     `json:"role"`
+	Index                uint16               `json:"index"`
+	Location             cover.SourceLocation `json:"location"`
+	Expressions          []string             `json:"expressions"`
+	Types                []string             `json:"types"`
+	DecisionIDs          []string             `json:"decisionIds"`
+	BodyExecutions       int                  `json:"bodyExecutions"`
+	DirectSelections     int                  `json:"directSelections"`
+	SelectedAlternatives []uint16             `json:"selectedAlternatives"`
+	BodyCoverage         MetricSummary        `json:"bodyCoverage"`
+	SelectionCoverage    MetricSummary        `json:"selectionCoverage"`
 }
 
 // NoMatchReport is a switch-selection obligation without a source ClauseID.
@@ -327,7 +374,14 @@ func buildHierarchy(context *buildContext, input Input) {
 		builder := ensurePackageBuilder(builders, clause.Package, input)
 		function := ensureFunctionBuilder(builder, clause.Location.File, displayFunctionName(clause.Function), optionalLocation(clause.FunctionLocation), input.Coverage)
 		unknown := input.ASTEvidenceIntegrityUnknown || packageUnknown(astPackageStatus(input, clause.Package, builder.status), astPackageEvidence[clause.Package])
-		clauseReport := buildClauseReport(clause, observationCounts[clause.ID], unknown, input.Coverage)
+		clauseReport := buildClauseReport(
+			clause,
+			observationCounts[clause.ID],
+			context.selectedAlternatives[clause.ID],
+			unknown,
+			context.report.Capabilities,
+			input.Coverage,
+		)
 		function.report.Clauses = append(function.report.Clauses, clauseReport)
 		addClauseMetrics(&function.report.Summary, clause.Kind, clauseReport.BodyCoverage, clauseReport.SelectionCoverage)
 	}
@@ -335,7 +389,7 @@ func buildHierarchy(context *buildContext, input Input) {
 		builder := ensurePackageBuilder(builders, noMatch.Package, input)
 		function := ensureFunctionBuilder(builder, noMatch.Location.File, displayFunctionName(noMatch.Function), optionalLocation(noMatch.FunctionLocation), input.Coverage)
 		unknown := input.ASTEvidenceIntegrityUnknown || packageUnknown(astPackageStatus(input, noMatch.Package, builder.status), astPackageEvidence[noMatch.Package])
-		noMatchReport := buildNoMatchReport(noMatch, noMatchObservations[noMatch.SwitchID] > 0, unknown, input.Coverage)
+		noMatchReport := buildNoMatchReport(noMatch, noMatchObservations[noMatch.SwitchID] > 0, unknown, context.report.Capabilities, input.Coverage)
 		function.report.NoMatches = append(function.report.NoMatches, noMatchReport)
 		addNoMatchMetric(&function.report.Summary, noMatch.Kind, noMatchReport.SelectionCoverage)
 	}
@@ -433,7 +487,6 @@ func buildInstrumentationReport(input Input, capabilities backend.CapabilitySet)
 				decisionStatus,
 				capabilities.Status(backend.CapabilityMCDCMasking),
 				booleanExpressionCapability(decision.ExpressionTree),
-				repeatedConditionCapability(decision.Conditions),
 			)
 			add(string(config.MetricMCDCMasking), status, len(decision.Conditions), status == backend.CapabilitySupported)
 		}
@@ -448,32 +501,18 @@ func buildInstrumentationReport(input Input, capabilities backend.CapabilitySet)
 		selectionMetric, selectionEnabled := clauseSelectionMetric(clause.Kind, input.Coverage)
 		if selectionEnabled {
 			status := clauseSelectionInstrumentationStatus(capabilities, clause)
-			add(string(selectionMetric), status, 1, false)
+			add(string(selectionMetric), status, 1, status == backend.CapabilitySupported)
 		}
 	}
 	for _, noMatch := range input.NoMatches {
 		selectionMetric, selectionEnabled := clauseSelectionMetric(noMatch.Kind, input.Coverage)
 		if selectionEnabled {
 			status := clauseSelectionInstrumentationStatus(capabilities, cover.ClauseMetadata{Kind: noMatch.Kind})
-			add(string(selectionMetric), status, 1, false)
+			add(string(selectionMetric), status, 1, status == backend.CapabilitySupported)
 		}
 	}
 	add("sourceAnalysis", backend.CapabilityUnknown, input.InstrumentationUnknown, false)
 	return backend.NewInstrumentationReport(metrics)
-}
-
-func repeatedConditionCapability(conditions []cover.ConditionMetadata) backend.CapabilityStatus {
-	seen := make(map[string]struct{}, len(conditions))
-	for _, condition := range conditions {
-		if condition.Expression == "" {
-			continue
-		}
-		if _, exists := seen[condition.Expression]; exists {
-			return backend.CapabilityUnknown
-		}
-		seen[condition.Expression] = struct{}{}
-	}
-	return backend.CapabilitySupported
 }
 
 func clauseBodyMetric(kind cover.ClauseKind, coverage config.CoverageSet) (config.Metric, bool) {
@@ -648,6 +687,7 @@ func buildDecisionReport(
 		trueObserved, falseObserved, conditionNotEvaluated := conditionEvidence(completed, condition.Index)
 		conditionMetric := metricForOutcomes(coverage.Enabled(config.MetricCondition), state, trueObserved, falseObserved)
 		conditionReports = append(conditionReports, ConditionReport{
+			ConditionID:  formatID(uint64(condition.ID)),
 			Index:        condition.Index,
 			Expression:   condition.Expression,
 			Location:     condition.Location,
@@ -718,7 +758,10 @@ func buildMCDCAnalysis(
 	sort.Slice(metadata, func(i, j int) bool { return metadata[i].Index < metadata[j].Index })
 	for _, condition := range metadata {
 		conditionResult := resultByIndex[condition.Index]
-		status := string(conditionResult.Status)
+		outcome := conditionResult.Outcome
+		support := conditionResult.Support
+		analysis := conditionResult.Analysis
+		status := mcdcStatus(outcome, support, analysis)
 		reason := conditionResult.Reason
 		var witness *WitnessReport
 		if conditionResult.Witness != nil {
@@ -726,52 +769,96 @@ func buildMCDCAnalysis(
 		}
 		if !enabled {
 			status = statusDisabled
+			outcome = cover.CoverageOutcomeUnknown
+			support = cover.SupportUnknown
+			analysis = cover.AnalysisIncomplete
 			reason = ""
 			witness = nil
 		} else {
 			switch state {
 			case entityUnknown:
-				status = string(cover.CoverageUnknown)
+				status = string(cover.SupportUnknown)
+				outcome = cover.CoverageOutcomeUnknown
+				support = cover.SupportUnknown
+				analysis = cover.AnalysisIncomplete
 				reason = "package did not produce runtime or C0 evidence"
 				witness = nil
 			case entityUnsupported:
-				status = string(cover.CoverageUnsupported)
+				status = string(cover.SupportUnsupported)
+				outcome = cover.CoverageOutcomeUnknown
+				support = cover.SupportUnsupported
+				analysis = cover.AnalysisComplete
 				reason = "decision kind is not supported"
 				witness = nil
 			}
-			addCoverageStatus(&report.Metric, cover.CoverageStatus(status), 1)
+			addMCDCStatus(&report.Metric, outcome, support, analysis, 1)
 		}
 		report.Conditions = append(report.Conditions, MCDCConditionReport{
-			Index: condition.Index, Status: status, Outcome: statusOutcome(status),
-			Support: statusSupport(status), Analysis: statusAnalysis(status),
+			Index: condition.Index, Status: status, Outcome: string(outcome),
+			Support: string(support), Analysis: string(analysis),
 			Reason: reason, Witness: witness,
 		})
 	}
 	if enabled {
+		outcome := result.Outcome
+		support := result.Support
+		analysis := result.Analysis
 		switch state {
 		case entityUnknown:
-			report.Status = string(cover.CoverageUnknown)
+			report.Status = string(cover.SupportUnknown)
+			outcome = cover.CoverageOutcomeUnknown
+			support = cover.SupportUnknown
+			analysis = cover.AnalysisIncomplete
 			report.Reason = "package did not produce runtime or C0 evidence"
 		case entityUnsupported:
-			report.Status = string(cover.CoverageUnsupported)
+			report.Status = string(cover.SupportUnsupported)
+			outcome = cover.CoverageOutcomeUnknown
+			support = cover.SupportUnsupported
+			analysis = cover.AnalysisComplete
 			report.Reason = "decision kind is not supported"
 		default:
-			report.Status = string(result.Status)
+			report.Status = mcdcStatus(outcome, support, analysis)
 		}
-		report.Outcome = statusOutcome(report.Status)
-		report.Support = statusSupport(report.Status)
-		report.Analysis = statusAnalysis(report.Status)
+		report.Outcome = string(outcome)
+		report.Support = string(support)
+		report.Analysis = string(analysis)
 	}
 	return report
+}
+
+func mcdcStatus(
+	outcome cover.CoverageOutcome,
+	support cover.SupportStatus,
+	analysis cover.AnalysisStatus,
+) string {
+	switch {
+	case support == cover.SupportUnsupported:
+		return string(cover.SupportUnsupported)
+	case support == cover.SupportUnknown:
+		return string(cover.SupportUnknown)
+	case analysis == cover.AnalysisIncomplete:
+		return string(cover.CoverageAnalysisIncomplete)
+	case analysis == cover.AnalysisInfeasible:
+		return string(cover.CoveragePossiblyInfeasible)
+	case outcome == cover.CoverageOutcomeCovered:
+		return string(cover.CoverageCovered)
+	case outcome == cover.CoverageOutcomeNotCovered:
+		return string(cover.CoverageNotCovered)
+	default:
+		return string(cover.SupportUnknown)
+	}
 }
 
 func buildClauseReport(
 	metadata cover.ClauseMetadata,
 	observations map[cover.ClauseEventKind]int,
+	selectedAlternatives []uint16,
 	unknown bool,
+	capabilities backend.CapabilitySet,
 	coverage config.CoverageSet,
 ) ClauseReport {
 	bodyExecutions := observations[cover.ClauseBodyExecution]
+	directSelections := observations[cover.ClauseDirectSelection]
 	_, bodyEnabled := clauseBodyMetric(metadata.Kind, coverage)
 	bodyCoverage := newMetric(bodyEnabled)
 	if bodyCoverage.Enabled {
@@ -791,10 +878,19 @@ func buildClauseReport(
 	_, selectionEnabled := clauseSelectionMetric(metadata.Kind, coverage)
 	selectionCoverage := newMetric(selectionEnabled)
 	if selectionCoverage.Enabled {
-		if unknown {
+		status := clauseSelectionInstrumentationStatus(capabilities, metadata)
+		switch {
+		case unknown:
 			selectionCoverage.Unknown = 1
-		} else {
+		case status == backend.CapabilityUnsupportedByBackend:
 			selectionCoverage.Unsupported = 1
+		case status != backend.CapabilitySupported:
+			selectionCoverage.Unknown = 1
+		default:
+			selectionCoverage.Total = 1
+			if directSelections > 0 {
+				selectionCoverage.Covered = 1
+			}
 		}
 		selectionCoverage.recalculate()
 	}
@@ -809,25 +905,29 @@ func buildClauseReport(
 		Kind:     metadata.Kind, Role: metadata.Role, Index: metadata.Index, Location: metadata.Location,
 		Expressions: append([]string{}, metadata.Expressions...), Types: append([]string{}, metadata.Types...),
 		DecisionIDs: decisionIDs, BodyExecutions: bodyExecutions,
+		DirectSelections: directSelections, SelectedAlternatives: append([]uint16{}, selectedAlternatives...),
 		BodyCoverage: bodyCoverage, SelectionCoverage: selectionCoverage,
 	}
 }
 
-func buildNoMatchReport(metadata cover.NoMatchMetadata, observed, unknown bool, coverage config.CoverageSet) NoMatchReport {
+func buildNoMatchReport(metadata cover.NoMatchMetadata, observed, unknown bool, capabilities backend.CapabilitySet, coverage config.CoverageSet) NoMatchReport {
 	enabled := metadata.Kind == cover.ClauseExpressionSwitch && coverage.Enabled(config.MetricSwitchClauseSelection) ||
 		metadata.Kind == cover.ClauseTypeSwitch && coverage.Enabled(config.MetricTypeSwitchClauseSelection)
 	metric := newMetric(enabled)
 	if enabled {
+		status := clauseSelectionInstrumentationStatus(capabilities, cover.ClauseMetadata{Kind: metadata.Kind})
 		switch {
 		case unknown:
 			metric.Unknown = 1
-		case observed:
-			metric.Covered = 1
-			metric.Total = 1
-		default:
-			// The current AST backend cannot prove dispatch selection. This is
-			// unsupported evidence, not an ordinary uncovered result.
+		case status == backend.CapabilityUnsupportedByBackend:
 			metric.Unsupported = 1
+		case status != backend.CapabilitySupported:
+			metric.Unknown = 1
+		default:
+			metric.Total = 1
+			if observed {
+				metric.Covered = 1
+			}
 		}
 		metric.recalculate()
 	}
@@ -954,22 +1054,30 @@ func metricForOutcomes(enabled bool, state entityState, trueCovered, falseCovere
 	return metric
 }
 
-func addCoverageStatus(metric *MetricSummary, status cover.CoverageStatus, units int) {
+func addMCDCStatus(
+	metric *MetricSummary,
+	outcome cover.CoverageOutcome,
+	support cover.SupportStatus,
+	analysis cover.AnalysisStatus,
+	units int,
+) {
 	if !metric.Enabled {
 		return
 	}
-	switch status {
-	case cover.CoverageCovered:
+	switch {
+	case support == cover.SupportUnsupported:
+		metric.Unsupported += units
+	case support == cover.SupportUnknown:
+		metric.Unknown += units
+	case analysis == cover.AnalysisIncomplete:
+		metric.AnalysisIncomplete += units
+	case analysis == cover.AnalysisInfeasible:
+		metric.PossiblyInfeasible += units
+	case outcome == cover.CoverageOutcomeCovered:
 		metric.Covered += units
 		metric.Total += units
-	case cover.CoverageNotCovered:
+	case outcome == cover.CoverageOutcomeNotCovered:
 		metric.Total += units
-	case cover.CoverageUnsupported:
-		metric.Unsupported += units
-	case cover.CoverageUnknown:
-		metric.Unknown += units
-	case cover.CoveragePossiblyInfeasible:
-		metric.PossiblyInfeasible += units
 	default:
 		metric.Unknown += units
 	}
@@ -999,6 +1107,7 @@ func addMetric(destination *MetricSummary, source MetricSummary) {
 	destination.Unsupported += source.Unsupported
 	destination.Unknown += source.Unknown
 	destination.PossiblyInfeasible += source.PossiblyInfeasible
+	destination.AnalysisIncomplete += source.AnalysisIncomplete
 	destination.recalculate()
 }
 
@@ -1155,7 +1264,7 @@ func conditionStateString(state cover.ConditionState) string {
 	case cover.ConditionFalse:
 		return "false"
 	case cover.ConditionNotEvaluated:
-		return "not evaluated"
+		return "not-evaluated"
 	default:
 		return fmt.Sprintf("unknown(%d)", state)
 	}
@@ -1168,43 +1277,6 @@ func mcdcCondition(analysis MCDCAnalysisReport, index uint16) MCDCConditionRepor
 		}
 	}
 	return MCDCConditionReport{Index: index, Status: statusDisabled}
-}
-
-func statusOutcome(status string) string {
-	switch status {
-	case string(cover.CoverageCovered):
-		return string(cover.CoverageOutcomeCovered)
-	case string(cover.CoverageNotCovered):
-		return string(cover.CoverageOutcomeNotCovered)
-	case string(cover.CoveragePossiblyInfeasible):
-		return string(cover.CoverageOutcomeNotCovered)
-	default:
-		return string(cover.CoverageOutcomeUnknown)
-	}
-}
-
-func statusSupport(status string) string {
-	switch status {
-	case string(cover.CoverageUnsupported):
-		return string(cover.SupportUnsupported)
-	case statusDisabled:
-		return string(cover.SupportUnknown)
-	default:
-		return string(cover.SupportSupported)
-	}
-}
-
-func statusAnalysis(status string) string {
-	switch status {
-	case string(cover.CoveragePossiblyInfeasible):
-		return string(cover.AnalysisInfeasible)
-	case string(cover.CoverageUnknown):
-		return string(cover.AnalysisIncomplete)
-	case statusDisabled:
-		return string(cover.AnalysisIncomplete)
-	default:
-		return string(cover.AnalysisComplete)
-	}
 }
 
 func supportedClause(metadata cover.ClauseMetadata) bool {

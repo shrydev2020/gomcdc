@@ -26,6 +26,7 @@ import (
 // use a new version so IDs never silently change meaning.
 const (
 	StableIDVersion       = "gomcdc-decision/v2"
+	ConditionIDVersion    = "gomcdc-condition/v1"
 	ClauseStableIDVersion = "gomcdc-clause/v1"
 	ClauseGroupIDVersion  = "gomcdc-clause-group/v1"
 )
@@ -57,8 +58,9 @@ type Decision struct {
 // wrapped by the instrumenter. Repeated textual expressions remain distinct
 // occurrences with distinct indexes.
 type Condition struct {
-	Metadata cover.ConditionMetadata
-	Span     Span
+	Metadata     cover.ConditionMetadata
+	CanonicalKey string
+	Span         Span
 }
 
 // Clause couples clause metadata to the source node used to match the copied
@@ -128,9 +130,8 @@ func AnalyzeFiles(options []FileOptions) ([]File, error) {
 	return files, nil
 }
 
-// AnalyzeFile parses one original Go file. A user's generated source file is
-// still part of the module coverage denominator; Generated is informational
-// and does not suppress decision or clause discovery.
+// AnalyzeFile parses one original Go file. Files with Go's standard generated
+// marker retain source metadata but do not produce coverage obligations.
 func AnalyzeFile(options FileOptions) (File, error) {
 	if options.Path == "" {
 		return File{}, errors.New("analyze file: source path is empty")
@@ -177,6 +178,9 @@ func AnalyzeFile(options FileOptions) (File, error) {
 		SourceHash:   sha256.Sum256(source),
 		Identifiers:  collectIdentifiers(parsed),
 		LineMappings: collectLineMappings(fset, parsed),
+	}
+	if result.Generated {
+		return result, nil
 	}
 	context := analysisContext{
 		fset:        fset,
@@ -283,8 +287,21 @@ func ClauseCanonicalKey(metadata cover.ClauseMetadata) string {
 		strconv.Itoa(metadata.Location.StartOffset),
 		strconv.Itoa(metadata.Location.EndOffset),
 		string(metadata.Kind),
-		string(metadata.Role),
-		strconv.Itoa(int(metadata.Index)),
+	}
+	return strings.Join(fields, "\x00")
+}
+
+// ConditionCanonicalKey returns the versioned key used for a condition ID.
+func ConditionCanonicalKey(decision cover.DecisionMetadata, condition cover.ConditionMetadata) string {
+	fields := []string{
+		ConditionIDVersion,
+		decision.ModulePath,
+		decision.Package,
+		filepath.ToSlash(condition.Location.File),
+		strconv.Itoa(condition.Location.StartOffset),
+		strconv.Itoa(condition.Location.EndOffset),
+		"condition",
+		strconv.Itoa(int(condition.Index)),
 	}
 	return strings.Join(fields, "\x00")
 }
@@ -319,6 +336,17 @@ func DetectCollisions(files []File) error {
 				}
 			}
 			keysByID[id] = key
+			for _, condition := range decision.Conditions {
+				conditionKey := condition.CanonicalKey
+				if conditionKey == "" {
+					conditionKey = ConditionCanonicalKey(decision.Metadata, condition.Metadata)
+				}
+				conditionID := uint64(condition.Metadata.ID)
+				if first, exists := keysByID[conditionID]; exists && first != conditionKey {
+					return &CollisionError{ID: conditionID, FirstKey: first, SecondKey: conditionKey}
+				}
+				keysByID[conditionID] = conditionKey
+			}
 		}
 	}
 	for _, file := range files {
@@ -425,6 +453,9 @@ func (visitor decisionVisitor) addDecision(kind cover.DecisionKind, condition as
 	conditions, expressionTree := visitor.conditions(condition)
 	metadata.Conditions = make([]cover.ConditionMetadata, len(conditions))
 	for index := range conditions {
+		key := ConditionCanonicalKey(metadata, conditions[index].Metadata)
+		conditions[index].CanonicalKey = key
+		conditions[index].Metadata.ID = cover.ConditionID(StableID(key))
 		metadata.Conditions[index] = conditions[index].Metadata
 	}
 	metadata.ExpressionTree = expressionTree
@@ -457,10 +488,10 @@ func (visitor decisionVisitor) conditions(expression ast.Expr) ([]Condition, *co
 				return cover.NewOrExpression(walk(node.X), walk(node.Y))
 			}
 		case *ast.UnaryExpr:
-			// A simple !a is one source-level atomic condition and records the
-			// value of !a. A negated compound retains its logical shape so the
-			// masking strategy can reason about the conditions below it.
-			if node.Op == token.NOT && hasLogicalJunction(node.X) {
+			// Negation is always an expression-tree node. The atomic occurrence
+			// of !a is a, so condition coverage records a's value while decision
+			// coverage still observes the result of !a.
+			if node.Op == token.NOT {
 				return cover.NewNotExpression(walk(node.X))
 			}
 		}
@@ -499,19 +530,6 @@ func unparen(expression ast.Expr) ast.Expr {
 			return expression
 		}
 		expression = parenthesized.X
-	}
-}
-
-func hasLogicalJunction(expression ast.Expr) bool {
-	switch node := unparen(expression).(type) {
-	case *ast.BinaryExpr:
-		// Comparisons and other binary predicates are indivisible atoms even
-		// when one of their operands happens to contain a boolean expression.
-		return node.Op == token.LAND || node.Op == token.LOR
-	case *ast.UnaryExpr:
-		return node.Op == token.NOT && hasLogicalJunction(node.X)
-	default:
-		return false
 	}
 }
 

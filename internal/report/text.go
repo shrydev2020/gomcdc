@@ -37,6 +37,15 @@ func renderText(report Report) string {
 	fmt.Fprintf(&output, "gomcdc report v%s\n", report.Version)
 	fmt.Fprintf(&output, "Module: %s\n", report.Module)
 	fmt.Fprintf(&output, "Run: %s failure-kind=%s (%s)\n", report.Run.Status, report.Run.FailureKind, completeness(report.Run.Complete))
+	fmt.Fprintf(
+		&output,
+		"Results: test=%s measurement=%s integrity=%s strict=%s threshold=%s\n",
+		report.Run.Results.Test,
+		report.Run.Results.Measurement,
+		report.Run.Results.Integrity,
+		report.Run.Results.Strict,
+		report.Run.Results.Threshold,
+	)
 	fmt.Fprintf(&output, "Measurement mode: %s\n", report.MeasurementMode)
 	for _, measurement := range report.Measurements {
 		fmt.Fprintf(
@@ -117,7 +126,12 @@ func renderText(report Report) string {
 					output.WriteByte('\n')
 					fmt.Fprint(&output, "        Selection coverage: ")
 					writeMetricInline(&output, clause.SelectionCoverage)
-					output.WriteByte('\n')
+					fmt.Fprintf(
+						&output,
+						" direct-selections=%d selected-alternatives=%v\n",
+						clause.DirectSelections,
+						clause.SelectedAlternatives,
+					)
 				}
 				for _, noMatch := range function.NoMatches {
 					fmt.Fprintf(
@@ -289,16 +303,24 @@ func writeSummary(output *strings.Builder, indent string, summary Summary) {
 }
 
 func writeMetricInline(output *strings.Builder, metric MetricSummary) {
+	coverage := "n/a"
+	if metric.Percentage != nil {
+		coverage = fmt.Sprintf(
+			"%d / %d = %s",
+			metric.Covered,
+			metric.Total,
+			formatPercentage(metric.Percentage),
+		)
+	}
 	fmt.Fprintf(
 		output,
-		"enabled=%t %d/%d (%s) unsupported=%d unknown=%d infeasible=%d",
+		"enabled=%t %s unsupported=%d unknown=%d infeasible=%d analysis-incomplete=%d",
 		metric.Enabled,
-		metric.Covered,
-		metric.Total,
-		formatPercentage(metric.Percentage),
+		coverage,
 		metric.Unsupported,
 		metric.Unknown,
 		metric.PossiblyInfeasible,
+		metric.AnalysisIncomplete,
 	)
 }
 

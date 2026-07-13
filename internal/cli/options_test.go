@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/shrydev2020/gomcdc/internal/report"
@@ -25,7 +26,7 @@ func TestWriteHTMLReportCreatesIndex(t *testing.T) {
 	directory := t.TempDir()
 	opts := options{format: "html", output: "coverage-html"}
 	input := report.Input{ModulePath: "example.test/m"}
-	if err := writeReport(opts, input, report.Build(input), directory, &bytes.Buffer{}); err != nil {
+	if err := writeReport(opts, report.Build(input), directory, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	contents, err := os.ReadFile(filepath.Join(directory, "coverage-html", "index.html"))
@@ -79,6 +80,18 @@ func TestParseOptionsStrictMode(t *testing.T) {
 	}
 }
 
+func TestMeasurementFlagRecognizesEveryOwnedGoTestFlag(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"count", "cover", "coverprofile", "covermode", "coverpkg", "json", "overlay", "toolexec"} {
+		if got := measurementFlag([]string{"-" + name + "=value"}); got != name {
+			t.Errorf("measurementFlag(-%s) = %q", name, got)
+		}
+	}
+	if got := measurementFlag([]string{"-run=TestX", "-args", "-count=2"}); got != "" {
+		t.Fatalf("test-binary argument was treated as a go test conflict: %q", got)
+	}
+}
+
 func TestParseOptionsRejectsAmbiguousThresholdAliases(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"--fail-under-c1=70", "--fail-under-c2=70", "--fail-under-mcdc=70"} {
@@ -121,4 +134,50 @@ func TestThresholdUsesExactCountsRatherThanRoundedPercentage(t *testing.T) {
 	if belowThreshold(metric, 66.666) {
 		t.Fatal("2/3 incorrectly failed 66.666%")
 	}
+}
+
+func TestEveryCanonicalMetricHasAnIndependentThreshold(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		summary report.Summary
+	}{
+		{"statement", report.Summary{Statement: passingMetric()}},
+		{"function", report.Summary{Function: passingMetric()}},
+		{"decision", report.Summary{Decision: passingMetric()}},
+		{"switch-clause-body", report.Summary{SwitchClauseBody: passingMetric()}},
+		{"type-switch-clause-body", report.Summary{TypeSwitchClauseBody: passingMetric()}},
+		{"select-clause-body", report.Summary{SelectClauseBody: passingMetric()}},
+		{"switch-clause-selection", report.Summary{SwitchClauseSelection: passingMetric()}},
+		{"type-switch-clause-selection", report.Summary{TypeSwitchClauseSelection: passingMetric()}},
+		{"condition", report.Summary{Condition: passingMetric()}},
+		{"mcdc-unique", report.Summary{MCDCUnique: passingMetric()}},
+		{"mcdc-masking", report.Summary{MCDCMasking: passingMetric()}},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			opts, err := parseOptions([]string{
+				"--coverage=" + test.name,
+				"--fail-under-" + test.name + "=100",
+				"./...",
+			}, &bytes.Buffer{})
+			if err != nil {
+				t.Fatalf("parseOptions: %v", err)
+			}
+			failures := thresholdFailures(opts, report.Summary{})
+			if len(failures) != 1 || !strings.Contains(failures[0], test.name) {
+				t.Fatalf("threshold flag did not produce its own failure: %v", failures)
+			}
+			if failures := thresholdFailures(opts, test.summary); len(failures) != 0 {
+				t.Fatalf("threshold was wired to the wrong metric: %v", failures)
+			}
+		})
+	}
+}
+
+func passingMetric() report.MetricSummary {
+	percentage := 100.0
+	return report.MetricSummary{Enabled: true, Covered: 1, Total: 1, Percentage: &percentage}
 }

@@ -204,7 +204,7 @@ runtime は EvaluationID を衝突させず、package-global な current evaluat
 
 ### D26. go test
 
-package pattern は一つ以上必須とする。CLI は `go test -count=1` を使用する。ユーザーまたはGOFLAGSによる `-count`、`-cover`、`-coverprofile`、`-covermode`、`-coverpkg`、`-json`、`-overlay` はCLI errorとする。`--`以降の非競合引数は解析と全runへ同じ意味で適用する。解析とtestは同じGOOS、GOARCH、build tags、CGO、module設定を使用する。activeな複数main moduleを持つgo.workは対象外とする。
+package pattern は一つ以上必須とする。CLI は `go test -count=1` を使用する。ユーザーまたはGOFLAGSによる `-count`、`-cover`、`-coverprofile`、`-covermode`、`-coverpkg`、`-json`、`-overlay`、`-toolexec` はCLI errorとする。`--`以降の非競合引数は解析と全runへ同じ意味で適用する。解析とtestは同じGOOS、GOARCH、build tags、CGO、module設定を使用する。activeな複数main moduleを持つgo.workは対象外とする。
 
 ## 8. 外部形式
 
@@ -233,9 +233,11 @@ condition, mcdc-unique, mcdc-masking, all
 
 優先順位は `4 > 2 > 1 > 3 > 0` とする。overall result は test、measurement、integrity、strict、threshold の結果を別 field で保持する。
 
+`run.results` は `test`、`measurement`、`integrity`、`strict`、`threshold` を持つ。各値は `passed`、`failed`、`timeout`、`not-run`、`not-requested` のいずれかとする。`timeout` は test にだけ使用する。strict と threshold は対応する policy が指定されなければ `not-requested` とし、終了codeの優先順位によって他のfieldを上書きしない。
+
 ### D29. JSON
 
-root は `version`、`module`、`run`、`measurementMode`、`measurements`、`instrumentationCoverage`、`summary`、`packages`、`errors` を持つ。draft 中の version は `1.0-draft` とする。
+root は `version`、`module`、`run`、`measurementMode`、`measurements`、`capabilities`、`backendCapabilities`、`instrumentationCoverage`、`summary`、`packages`、`errors` を持つ。`capabilities` はtool全体のaggregate、`backendCapabilities` はD21のproducer別authorityを表す。draft 中の version は `1.0-draft` とする。
 
 summary key は `statement`、`function`、`decision`、`switchClauseBody`、`typeSwitchClauseBody`、`selectClauseBody`、`switchClauseSelection`、`typeSwitchClauseSelection`、`condition`、`mcdcUnique`、`mcdcMasking` である。
 
@@ -259,7 +261,7 @@ HTMLはmodule summaryからpackageを主navigationとし、package内をfile、f
 
 対象moduleは信頼済みコードとして現在ユーザー権限でbuild/testする。一時workspaceはsecurity sandboxではなく、悪意ある対象コードに対するevidence真正性を保証しない。一時directoryとevent fileは現在ユーザーだけが読み書きできるpermissionとし、source複製時にsymlink/hardlinkからworkspace外へ書き込まない。通常reportはユーザーの絶対local pathを含めない。
 
-本ツールはcoverage意味論だけを定義し、DO-178C適合、tool qualification、安全認証を主張しない。Windows、assembly、cgo内部、compiler IR、path coverage、distributed test executionはv1対象外である。
+本ツールはcoverage意味論だけを定義し、DO-178C適合、tool qualification、安全認証を主張しない。Windows、assembly、cgo内部、compiler IRをobligationとするcoverage、path coverage、distributed test executionはv1対象外である。
 
 ## 9. 適合条件
 

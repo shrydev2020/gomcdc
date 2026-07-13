@@ -3,12 +3,12 @@
 [English](README.md)
 
 gomcdcは、statement、function、decision、condition、clause body、
-clause selection、Unique-Cause MC/DC、Masking MC/DCを計測するGo向け
-カバレッジツールです。
+clause selection、Unique-Cause MC/DC、Masking MC/DCを一つのreportへ
+統合するGo向けカバレッジツールです。
 
 ## 動作要件
 
-- Go 1.26.5以降のGo 1.26系列セキュリティ修正版
+- Go 1.26.5
 - Go Modules
 - macOSまたはLinux
 
@@ -27,7 +27,7 @@ gomcdc test --format html --output coverage-html ./...
 
 HTML reportは coverage-html/index.html に出力されます。
 
-各file pageには、元source bytesへstatement、decision、condition、clause、
+各file sectionには、元source bytesへstatement、decision、condition、clause、
 両MC/DCのbyte-range annotationを重ねて表示します。
 
 ## 開発時の確認

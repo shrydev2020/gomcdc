@@ -59,9 +59,26 @@ type sourceBoundaryEvent struct {
 	ends   []int
 }
 
-func attachSourceViews(report *Report, input Input) {
-	sources := make(map[string]SourceFileInput, len(input.SourceFiles))
-	for _, source := range input.SourceFiles {
+// WithSourceViews returns the same report model with an HTML-only projection
+// of immutable original sources attached. It does not rebuild coverage data.
+func WithSourceViews(report Report, sourceFiles []SourceFileInput) Report {
+	report.Packages = append([]PackageReport(nil), report.Packages...)
+	for packageIndex := range report.Packages {
+		report.Packages[packageIndex].Files = append(
+			[]FileReport(nil),
+			report.Packages[packageIndex].Files...,
+		)
+		for fileIndex := range report.Packages[packageIndex].Files {
+			report.Packages[packageIndex].Files[fileIndex].Source = nil
+		}
+	}
+	attachSourceViews(&report, sourceFiles)
+	return report
+}
+
+func attachSourceViews(report *Report, sourceFiles []SourceFileInput) {
+	sources := make(map[string]SourceFileInput, len(sourceFiles))
+	for _, source := range sourceFiles {
 		sources[source.PackagePath+"\x00"+source.Path] = source
 	}
 	for packageIndex := range report.Packages {
@@ -111,7 +128,7 @@ func sourceAnnotations(file FileReport, source []byte) []SourceAnnotation {
 			for _, condition := range decision.Conditions {
 				mapping := sourceRangeOffsets(condition.Location, source)
 				conditionState := conditionCoverageState(condition)
-				conditionID := fmt.Sprintf("%s:condition:%d", decision.DecisionID, condition.Index)
+				conditionID := condition.ConditionID
 				annotations = append(annotations,
 					applySourceMapping(mapping, SourceAnnotation{Metric: "condition", EntityID: conditionID, State: conditionState, Tooltip: conditionTooltip(condition)}),
 					applySourceMapping(mapping, SourceAnnotation{Metric: "mcdc-unique", EntityID: conditionID + ":mcdc-unique", State: condition.MCDCUnique.Status, Tooltip: conditionTooltip(condition)}),
@@ -314,6 +331,8 @@ func sourceIntervals(view SourceFileView) []sourceInterval {
 
 func metricState(metric MetricSummary) string {
 	switch {
+	case metric.AnalysisIncomplete > 0:
+		return "analysis-incomplete"
 	case metric.Unknown > 0:
 		return "unknown"
 	case metric.Unsupported > 0:
