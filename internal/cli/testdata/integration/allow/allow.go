@@ -1,5 +1,7 @@
 package allow
 
+import "runtime"
+
 func Allow(a, b bool) bool {
 	if a && b {
 		return true
@@ -36,4 +38,16 @@ func MayPanic(a bool, predicate func() bool) bool {
 		return true
 	}
 	return false
+}
+
+func GoexitDecision() bool {
+	if goexitPredicate() {
+		return true
+	}
+	return false
+}
+
+func goexitPredicate() bool {
+	runtime.Goexit()
+	return true
 }

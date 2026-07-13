@@ -75,3 +75,12 @@ func TestPanickingConditionIsAborted(t *testing.T) {
 	}()
 	MayPanic(true, func() bool { panic("fixture") })
 }
+
+func TestGoexitConditionIsAborted(t *testing.T) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		GoexitDecision()
+	}()
+	<-done
+}

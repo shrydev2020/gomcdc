@@ -139,6 +139,10 @@ func TestIntegratedFixtureReportsAllMetricsAcrossPackages(t *testing.T) {
 	if !hasAbortedEvaluation(all) {
 		t.Fatal("panicking condition did not produce an aborted evaluation")
 	}
+	goexit := findDecisionInFunction(t, all, "GoexitDecision", "goexitPredicate()")
+	if !hasEvaluationStatus(goexit, "aborted") {
+		t.Fatalf("runtime.Goexit condition did not produce an aborted evaluation: %#v", goexit.Evaluations)
+	}
 	if !hasCoveredSelectClause(all) {
 		t.Fatal("select clause body coverage is missing")
 	}
@@ -482,6 +486,15 @@ func hasAbortedEvaluation(built report.Report) bool {
 					}
 				}
 			}
+		}
+	}
+	return false
+}
+
+func hasEvaluationStatus(decision report.DecisionReport, status string) bool {
+	for _, evaluation := range decision.Evaluations {
+		if evaluation.Status == status {
+			return true
 		}
 	}
 	return false
