@@ -33,7 +33,7 @@ jobs:
           cache: true
       - name: Verify gomcdc with its own MC/DC report
         run: >-
-          go run ./cmd/gomcdc test
+          go run . test
           --timeout=10m
           --coverage=decision,condition,mcdc-unique,mcdc-masking
           --strict

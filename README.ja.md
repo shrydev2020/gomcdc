@@ -15,7 +15,7 @@ clause selection、Unique-Cause MC/DC、Masking MC/DCを一つのreportへ
 ## インストール
 
 ```sh
-go install github.com/shrydev2020/gomcdc/cmd/gomcdc@v1.0.0
+go install github.com/shrydev2020/gomcdc@v1.0.0
 ```
 
 ## 実行
