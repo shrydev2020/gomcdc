@@ -1,10 +1,14 @@
 # gomcdc 規範仕様
 
-本書は `gomcdc` 1.0 の意味論と適合条件を定める。日本語版を規範版とし、英語版は同じ定義番号を持つ参考訳とする。仕様バージョンは `1.0-draft` である。
+本書は `gomcdc` 1.0 の意味論と適合条件を定める。日本語版を規範版とし、英語版は同じ定義番号を持つ参考訳とする。仕様バージョンは `1.0` である。
+
+`gomcdc` v1系列は本仕様を互換性契約とする。既存指標の意味、既存CLI optionと終了code、JSON必須fieldの削除または意味変更はv1系列内では行わない。既存の解釈を変更しないopt-in capabilityとoptional fieldは追加できる。
 
 ## 1. 適用範囲
 
 `gomcdc test` は Go module の一回の論理的計測要求から、Statement、Function、Decision、Switch Clause Body、Type Switch Clause Body、Select Clause Body、Switch Clause Selection、Type Switch Clause Selection、Condition、Unique-Cause MC/DC、Masking MC/DC の11指標を一つの source model 上へ集約する。
+
+`gomcdc version` は計測を行わず、`gomcdc vMAJOR.MINOR.PATCH` 形式のrelease identityを標準出力へ書き、終了code 0を返す。追加argumentはinvalid CLI usageである。
 
 対象は Go 1.26.5、Go Modules、Linux、macOS とする。compiler-aware backendはGo compiler sourceへexact-anchor patchを適用するため、異なるGo patch versionを対応版として扱わない。対象 source は package pattern を `go list` して得た main module 内の package である。標準 library、外部 module、vendor、本ツール生成source、Go標準形式のgenerated-code commentを持つsourceは対象集合に含めない。`_test.go` は `--include-tests` 指定時だけ AST 系指標へ含め、このflagはStatement/Functionへ影響しない。
 
@@ -237,7 +241,7 @@ condition, mcdc-unique, mcdc-masking, all
 
 ### D29. JSON
 
-root は `version`、`module`、`run`、`measurementMode`、`measurements`、`capabilities`、`backendCapabilities`、`instrumentationCoverage`、`summary`、`packages`、`errors` を持つ。`capabilities` はtool全体のaggregate、`backendCapabilities` はD21のproducer別authorityを表す。draft 中の version は `1.0-draft` とする。
+root は `version`、`module`、`run`、`measurementMode`、`measurements`、`capabilities`、`backendCapabilities`、`instrumentationCoverage`、`summary`、`packages`、`errors` を持つ。`capabilities` はtool全体のaggregate、`backendCapabilities` はD21のproducer別authorityを表す。version は `1.0` とする。
 
 summary key は `statement`、`function`、`decision`、`switchClauseBody`、`typeSwitchClauseBody`、`selectClauseBody`、`switchClauseSelection`、`typeSwitchClauseSelection`、`condition`、`mcdcUnique`、`mcdcMasking` である。
 

@@ -14,7 +14,7 @@ selection, Unique-Cause MC/DC, and Masking MC/DC coverage in one report.
 ## Install
 
 ```sh
-go install github.com/shrydev2020/gomcdc/cmd/gomcdc@latest
+go install github.com/shrydev2020/gomcdc/cmd/gomcdc@v1.0.0
 ```
 
 ## Run
@@ -22,6 +22,7 @@ go install github.com/shrydev2020/gomcdc/cmd/gomcdc@latest
 ```sh
 gomcdc test ./...
 gomcdc test --format html --output coverage-html ./...
+gomcdc version
 ```
 
 The HTML report is written to coverage-html/index.html.

@@ -1,10 +1,14 @@
 # gomcdc Normative Specification
 
-This document defines the semantics and conformance requirements of `gomcdc` 1.0. The Japanese edition is normative; this English edition is a reference translation with identical definition numbers. The specification version is `1.0-draft`.
+This document defines the semantics and conformance requirements of `gomcdc` 1.0. The Japanese edition is normative; this English edition is a reference translation with identical definition numbers. The specification version is `1.0`.
+
+The `gomcdc` v1 series treats this specification as its compatibility contract. The v1 series does not remove or change the meaning of existing metrics, CLI options and exit codes, or required JSON fields. It may add opt-in capabilities and optional fields that do not require existing data to be reinterpreted.
 
 ## 1. Scope
 
 For one logical `gomcdc test` measurement request, the tool aggregates eleven metrics over one source model: Statement, Function, Decision, Switch Clause Body, Type Switch Clause Body, Select Clause Body, Switch Clause Selection, Type Switch Clause Selection, Condition, Unique-Cause MC/DC, and Masking MC/DC.
+
+`gomcdc version` performs no measurement, writes the release identity in the form `gomcdc vMAJOR.MINOR.PATCH` to standard output, and exits with code 0. Additional arguments are invalid CLI usage.
 
 The target environment is Go 1.26.5, Go Modules, Linux, and macOS. Because the compiler-aware backend applies an exact-anchor patch to Go compiler source, it does not treat another Go patch version as supported. Target sources are packages in the main module returned by `go list` for the supplied package patterns. The target set excludes the standard library, external modules, vendor, tool-generated sources, and sources with the standard Go generated-code comment. `_test.go` belongs to AST metrics only with `--include-tests`; that flag does not affect Statement or Function.
 
@@ -237,7 +241,7 @@ Precedence is `4 > 2 > 1 > 3 > 0`. The overall result retains separate test, mea
 
 ### D29. JSON
 
-The root contains `version`, `module`, `run`, `measurementMode`, `measurements`, `capabilities`, `backendCapabilities`, `instrumentationCoverage`, `summary`, `packages`, and `errors`. `capabilities` is the tool-wide aggregate, while `backendCapabilities` exposes the per-producer authority required by D21. During draft, version is `1.0-draft`.
+The root contains `version`, `module`, `run`, `measurementMode`, `measurements`, `capabilities`, `backendCapabilities`, `instrumentationCoverage`, `summary`, `packages`, and `errors`. `capabilities` is the tool-wide aggregate, while `backendCapabilities` exposes the per-producer authority required by D21. The version is `1.0`.
 
 The summary keys are `statement`, `function`, `decision`, `switchClauseBody`, `typeSwitchClauseBody`, `selectClauseBody`, `switchClauseSelection`, `typeSwitchClauseSelection`, `condition`, `mcdcUnique`, and `mcdcMasking`.
 

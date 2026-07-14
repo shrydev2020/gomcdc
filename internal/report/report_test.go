@@ -15,6 +15,13 @@ import (
 	"github.com/shrydev2020/gomcdc/internal/report"
 )
 
+func TestSchemaVersionIsStableV1(t *testing.T) {
+	t.Parallel()
+	if report.SchemaVersion != "1.0" {
+		t.Fatalf("SchemaVersion = %q, want stable v1 schema 1.0", report.SchemaVersion)
+	}
+}
+
 func TestBuildWeightedAggregationAndMergesC0Function(t *testing.T) {
 	t.Parallel()
 

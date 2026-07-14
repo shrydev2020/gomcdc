@@ -174,7 +174,9 @@ func validateThreshold(name string, value optionalFloat) error {
 }
 
 func writeTopUsage(w io.Writer) {
-	fmt.Fprintln(w, "Usage: gomcdc test [options] [package patterns] [-- go test arguments]")
+	fmt.Fprintln(w, "Usage:")
+	fmt.Fprintln(w, "  gomcdc test [options] [package patterns] [-- go test arguments]")
+	fmt.Fprintln(w, "  gomcdc version")
 	fmt.Fprintln(w, "\nBy default all canonical coverage metrics are measured.")
 }
 

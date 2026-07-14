@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -121,18 +122,33 @@ func createGOROOTView(source, destination string) error {
 	if err := os.Mkdir(destination, 0o700); err != nil {
 		return fmt.Errorf("create compiler GOROOT view: %w", err)
 	}
-	entries, err := os.ReadDir(source)
-	if err != nil {
-		return fmt.Errorf("read selected GOROOT: %w", err)
-	}
-	for _, entry := range entries {
-		target := filepath.Join(source, entry.Name())
-		link := filepath.Join(destination, entry.Name())
-		if err := os.Symlink(target, link); err != nil {
-			return fmt.Errorf("link compiler GOROOT entry %q: %w", entry.Name(), err)
+	// cmd/go does not discover standard packages through a symlinked src
+	// directory on every supported installation layout. Mirror directories as
+	// real directories and symlink only files, so package discovery and overlay
+	// path identity both use the disposable lexical GOROOT.
+	return filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return fmt.Errorf("walk selected GOROOT at %q: %w", path, walkErr)
 		}
-	}
-	return nil
+		relative, err := filepath.Rel(source, path)
+		if err != nil {
+			return fmt.Errorf("resolve selected GOROOT entry %q: %w", path, err)
+		}
+		if relative == "." {
+			return nil
+		}
+		target := filepath.Join(destination, relative)
+		if entry.IsDir() {
+			if err := os.Mkdir(target, 0o700); err != nil {
+				return fmt.Errorf("create compiler GOROOT directory %q: %w", relative, err)
+			}
+			return nil
+		}
+		if err := os.Symlink(path, target); err != nil {
+			return fmt.Errorf("link compiler GOROOT entry %q: %w", relative, err)
+		}
+		return nil
+	})
 }
 
 func queryToolchain(ctx context.Context) (string, string, error) {

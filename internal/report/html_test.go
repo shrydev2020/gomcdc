@@ -15,7 +15,7 @@ func TestWriteHTMLRendersGoHierarchyAndEscapesSourceText(t *testing.T) {
 	percentage := 50.0
 	metric.Percentage = &percentage
 	value := Report{
-		Version: "1.0-draft", Module: "example.test/<script>alert(1)</script>",
+		Version: "1.0", Module: "example.test/<script>alert(1)</script>",
 		Run: Run{Status: cover.RunPassed, Complete: true}, MeasurementMode: MeasurementSingleRun,
 		Summary:  Summary{Statement: metric},
 		Packages: []PackageReport{{Path: "example.test/mod/pkg", Status: "passed", Evidence: true, Summary: Summary{Statement: metric}, Files: []FileReport{{Path: "pkg/value.go", Summary: Summary{Statement: metric}, Functions: []FunctionReport{{Name: "Check<script>", Location: &location, Summary: Summary{Statement: metric}, Decisions: []DecisionReport{{Expression: "a < b && <script>", Location: location, DecisionCoverage: DecisionCoverage{True: true}, Conditions: []ConditionReport{{Expression: "a < b", Location: location}}}}}}}}}},

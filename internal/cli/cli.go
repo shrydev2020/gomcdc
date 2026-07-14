@@ -53,6 +53,11 @@ func classifyExit(invalidUsage, measurementFailure, testsFailed, thresholdFailur
 
 // Run executes the CLI with the process working directory.
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	// Only measurement needs a working directory. Informational and invalid
+	// top-level commands must remain usable even when no module is available.
+	if len(args) == 0 || args[0] != "test" {
+		return runAt(ctx, "", args, stdout, stderr)
+	}
 	workingDir, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(stderr, "gomcdc: determine working directory: %v\n", err)
@@ -76,6 +81,14 @@ func runAt(ctx context.Context, workingDir string, args []string, stdout, stderr
 		fmt.Fprintln(stderr, "gomcdc: a subcommand is required")
 		writeTopUsage(stderr)
 		return ExitInvalidUsage
+	}
+	if args[0] == "version" {
+		if len(args) != 1 {
+			fmt.Fprintln(stderr, "gomcdc: version does not accept arguments")
+			return ExitInvalidUsage
+		}
+		fmt.Fprintf(stdout, "gomcdc %s\n", toolVersion)
+		return ExitSuccess
 	}
 	if args[0] != "test" {
 		fmt.Fprintf(stderr, "gomcdc: unknown subcommand %q\n", args[0])

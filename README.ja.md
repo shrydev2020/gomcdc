@@ -15,7 +15,7 @@ clause selection、Unique-Cause MC/DC、Masking MC/DCを一つのreportへ
 ## インストール
 
 ```sh
-go install github.com/shrydev2020/gomcdc/cmd/gomcdc@latest
+go install github.com/shrydev2020/gomcdc/cmd/gomcdc@v1.0.0
 ```
 
 ## 実行
@@ -23,6 +23,7 @@ go install github.com/shrydev2020/gomcdc/cmd/gomcdc@latest
 ```sh
 gomcdc test ./...
 gomcdc test --format html --output coverage-html ./...
+gomcdc version
 ```
 
 HTML reportは coverage-html/index.html に出力されます。
