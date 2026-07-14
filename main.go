@@ -1,3 +1,5 @@
+// Command gomcdc runs Go tests and reports statement, function, decision,
+// condition, clause, Unique-Cause MC/DC, and Masking MC/DC coverage.
 package main
 
 import (
