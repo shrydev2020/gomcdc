@@ -38,7 +38,7 @@ type measurementRequest struct {
 type measurementOutcome struct {
 	standardResult              *gotest.Result
 	astResult                   *gotest.Result
-	collection                  runtimecov.Collection
+	evidence                    verifiedRuntimeEvidence
 	c0                          *c0.Report
 	astEvidenceIntegrityUnknown bool
 	c0EvidenceIntegrityUnknown  bool
@@ -80,7 +80,7 @@ func (set *measurementWorkspaces) cleanup(stderr io.Writer) error {
 }
 
 // measure performs source-copy setup, the requested test runs, evidence
-// collection, and evidence validation. It owns measurement failures and
+// collection, and evidence verification. It owns measurement failures and
 // returns a workspace set so the caller can preserve cleanup timing.
 func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, *measurementWorkspaces, error) {
 	outcome := measurementOutcome{}
@@ -179,10 +179,10 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 		outcome.astResult = &result
 	}
 
-	collection := runtimecov.Collection{}
+	recorded := runtimecov.RecordedEvidence{}
 	var collectionErr error
 	if request.needsAST {
-		collection, collectionErr = runtimecov.CollectDetailed(astWork.EventDir)
+		recorded, collectionErr = runtimecov.CollectDetailed(astWork.EventDir)
 	}
 	if collectionErr != nil {
 		fmt.Fprintf(stderr, "gomcdc: runtime coverage collection failed: %v\n", collectionErr)
@@ -192,8 +192,7 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 		outcome.integrityFailure = true
 		outcome.astEvidenceIntegrityUnknown = true
 	}
-	validated, validationErr := validateObservations(request.decisions, request.clauses, collection, runID, request.noMatches)
-	collection = validated
+	verified, validationErr := verifyRuntimeEvidence(request.decisions, request.clauses, recorded, runID, request.noMatches)
 	if validationErr != nil {
 		fmt.Fprintf(stderr, "gomcdc: runtime coverage validation failed: %v\n", validationErr)
 		outcome.diagnostics = append(outcome.diagnostics, measurementDiagnostic{
@@ -202,17 +201,17 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 		outcome.integrityFailure = true
 		outcome.astEvidenceIntegrityUnknown = true
 	}
-	for _, diagnostic := range collection.Diagnostics {
+	for _, diagnostic := range verified.Diagnostics {
 		fmt.Fprintf(stderr, "gomcdc: runtime coverage diagnostic: %s\n", formatRuntimeDiagnostic(diagnostic))
 		outcome.diagnostics = append(outcome.diagnostics, measurementDiagnostic{
 			phase: "collection", code: "runtime-" + string(diagnostic.Severity), message: runtimeDiagnosticReportMessage(diagnostic.Severity),
 		})
 	}
-	if runtimeDiagnosticsInvalidate(collection.Diagnostics, outcome.astResult) {
+	if runtimeDiagnosticsInvalidate(verified.Diagnostics, outcome.astResult) {
 		outcome.integrityFailure = true
 		outcome.astEvidenceIntegrityUnknown = true
 	}
-	outcome.collection = collection
+	outcome.evidence = verified
 
 	if request.needsC0 {
 		analyzed, c0Err := collectC0(coverProfile, request.loaded, request.sources, request.generated)

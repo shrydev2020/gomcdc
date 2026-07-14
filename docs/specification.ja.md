@@ -4,11 +4,13 @@
 
 `gomcdc` v1系列は本仕様を互換性契約とする。既存指標の意味、既存CLI optionと終了code、JSON必須fieldの削除または意味変更はv1系列内では行わない。既存の解釈を変更しないopt-in capabilityとoptional fieldは追加できる。
 
+公開JSONのfield集合を変更するときは新しい `schemaVersion` とrepository内schemaを追加し、schema `1.0` 自体を書き換えない。
+
 ## 1. 適用範囲
 
 `gomcdc test` は Go module の一回の論理的計測要求から、Statement、Function、Decision、Switch Clause Body、Type Switch Clause Body、Select Clause Body、Switch Clause Selection、Type Switch Clause Selection、Condition、Unique-Cause MC/DC、Masking MC/DC の11指標を一つの source model 上へ集約する。
 
-`gomcdc version` は計測を行わず、`gomcdc vMAJOR.MINOR.PATCH` 形式のrelease identityを標準出力へ書き、終了code 0を返す。追加argumentはinvalid CLI usageである。
+`gomcdc version` は計測を行わず、build identityを標準出力へ書き、終了code 0を返す。module versionからbuildした場合は `gomcdc vMAJOR.MINOR.PATCH`（または完全なGo module version）、local buildでは `gomcdc devel` に省略VCS revisionと `dirty` を必要に応じて付加する。追加argumentはinvalid CLI usageである。identityはGo build informationから取得し、linker flagを必要としない。
 
 対象は Go 1.26.5、Go Modules、Linux、macOS とする。compiler-aware backendはGo compiler sourceへexact-anchor patchを適用するため、異なるGo patch versionを対応版として扱わない。対象 source は package pattern を `go list` して得た main module 内の package である。標準 library、外部 module、vendor、本ツール生成source、Go標準形式のgenerated-code commentを持つsourceは対象集合に含めない。`_test.go` は `--include-tests` 指定時だけ AST 系指標へ含め、このflagはStatement/Functionへ影響しない。
 
@@ -204,7 +206,7 @@ runtime は EvaluationID を衝突させず、package-global な current evaluat
 
 ### D25. Process と回収
 
-各 test process は package import path の衝突不能なencoding、PID、run ID、nonceを含む固有 file へ evidence を書く。CLI は完全に検証できたrecordを収集しmodule reportへmergeする。DecisionID、EvaluationIdentity、condition count、state、result、statusと短絡規則の整合性を検証する。test failure、build failure、timeout、panic、truncated tail、異常終了時も取得済み evidence と静的 inventory から partial report を構成する。
+各 test process は package import path の衝突不能なencoding、PID、run ID、nonceを含む固有 file へ evidence を書く。同一file内の全recordは同じ `(runID, packagePath, PID)` provenanceを持つ。CLIはraw Decision eventとClause eventのprovenanceを、要求run、source inventory上の所有package、process identity、condition count、state、result、status、短絡規則の整合性を検証するまで保持する。検証済みeventだけをprovenance-freeで冪等なcoverage observationへ射影する。test failure、build failure、timeout、panic、truncated tail、異常終了時も取得済み evidence と静的 inventory から partial report を構成する。
 
 ### D26. go test
 
@@ -241,7 +243,9 @@ condition, mcdc-unique, mcdc-masking, all
 
 ### D29. JSON
 
-root は `version`、`module`、`run`、`measurementMode`、`measurements`、`capabilities`、`backendCapabilities`、`instrumentationCoverage`、`summary`、`packages`、`errors` を持つ。`capabilities` はtool全体のaggregate、`backendCapabilities` はD21のproducer別authorityを表す。version は `1.0` とする。
+root は `schemaVersion`、`toolVersion`、`module`、`run`、`measurementMode`、`measurements`、`capabilities`、`backendCapabilities`、`instrumentationCoverage`、`summary`、`packages`、`errors` を持つ。`schemaVersion` はreport互換性契約であり `1.0`、`toolVersion` は `gomcdc version` が返すbuild identityである。`capabilities` はtool全体のaggregate、`backendCapabilities` はD21のproducer別authorityを表す。
+
+[`schema/report-v1.0.schema.json`](../schema/report-v1.0.schema.json) は全公開field、必須・任意key、型、enum、nullabilityを定める機械可読JSON Schemaである。実装と本仕様はrepository内のこのschemaへ適合しなければならない。
 
 summary key は `statement`、`function`、`decision`、`switchClauseBody`、`typeSwitchClauseBody`、`selectClauseBody`、`switchClauseSelection`、`typeSwitchClauseSelection`、`condition`、`mcdcUnique`、`mcdcMasking` である。
 
@@ -261,7 +265,7 @@ HTMLはmodule summaryからpackageを主navigationとし、package内をfile、f
 
 ### D32. Resource と trust boundary
 
-一つの計装runは一回のsource計装、compiler計装、build、testで全非standard-cover証拠を収集する。event journalはwitnessを失わない形で集約・compactionし、loop回数に比例する全recordをmemoryへ保持しない。通常の `go test` に対する目標はAST-onlyで2倍以内、両MC/DC込みで5倍以内だが、この目標は適合判定に使用しない。
+一つの計装runは一回のsource計装、compiler計装、build、testで全非standard-cover証拠を収集する。event journalはwitnessを失わない形で集約・compactionし、loop回数に比例する全recordをmemoryへ保持しない。performance claimにはrepository内のbenchmarkを必要とし、v1適合条件には含めない。
 
 対象moduleは信頼済みコードとして現在ユーザー権限でbuild/testする。一時workspaceはsecurity sandboxではなく、悪意ある対象コードに対するevidence真正性を保証しない。一時directoryとevent fileは現在ユーザーだけが読み書きできるpermissionとし、source複製時にsymlink/hardlinkからworkspace外へ書き込まない。通常reportはユーザーの絶対local pathを含めない。
 
@@ -289,7 +293,7 @@ HTMLはmodule summaryからpackageを主navigationとし、package内をfile、f
 
 ## 10. 受け入れ検証
 
-受け入れ suite は AND、OR、NOT、nested expression、side effect、evaluation order、conditionless switch、expression switch、type switch、select、empty body、fallthrough、direct selection、no-match、再帰、nested decision、loop、複数 goroutine、panic、recover、defer、`runtime.Goexit`、複数 package、external test package、build tag、test/build failure、timeout、truncated event、partial recovery、source mapping、ユーザー `//line`、生成code除外、全11閾値を含む。`a && b` は Unique-Causeで `a=infeasible`、`b=covered`、Maskingで両condition coveredとなる。
+受け入れ suite は AND、OR、NOT、nested expression、side effect、evaluation order、conditionless switch、expression switch、type switch、select、empty body、fallthrough、direct selection、no-match、再帰、nested decision、loop、複数 goroutine、panic、recover、defer、`runtime.Goexit`、複数 package、external test package、build tag、test/build failure、timeout、truncated event、partial recovery、provenance mutation、source mapping、ユーザー `//line`、生成code除外、JSON Schema contract mutation、全11閾値を含む。`a && b` は Unique-Causeで `a=infeasible`、`b=covered`、Maskingで両condition coveredとなる。
 
 `go test -count=1 ./...`、`go test -race -count=1 ./...`、`go vet ./...` が成功し、fixture module の module 集計と package 集計の整数和が一致することを完成条件とする。
 

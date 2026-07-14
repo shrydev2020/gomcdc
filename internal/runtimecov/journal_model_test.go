@@ -231,7 +231,7 @@ func journalClause(processID int, event cover.ClauseEventKind) wireRecord {
 	return record
 }
 
-func collectJournalModel(t *testing.T, files []journalFileModel) Collection {
+func collectJournalModel(t *testing.T, files []journalFileModel) RecordedEvidence {
 	t.Helper()
 	dataDir := t.TempDir()
 	for _, file := range files {
@@ -253,7 +253,7 @@ func collectJournalModel(t *testing.T, files []journalFileModel) Collection {
 	return collected
 }
 
-func projectJournalSemantics(collection Collection) journalSemantics {
+func projectJournalSemantics(collection RecordedEvidence) journalSemantics {
 	projection := journalSemantics{}
 	for _, evaluation := range collection.Evaluations {
 		projection.evaluations = append(projection.evaluations, fmt.Sprintf(
@@ -268,7 +268,7 @@ func projectJournalSemantics(collection Collection) journalSemantics {
 			evaluation.Status,
 		))
 	}
-	for _, clause := range collection.Clauses {
+	for _, clause := range collection.ClauseEvents {
 		projection.clauses = append(projection.clauses, fmt.Sprintf(
 			"%d|%d|%s|%d|%t",
 			clause.SwitchID,
@@ -283,7 +283,7 @@ func projectJournalSemantics(collection Collection) journalSemantics {
 	return projection
 }
 
-func assertJournalCounts(t *testing.T, collection Collection, wantCompleted, wantAborted, wantClauses int) {
+func assertJournalCounts(t *testing.T, collection RecordedEvidence, wantCompleted, wantAborted, wantClauses int) {
 	t.Helper()
 	completed, aborted := 0, 0
 	for _, evaluation := range collection.Evaluations {
@@ -296,12 +296,12 @@ func assertJournalCounts(t *testing.T, collection Collection, wantCompleted, wan
 			t.Errorf("unknown evaluation status %d", evaluation.Status)
 		}
 	}
-	if completed != wantCompleted || aborted != wantAborted || len(collection.Clauses) != wantClauses {
+	if completed != wantCompleted || aborted != wantAborted || len(collection.ClauseEvents) != wantClauses {
 		t.Errorf(
 			"semantic counts = completed:%d aborted:%d clauses:%d, want %d/%d/%d; collection=%#v",
 			completed,
 			aborted,
-			len(collection.Clauses),
+			len(collection.ClauseEvents),
 			wantCompleted,
 			wantAborted,
 			wantClauses,

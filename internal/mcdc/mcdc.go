@@ -1116,7 +1116,7 @@ func finishResult(result *cover.MCDCResult) {
 	hasUnknownSupport := false
 	hasAnalysisIncomplete := false
 	hasNotCovered := false
-	hasPossiblyInfeasible := false
+	hasInfeasible := false
 	for _, condition := range result.Conditions {
 		allCovered = allCovered && condition.Outcome == cover.CoverageOutcomeCovered &&
 			condition.Support == cover.SupportSupported && condition.Analysis == cover.AnalysisComplete
@@ -1125,7 +1125,7 @@ func finishResult(result *cover.MCDCResult) {
 		hasAnalysisIncomplete = hasAnalysisIncomplete || condition.Analysis == cover.AnalysisIncomplete
 		hasNotCovered = hasNotCovered || condition.Outcome == cover.CoverageOutcomeNotCovered &&
 			condition.Analysis == cover.AnalysisComplete
-		hasPossiblyInfeasible = hasPossiblyInfeasible || condition.Analysis == cover.AnalysisInfeasible
+		hasInfeasible = hasInfeasible || condition.Analysis == cover.AnalysisInfeasible
 	}
 	switch {
 	case allCovered:
@@ -1148,7 +1148,7 @@ func finishResult(result *cover.MCDCResult) {
 		result.Outcome = cover.CoverageOutcomeNotCovered
 		result.Support = cover.SupportSupported
 		result.Analysis = cover.AnalysisComplete
-	case hasPossiblyInfeasible:
+	case hasInfeasible:
 		result.Outcome = cover.CoverageOutcomeNotCovered
 		result.Support = cover.SupportSupported
 		result.Analysis = cover.AnalysisInfeasible

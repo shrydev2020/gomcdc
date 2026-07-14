@@ -8,20 +8,20 @@ import (
 	"github.com/shrydev2020/gomcdc/internal/gotest"
 	"github.com/shrydev2020/gomcdc/internal/loader"
 	"github.com/shrydev2020/gomcdc/internal/report"
-	"github.com/shrydev2020/gomcdc/internal/runtimecov"
 )
 
 // reportAssembly is the validated boundary between measurement orchestration
 // and report construction. It contains no workspace or writer ownership: the
 // caller owns those resources and supplies only their results here.
 type reportAssembly struct {
+	toolVersion            string
 	loaded                 loader.Result
 	sources                []sourceInstrumentation
 	coverage               config.CoverageSet
 	decisions              []cover.DecisionMetadata
 	clauses                []cover.ClauseMetadata
 	noMatches              []cover.NoMatchMetadata
-	collection             runtimecov.Collection
+	evidence               verifiedRuntimeEvidence
 	c0                     *c0.Report
 	standardResult         *gotest.Result
 	astResult              *gotest.Result
@@ -54,15 +54,16 @@ func assembleReportInput(assembly reportAssembly) report.Input {
 	errors = append(errors, measurementRunErrors("ast", assembly.astResult)...)
 
 	return report.Input{
+		ToolVersion:           assembly.toolVersion,
 		ModulePath:            assembly.loaded.ModulePath,
 		SourceFiles:           sourceFileInputs(assembly.sources),
 		Coverage:              assembly.coverage,
 		Decisions:             assembly.decisions,
-		Evaluations:           assembly.collection.Evaluations,
-		NotEvaluatedDecisions: assembly.collection.NotEvaluatedDecisions,
+		Evaluations:           assembly.evidence.Evaluations,
+		NotEvaluatedDecisions: assembly.evidence.NotEvaluatedDecisions,
 		Clauses:               assembly.clauses,
 		NoMatches:             assembly.noMatches,
-		ClauseObservations:    assembly.collection.Clauses,
+		ClauseObservations:    assembly.evidence.ClauseObservations,
 		C0:                    assembly.c0,
 		RunStatus:             overallStatus,
 		FailureKind:           overallFailure,

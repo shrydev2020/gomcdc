@@ -29,6 +29,7 @@ const (
 // Input contains all static metadata, runtime evidence, and run state needed
 // to build an integrated report.
 type Input struct {
+	ToolVersion           string
 	ModulePath            string
 	SourceFiles           []SourceFileInput
 	Coverage              config.CoverageSet
@@ -62,7 +63,8 @@ type Input struct {
 
 // Report is the deterministic module report.
 type Report struct {
-	Version         string                         `json:"version"`
+	SchemaVersion   string                         `json:"schemaVersion"`
+	ToolVersion     string                         `json:"toolVersion"`
 	Module          string                         `json:"module"`
 	Run             Run                            `json:"run"`
 	MeasurementMode MeasurementMode                `json:"measurementMode"`
@@ -156,7 +158,7 @@ type MetricSummary struct {
 	Percentage         *float64 `json:"percentage"`
 	Unsupported        int      `json:"unsupported"`
 	Unknown            int      `json:"unknown"`
-	PossiblyInfeasible int      `json:"infeasible"`
+	Infeasible         int      `json:"infeasible"`
 	AnalysisIncomplete int      `json:"analysisIncomplete"`
 }
 
@@ -839,7 +841,7 @@ func mcdcStatus(
 	case analysis == cover.AnalysisIncomplete:
 		return string(cover.CoverageAnalysisIncomplete)
 	case analysis == cover.AnalysisInfeasible:
-		return string(cover.CoveragePossiblyInfeasible)
+		return string(cover.CoverageInfeasible)
 	case outcome == cover.CoverageOutcomeCovered:
 		return string(cover.CoverageCovered)
 	case outcome == cover.CoverageOutcomeNotCovered:
@@ -1072,7 +1074,7 @@ func addMCDCStatus(
 	case analysis == cover.AnalysisIncomplete:
 		metric.AnalysisIncomplete += units
 	case analysis == cover.AnalysisInfeasible:
-		metric.PossiblyInfeasible += units
+		metric.Infeasible += units
 	case outcome == cover.CoverageOutcomeCovered:
 		metric.Covered += units
 		metric.Total += units
@@ -1106,7 +1108,7 @@ func addMetric(destination *MetricSummary, source MetricSummary) {
 	destination.Total += source.Total
 	destination.Unsupported += source.Unsupported
 	destination.Unknown += source.Unknown
-	destination.PossiblyInfeasible += source.PossiblyInfeasible
+	destination.Infeasible += source.Infeasible
 	destination.AnalysisIncomplete += source.AnalysisIncomplete
 	destination.recalculate()
 }

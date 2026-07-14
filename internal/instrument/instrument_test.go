@@ -634,10 +634,10 @@ func TestCoverageFixture(t *testing.T) {
 	if len(panicEvaluations) != 1 || panicEvaluations[0].Status != cover.EvaluationAborted || panicEvaluations[0].Conditions[0] != cover.ConditionTrue || panicEvaluations[0].Conditions[1] != cover.ConditionNotEvaluated {
 		t.Errorf("panic evaluations = %#v", panicEvaluations)
 	}
-	if got := len(evaluations[decisionByFunction["Concurrent"].ID]); got != 2 {
+	if got := len(distinctEvaluationVectors(evaluations[decisionByFunction["Concurrent"].ID])); got != 2 {
 		t.Errorf("Concurrent unique vectors = %d, want 2", got)
 	}
-	recursiveEvaluations := evaluations[decisionByFunction["Recursive"].ID]
+	recursiveEvaluations := distinctEvaluationVectors(evaluations[decisionByFunction["Recursive"].ID])
 	if got := len(recursiveEvaluations); got != 2 {
 		t.Errorf("Recursive unique vectors = %d, want 2", got)
 	} else {
@@ -660,7 +660,7 @@ func TestCoverageFixture(t *testing.T) {
 
 	directSelections := make(map[cover.ClauseID]bool)
 	bodyExecutions := make(map[cover.ClauseID]bool)
-	for _, observation := range collected.Clauses {
+	for _, observation := range collected.ClauseEvents {
 		switch observation.Event {
 		case cover.ClauseDirectSelection:
 			directSelections[observation.ClauseID] = true
@@ -720,15 +720,35 @@ func TestCoverageFixture(t *testing.T) {
 	if len(booleanDecisions) != 2 {
 		t.Fatalf("conditionless switch decisions = %#v", booleanDecisions)
 	}
-	if got := len(evaluations[booleanDecisions[0].ID]); got != 2 {
+	if got := len(distinctEvaluationVectors(evaluations[booleanDecisions[0].ID])); got != 2 {
 		t.Errorf("first conditionless decision evaluations = %d, want 2", got)
 	}
-	if got := len(evaluations[booleanDecisions[1].ID]); got != 1 {
+	if got := len(distinctEvaluationVectors(evaluations[booleanDecisions[1].ID])); got != 1 {
 		t.Errorf("second conditionless decision evaluations = %d, want 1", got)
 	}
-	if got := len(collected.NotEvaluatedDecisions); got != 1 || collected.NotEvaluatedDecisions[0].DecisionID != booleanDecisions[1].ID || collected.NotEvaluatedDecisions[0].CauseDecisionID != booleanDecisions[0].ID {
+	if got := len(collected.NotEvaluatedDecisions); got != 2 {
 		t.Errorf("conditionless switch not-evaluated evidence = %#v", collected.NotEvaluatedDecisions)
+	} else {
+		for _, observation := range collected.NotEvaluatedDecisions {
+			if observation.DecisionID != booleanDecisions[1].ID || observation.CauseDecisionID != booleanDecisions[0].ID {
+				t.Errorf("conditionless switch not-evaluated evidence = %#v", collected.NotEvaluatedDecisions)
+			}
+		}
 	}
+}
+
+func distinctEvaluationVectors(evaluations []cover.DecisionEvaluation) []cover.DecisionEvaluation {
+	result := make([]cover.DecisionEvaluation, 0, len(evaluations))
+	seen := make(map[string]struct{}, len(evaluations))
+	for _, evaluation := range evaluations {
+		key := fmt.Sprintf("%v:%t:%d", evaluation.Conditions, evaluation.Result, evaluation.Status)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, evaluation)
+	}
+	return result
 }
 
 func analyze(t *testing.T, path, moduleDir, modulePath, packagePath string) analyzer.File {

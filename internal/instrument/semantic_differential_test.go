@@ -3,12 +3,14 @@ package instrument
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/shrydev2020/gomcdc/internal/analyzer"
 	"github.com/shrydev2020/gomcdc/internal/compileraware"
 	cover "github.com/shrydev2020/gomcdc/internal/coverage"
 	"github.com/shrydev2020/gomcdc/internal/runtimecov"
@@ -35,23 +37,11 @@ func TestInstrumentationModesPreserveProgramSemantics(t *testing.T) {
 	wantTranscript := runSemanticFixture(t, originalRoot, nil, "")
 
 	tests := []struct {
-		name                 string
-		compilerAware        bool
-		wantDirectSelection  bool
-		wantNoMatchSelection bool
-		wantBodyExecution    bool
+		name          string
+		compilerAware bool
 	}{
-		{
-			name:              "AST",
-			wantBodyExecution: true,
-		},
-		{
-			name:                 "compiler-aware",
-			compilerAware:        true,
-			wantDirectSelection:  true,
-			wantNoMatchSelection: true,
-			wantBodyExecution:    true,
-		},
+		{name: "AST"},
+		{name: "compiler-aware", compilerAware: true},
 	}
 
 	for _, test := range tests {
@@ -109,10 +99,10 @@ func TestInstrumentationModesPreserveProgramSemantics(t *testing.T) {
 			}
 			assertSemanticClauseEvents(
 				t,
-				collected.Clauses,
-				test.wantDirectSelection,
-				test.wantNoMatchSelection,
-				test.wantBodyExecution,
+				analysis,
+				collected.ClauseEvents,
+				"semantic-differential-"+test.name,
+				test.compilerAware,
 			)
 		})
 	}
@@ -161,21 +151,82 @@ func semanticEnvironment(environment []string, key, value string) []string {
 	return append(result, prefix+value)
 }
 
-func assertSemanticClauseEvents(t *testing.T, observations []cover.ClauseObservation, wantDirect, wantNoMatch, wantBody bool) {
+func assertSemanticClauseEvents(
+	t *testing.T,
+	analysis analyzer.File,
+	observations []runtimecov.RecordedClauseEvent,
+	runID string,
+	compilerAware bool,
+) {
 	t.Helper()
-	got := map[cover.ClauseEventKind]bool{}
-	for _, observation := range observations {
-		got[observation.Event] = true
+	clauses := make(map[cover.ClauseID]cover.ClauseMetadata, len(analysis.Clauses))
+	expected := make(map[string]struct{})
+	directAlternatives := map[string]map[uint16]int{
+		"ExpressionSwitch": {0: 1, 1: 0, 2: -1},
+		"TypeSwitch":       {0: 0, 1: 0, 2: 0, 3: -1},
+		"Labelled":         {0: 0, 1: 0, 2: -1},
 	}
-	for event, want := range map[cover.ClauseEventKind]bool{
-		cover.ClauseDirectSelection:  wantDirect,
-		cover.ClauseNoMatchSelection: wantNoMatch,
-		cover.ClauseBodyExecution:    wantBody,
-	} {
-		if got[event] != want {
-			t.Errorf("clause event %q present = %t, want %t; observations = %#v", event, got[event], want, observations)
+	for _, analyzed := range analysis.Clauses {
+		metadata := analyzed.Metadata
+		clauses[metadata.ID] = metadata
+		alternatives, exercised := directAlternatives[metadata.Function]
+		if !exercised {
+			continue
+		}
+		alternative, exercised := alternatives[metadata.Index]
+		if !exercised {
+			continue
+		}
+		expected[semanticClauseEventKey(metadata.Function, metadata.Index, cover.ClauseBodyExecution, -1)] = struct{}{}
+		if compilerAware {
+			expected[semanticClauseEventKey(metadata.Function, metadata.Index, cover.ClauseDirectSelection, alternative)] = struct{}{}
 		}
 	}
+	noMatches := make(map[cover.SwitchID]cover.NoMatchMetadata, len(analysis.NoMatches))
+	for _, noMatch := range analysis.NoMatches {
+		noMatches[noMatch.SwitchID] = noMatch
+		if compilerAware && noMatch.Function == "NoMatch" {
+			expected[semanticClauseEventKey(noMatch.Function, 0, cover.ClauseNoMatchSelection, -1)] = struct{}{}
+		}
+	}
+
+	got := make(map[string]struct{}, len(observations))
+	for _, observation := range observations {
+		if observation.RunID != runID || observation.PackagePath != semanticFixtureModule+"/logic" || observation.ProcessID <= 0 {
+			t.Fatalf("clause provenance = %#v", observation)
+		}
+		if observation.Event == cover.ClauseNoMatchSelection {
+			metadata, exists := noMatches[observation.SwitchID]
+			if !exists || observation.ClauseID != 0 || observation.AlternativeKnown {
+				t.Fatalf("unattributable no-match event = %#v", observation)
+			}
+			got[semanticClauseEventKey(metadata.Function, 0, observation.Event, -1)] = struct{}{}
+			continue
+		}
+		metadata, exists := clauses[observation.ClauseID]
+		if !exists || (observation.SwitchID != 0 && observation.SwitchID != metadata.SwitchID) {
+			t.Fatalf("unattributable clause event = %#v", observation)
+		}
+		alternative := -1
+		if observation.AlternativeKnown {
+			alternative = int(observation.AlternativeIndex)
+		}
+		got[semanticClauseEventKey(metadata.Function, metadata.Index, observation.Event, alternative)] = struct{}{}
+	}
+	for key := range expected {
+		if _, exists := got[key]; !exists {
+			t.Errorf("missing semantic clause event %q; observations = %#v", key, observations)
+		}
+	}
+	for key := range got {
+		if _, exists := expected[key]; !exists {
+			t.Errorf("unexpected semantic clause event %q; observations = %#v", key, observations)
+		}
+	}
+}
+
+func semanticClauseEventKey(function string, index uint16, event cover.ClauseEventKind, alternative int) string {
+	return fmt.Sprintf("%s[%d]:%s:alternative=%d", function, index, event, alternative)
 }
 
 const semanticFixtureLogic = `package logic

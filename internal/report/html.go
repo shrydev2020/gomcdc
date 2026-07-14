@@ -129,7 +129,7 @@ func htmlMetricStatus(metric MetricSummary) string {
 		return "unknown"
 	case metric.Unsupported > 0:
 		return "unsupported"
-	case metric.PossiblyInfeasible > 0:
+	case metric.Infeasible > 0:
 		return "infeasible"
 	case metric.Total == 0:
 		return "empty"
@@ -149,7 +149,7 @@ func htmlSummaryGaps(summary Summary) int {
 			continue
 		}
 		gaps += metric.Summary.Total - metric.Summary.Covered
-		gaps += metric.Summary.Unknown + metric.Summary.Unsupported + metric.Summary.PossiblyInfeasible + metric.Summary.AnalysisIncomplete
+		gaps += metric.Summary.Unknown + metric.Summary.Unsupported + metric.Summary.Infeasible + metric.Summary.AnalysisIncomplete
 	}
 	return gaps
 }

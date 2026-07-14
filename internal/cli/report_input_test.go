@@ -8,7 +8,6 @@ import (
 	"github.com/shrydev2020/gomcdc/internal/gotest"
 	"github.com/shrydev2020/gomcdc/internal/loader"
 	"github.com/shrydev2020/gomcdc/internal/report"
-	"github.com/shrydev2020/gomcdc/internal/runtimecov"
 )
 
 func TestAssembleReportInputPreservesMeasurementBoundaries(t *testing.T) {
@@ -19,7 +18,7 @@ func TestAssembleReportInputPreservesMeasurementBoundaries(t *testing.T) {
 		astResult:              &gotest.Result{Status: cover.RunFailed, FailureKind: cover.RunFailureTest, Packages: map[string]gotest.PackageStatus{"example.test/m/p": gotest.PackageFailed}},
 		standardCoverRequested: true,
 		astRequested:           true,
-		collection:             runtimecov.Collection{},
+		evidence:               verifiedRuntimeEvidence{},
 	})
 
 	if input.MeasurementMode != "dual-run-standard-cover" {

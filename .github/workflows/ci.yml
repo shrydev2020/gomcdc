@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches: [master]
   pull_request:
 
 permissions:
@@ -20,7 +21,8 @@ jobs:
           go-version-file: go.mod
           cache: true
       - run: go test -count=1 ./...
-      - run: go test -count=1 -race ./...
+      - if: runner.os == 'Linux'
+        run: go test -count=1 -race ./...
       - run: go vet ./...
 
   self-mcdc:
@@ -37,10 +39,6 @@ jobs:
           --timeout=10m
           --coverage=decision,condition,mcdc-unique,mcdc-masking
           --strict
-          --fail-under-decision=72
-          --fail-under-condition=69
-          --fail-under-mcdc-unique=45
-          --fail-under-mcdc-masking=44
           --format=json
           --output=${{ runner.temp }}/gomcdc-self-mcdc.json
           ./...

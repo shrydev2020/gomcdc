@@ -55,8 +55,8 @@ func TestIntegratedFixtureReportsAllMetricsAcrossPackages(t *testing.T) {
 	if code != ExitSuccess {
 		t.Fatalf("all-metric exit = %d\nstderr:\n%s", code, allStderr)
 	}
-	if all.Version != report.SchemaVersion || all.Module != "example.test/gomcdc-fixture" {
-		t.Fatalf("report identity = version %q module %q", all.Version, all.Module)
+	if all.SchemaVersion != report.SchemaVersion || all.ToolVersion == "" || all.Module != "example.test/gomcdc-fixture" {
+		t.Fatalf("report identity = schema %q tool %q module %q", all.SchemaVersion, all.ToolVersion, all.Module)
 	}
 	if all.Run.Status != cover.RunPassed || !all.Run.Complete {
 		t.Fatalf("run = %#v", all.Run)
@@ -121,7 +121,7 @@ func TestIntegratedFixtureReportsAllMetricsAcrossPackages(t *testing.T) {
 	if got := allow.Conditions[1].NotEvaluated; got == 0 {
 		t.Fatalf("short-circuited b not-evaluated count = %d", got)
 	}
-	if allow.Conditions[0].MCDCUnique.Status != string(cover.CoveragePossiblyInfeasible) ||
+	if allow.Conditions[0].MCDCUnique.Status != string(cover.CoverageInfeasible) ||
 		allow.Conditions[0].MCDCMasking.Status != string(cover.CoverageCovered) {
 		t.Fatalf("Allow(a) MC/DC unique=%q masking=%q", allow.Conditions[0].MCDCUnique.Status, allow.Conditions[0].MCDCMasking.Status)
 	}
@@ -442,7 +442,7 @@ func hasReportErrorCode(built report.Report, code string) bool {
 	return false
 }
 
-func TestValidationDropsImpossibleCompletedEvidence(t *testing.T) {
+func TestEvidenceVerificationDropsImpossibleCompletedEvidence(t *testing.T) {
 	t.Parallel()
 	decision := cover.DecisionMetadata{
 		ID: 1, Package: "example.test/p",
@@ -452,18 +452,18 @@ func TestValidationDropsImpossibleCompletedEvidence(t *testing.T) {
 			cover.NewConditionExpression(1),
 		),
 	}
-	collection := runtimecov.Collection{Evaluations: []cover.DecisionEvaluation{{
-		DecisionID: 1, EvaluationID: 1, RunID: "run", PackagePath: "example.test/p",
+	recorded := runtimecov.RecordedEvidence{Evaluations: []cover.DecisionEvaluation{{
+		DecisionID: 1, EvaluationID: 1, RunID: "run", PackagePath: "example.test/p", ProcessID: 1,
 		Conditions: []cover.ConditionState{cover.ConditionFalse, cover.ConditionTrue},
 		Result:     false, Status: cover.EvaluationCompleted,
 	}}}
-	validated, err := validateObservations([]cover.DecisionMetadata{decision}, nil, collection, "run", nil)
+	validated, err := verifyRuntimeEvidence([]cover.DecisionMetadata{decision}, nil, recorded, "run", nil)
 	if err == nil || len(validated.Evaluations) != 0 {
 		t.Fatalf("validated=%#v err=%v; impossible vector became coverage evidence", validated, err)
 	}
 }
 
-func TestValidationKeepsConditionlessSwitchNotEvaluatedEvidence(t *testing.T) {
+func TestEvidenceVerificationKeepsConditionlessSwitchNotEvaluatedEvidence(t *testing.T) {
 	t.Parallel()
 	first := cover.DecisionMetadata{
 		ID: 1, Package: "example.test/p", Function: "Choose", Kind: cover.DecisionSwitchCase,
@@ -482,23 +482,23 @@ func TestValidationKeepsConditionlessSwitchNotEvaluatedEvidence(t *testing.T) {
 		RunID: "run", PackagePath: "example.test/p", ProcessID: 12,
 	}
 	clauses := []cover.ClauseMetadata{
-		{ID: 10, GroupID: 100, Kind: cover.ClauseConditionlessSwitch, Role: cover.ClauseCase, Index: 0, DecisionIDs: []cover.DecisionID{1}},
-		{ID: 11, GroupID: 100, Kind: cover.ClauseConditionlessSwitch, Role: cover.ClauseCase, Index: 1, DecisionIDs: []cover.DecisionID{2}},
+		{ID: 10, Package: "example.test/p", GroupID: 100, Kind: cover.ClauseConditionlessSwitch, Role: cover.ClauseCase, Index: 0, DecisionIDs: []cover.DecisionID{1}},
+		{ID: 11, Package: "example.test/p", GroupID: 100, Kind: cover.ClauseConditionlessSwitch, Role: cover.ClauseCase, Index: 1, DecisionIDs: []cover.DecisionID{2}},
 	}
-	validated, err := validateObservations(
+	validated, err := verifyRuntimeEvidence(
 		[]cover.DecisionMetadata{first, second},
 		clauses,
-		runtimecov.Collection{Evaluations: []cover.DecisionEvaluation{evaluation}, NotEvaluatedDecisions: []cover.DecisionNotEvaluatedObservation{observation}},
+		runtimecov.RecordedEvidence{Evaluations: []cover.DecisionEvaluation{evaluation}, NotEvaluatedDecisions: []cover.DecisionNotEvaluatedObservation{observation}},
 		"run",
 		nil,
 	)
 	if err != nil || len(validated.NotEvaluatedDecisions) != 1 {
 		t.Fatalf("validated=%#v err=%v", validated, err)
 	}
-	withoutSuffix, err := validateObservations(
+	withoutSuffix, err := verifyRuntimeEvidence(
 		[]cover.DecisionMetadata{first, second},
 		clauses,
-		runtimecov.Collection{Evaluations: []cover.DecisionEvaluation{evaluation}},
+		runtimecov.RecordedEvidence{Evaluations: []cover.DecisionEvaluation{evaluation}},
 		"run",
 		nil,
 	)
@@ -507,7 +507,7 @@ func TestValidationKeepsConditionlessSwitchNotEvaluatedEvidence(t *testing.T) {
 	}
 }
 
-func TestValidationRejectsInvalidEvaluationIdentityAndShape(t *testing.T) {
+func TestEvidenceVerificationRejectsInvalidEvaluationIdentityAndShape(t *testing.T) {
 	t.Parallel()
 	metadata := cover.DecisionMetadata{
 		ID: 1, Package: "example.test/p", Kind: cover.DecisionIf,
@@ -530,6 +530,7 @@ func TestValidationRejectsInvalidEvaluationIdentityAndShape(t *testing.T) {
 		{name: "zero evaluation ID", mutate: func(value *cover.DecisionEvaluation) { value.EvaluationID = 0 }, wantErr: "reserved evaluation ID zero"},
 		{name: "wrong run", mutate: func(value *cover.DecisionEvaluation) { value.RunID = "other" }, wantErr: "unexpected run"},
 		{name: "wrong package", mutate: func(value *cover.DecisionEvaluation) { value.PackagePath = "example.test/other" }, wantErr: "belongs to package"},
+		{name: "zero process", mutate: func(value *cover.DecisionEvaluation) { value.ProcessID = 0 }, wantErr: "invalid process provenance"},
 		{name: "wrong condition count", mutate: func(value *cover.DecisionEvaluation) {
 			value.Conditions = append(value.Conditions, cover.ConditionFalse)
 		}, wantErr: "condition states"},
@@ -539,9 +540,9 @@ func TestValidationRejectsInvalidEvaluationIdentityAndShape(t *testing.T) {
 			if test.mutate != nil {
 				test.mutate(&evaluation)
 			}
-			validated, err := validateObservations(
+			validated, err := verifyRuntimeEvidence(
 				[]cover.DecisionMetadata{metadata}, nil,
-				runtimecov.Collection{Evaluations: []cover.DecisionEvaluation{evaluation}}, "run", nil,
+				runtimecov.RecordedEvidence{Evaluations: []cover.DecisionEvaluation{evaluation}}, "run", nil,
 			)
 			if test.wantErr == "" {
 				if err != nil || len(validated.Evaluations) != 1 {
@@ -556,7 +557,39 @@ func TestValidationRejectsInvalidEvaluationIdentityAndShape(t *testing.T) {
 	}
 }
 
-func TestValidationRejectsInvalidConditionlessSwitchSkipEvidence(t *testing.T) {
+func TestEvaluationEvidenceIsVerifiedBeforeSemanticDeduplication(t *testing.T) {
+	t.Parallel()
+	metadata := cover.DecisionMetadata{
+		ID: 1, Package: "example.test/p", Kind: cover.DecisionIf,
+		Conditions: []cover.ConditionMetadata{{Index: 0}}, ExpressionTree: cover.NewConditionExpression(0),
+	}
+	valid := cover.DecisionEvaluation{
+		DecisionID: 1, EvaluationID: 7, RunID: "run", PackagePath: "example.test/p", ProcessID: 9,
+		TestID: cover.UnknownTestID, Conditions: []cover.ConditionState{cover.ConditionTrue},
+		Result: true, Status: cover.EvaluationCompleted,
+	}
+	invalidDuplicate := valid
+	invalidDuplicate.EvaluationID = 8
+	invalidDuplicate.ProcessID = 0
+	validDuplicate := valid
+	validDuplicate.EvaluationID = 9
+	validDuplicate.ProcessID = 10
+	validDuplicate.TestID = "TestNamed"
+
+	verified, err := verifyRuntimeEvidence(
+		[]cover.DecisionMetadata{metadata}, nil,
+		runtimecov.RecordedEvidence{Evaluations: []cover.DecisionEvaluation{valid, invalidDuplicate, validDuplicate}},
+		"run", nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "invalid process provenance") {
+		t.Fatalf("invalid duplicate provenance was hidden: verified=%#v err=%v", verified, err)
+	}
+	if len(verified.Evaluations) != 1 || verified.Evaluations[0].TestID != "TestNamed" {
+		t.Fatalf("valid duplicates were not projected idempotently: %#v", verified.Evaluations)
+	}
+}
+
+func TestEvidenceVerificationRejectsInvalidConditionlessSwitchSkipEvidence(t *testing.T) {
 	t.Parallel()
 	decision := func(id cover.DecisionID, line int) cover.DecisionMetadata {
 		return cover.DecisionMetadata{
@@ -565,12 +598,12 @@ func TestValidationRejectsInvalidConditionlessSwitchSkipEvidence(t *testing.T) {
 			Conditions: []cover.ConditionMetadata{{Index: 0}}, ExpressionTree: cover.NewConditionExpression(0),
 		}
 	}
-	base := func() ([]cover.DecisionMetadata, []cover.ClauseMetadata, runtimecov.Collection) {
+	base := func() ([]cover.DecisionMetadata, []cover.ClauseMetadata, runtimecov.RecordedEvidence) {
 		decisions := []cover.DecisionMetadata{decision(1, 3), decision(2, 4), decision(3, 5)}
 		clauses := []cover.ClauseMetadata{
-			{ID: 10, GroupID: 100, Kind: cover.ClauseConditionlessSwitch, Role: cover.ClauseCase, Index: 0, DecisionIDs: []cover.DecisionID{1}},
-			{ID: 11, GroupID: 100, Kind: cover.ClauseConditionlessSwitch, Role: cover.ClauseCase, Index: 1, DecisionIDs: []cover.DecisionID{2}},
-			{ID: 12, GroupID: 100, Kind: cover.ClauseConditionlessSwitch, Role: cover.ClauseCase, Index: 2, DecisionIDs: []cover.DecisionID{3}},
+			{ID: 10, Package: "example.test/p", GroupID: 100, Kind: cover.ClauseConditionlessSwitch, Role: cover.ClauseCase, Index: 0, DecisionIDs: []cover.DecisionID{1}},
+			{ID: 11, Package: "example.test/p", GroupID: 100, Kind: cover.ClauseConditionlessSwitch, Role: cover.ClauseCase, Index: 1, DecisionIDs: []cover.DecisionID{2}},
+			{ID: 12, Package: "example.test/p", GroupID: 100, Kind: cover.ClauseConditionlessSwitch, Role: cover.ClauseCase, Index: 2, DecisionIDs: []cover.DecisionID{3}},
 		}
 		evaluation := cover.DecisionEvaluation{
 			DecisionID: 1, EvaluationID: 9, RunID: "run", PackagePath: "example.test/p", ProcessID: 12,
@@ -582,39 +615,39 @@ func TestValidationRejectsInvalidConditionlessSwitchSkipEvidence(t *testing.T) {
 				RunID: "run", PackagePath: "example.test/p", ProcessID: 12,
 			}
 		}
-		return decisions, clauses, runtimecov.Collection{
+		return decisions, clauses, runtimecov.RecordedEvidence{
 			Evaluations:           []cover.DecisionEvaluation{evaluation},
 			NotEvaluatedDecisions: []cover.DecisionNotEvaluatedObservation{observation(2), observation(3)},
 		}
 	}
 	for _, test := range []struct {
 		name    string
-		mutate  func([]cover.DecisionMetadata, []cover.ClauseMetadata, *runtimecov.Collection)
+		mutate  func([]cover.DecisionMetadata, []cover.ClauseMetadata, *runtimecov.RecordedEvidence)
 		wantErr string
 	}{
 		{name: "valid complete suffix"},
-		{name: "unknown target", mutate: func(_ []cover.DecisionMetadata, _ []cover.ClauseMetadata, collection *runtimecov.Collection) {
+		{name: "unknown target", mutate: func(_ []cover.DecisionMetadata, _ []cover.ClauseMetadata, collection *runtimecov.RecordedEvidence) {
 			collection.NotEvaluatedDecisions[0].DecisionID = 99
 		}, wantErr: "unknown skipped decision ID"},
-		{name: "unknown cause", mutate: func(_ []cover.DecisionMetadata, _ []cover.ClauseMetadata, collection *runtimecov.Collection) {
+		{name: "unknown cause", mutate: func(_ []cover.DecisionMetadata, _ []cover.ClauseMetadata, collection *runtimecov.RecordedEvidence) {
 			collection.NotEvaluatedDecisions[0].CauseDecisionID = 99
 		}, wantErr: "unknown skip-cause decision ID"},
-		{name: "wrong provenance", mutate: func(_ []cover.DecisionMetadata, _ []cover.ClauseMetadata, collection *runtimecov.Collection) {
+		{name: "wrong provenance", mutate: func(_ []cover.DecisionMetadata, _ []cover.ClauseMetadata, collection *runtimecov.RecordedEvidence) {
 			collection.NotEvaluatedDecisions[0].RunID = "other"
 		}, wantErr: "inconsistent run or package provenance"},
-		{name: "non-switch target", mutate: func(decisions []cover.DecisionMetadata, _ []cover.ClauseMetadata, _ *runtimecov.Collection) {
+		{name: "non-switch target", mutate: func(decisions []cover.DecisionMetadata, _ []cover.ClauseMetadata, _ *runtimecov.RecordedEvidence) {
 			decisions[1].Kind = cover.DecisionIf
 		}, wantErr: "is not a conditionless-switch decision"},
-		{name: "missing cause evaluation", mutate: func(_ []cover.DecisionMetadata, _ []cover.ClauseMetadata, collection *runtimecov.Collection) {
+		{name: "missing cause evaluation", mutate: func(_ []cover.DecisionMetadata, _ []cover.ClauseMetadata, collection *runtimecov.RecordedEvidence) {
 			collection.Evaluations = nil
 		}, wantErr: "no completed true cause evaluation"},
-		{name: "cause is not before target", mutate: func(_ []cover.DecisionMetadata, _ []cover.ClauseMetadata, collection *runtimecov.Collection) {
+		{name: "cause is not before target", mutate: func(_ []cover.DecisionMetadata, _ []cover.ClauseMetadata, collection *runtimecov.RecordedEvidence) {
 			collection.NotEvaluatedDecisions[0].DecisionID = 1
 		}, wantErr: "is not later in the same conditionless switch"},
-		{name: "duplicate skipped decision", mutate: func(_ []cover.DecisionMetadata, _ []cover.ClauseMetadata, collection *runtimecov.Collection) {
+		{name: "duplicate skipped decision", mutate: func(_ []cover.DecisionMetadata, _ []cover.ClauseMetadata, collection *runtimecov.RecordedEvidence) {
 			collection.NotEvaluatedDecisions = append(collection.NotEvaluatedDecisions, collection.NotEvaluatedDecisions[0])
 		}, wantErr: "duplicate skipped-decision evidence"},
-		{name: "incomplete suffix", mutate: func(_ []cover.DecisionMetadata, _ []cover.ClauseMetadata, collection *runtimecov.Collection) {
+		{name: "incomplete suffix", mutate: func(_ []cover.DecisionMetadata, _ []cover.ClauseMetadata, collection *runtimecov.RecordedEvidence) {
 			collection.NotEvaluatedDecisions = collection.NotEvaluatedDecisions[:1]
 		}, wantErr: "want complete suffix"},
 	} {
@@ -623,7 +656,7 @@ func TestValidationRejectsInvalidConditionlessSwitchSkipEvidence(t *testing.T) {
 			if test.mutate != nil {
 				test.mutate(decisions, clauses, &collection)
 			}
-			validated, err := validateObservations(decisions, clauses, collection, "run", nil)
+			validated, err := verifyRuntimeEvidence(decisions, clauses, collection, "run", nil)
 			if test.wantErr == "" {
 				if err != nil || len(validated.NotEvaluatedDecisions) != 2 {
 					t.Fatalf("valid skip suffix rejected: validated=%#v err=%v", validated, err)
@@ -637,14 +670,14 @@ func TestValidationRejectsInvalidConditionlessSwitchSkipEvidence(t *testing.T) {
 	}
 }
 
-func TestValidationRejectsInvalidClauseEvidence(t *testing.T) {
+func TestEvidenceVerificationRejectsInvalidClauseEvidence(t *testing.T) {
 	t.Parallel()
 	clauses := []cover.ClauseMetadata{
-		{ID: 10, SwitchID: 100, Kind: cover.ClauseExpressionSwitch, Role: cover.ClauseCase, Expressions: []string{"1", "2"}},
-		{ID: 11, SwitchID: 100, Kind: cover.ClauseExpressionSwitch, Role: cover.ClauseDefault},
-		{ID: 12, SwitchID: 200, Kind: cover.ClauseSelect, Role: cover.ClauseCase},
+		{ID: 10, Package: "example.test/p", SwitchID: 100, Kind: cover.ClauseExpressionSwitch, Role: cover.ClauseCase, Expressions: []string{"1", "2"}},
+		{ID: 11, Package: "example.test/p", SwitchID: 100, Kind: cover.ClauseExpressionSwitch, Role: cover.ClauseDefault},
+		{ID: 12, Package: "example.test/p", SwitchID: 200, Kind: cover.ClauseSelect, Role: cover.ClauseCase},
 	}
-	noMatches := []cover.NoMatchMetadata{{SwitchID: 300, Kind: cover.ClauseExpressionSwitch}}
+	noMatches := []cover.NoMatchMetadata{{Package: "example.test/p", SwitchID: 300, Kind: cover.ClauseExpressionSwitch}}
 	for _, test := range []struct {
 		name        string
 		observation cover.ClauseObservation
@@ -656,27 +689,99 @@ func TestValidationRejectsInvalidClauseEvidence(t *testing.T) {
 		{name: "no-match alternative", observation: cover.ClauseObservation{SwitchID: 300, Event: cover.ClauseNoMatchSelection, AlternativeKnown: true}, wantErr: "unknown no-match switch ID"},
 		{name: "unknown clause", observation: cover.ClauseObservation{ClauseID: 99, Event: cover.ClauseBodyExecution}, wantErr: "unknown clause ID"},
 		{name: "wrong switch", observation: cover.ClauseObservation{SwitchID: 999, ClauseID: 10, Event: cover.ClauseBodyExecution}, wantErr: "inconsistent switch ID"},
+		{name: "direct selection missing switch", observation: cover.ClauseObservation{ClauseID: 10, Event: cover.ClauseDirectSelection, AlternativeKnown: true}, wantErr: "inconsistent switch ID"},
 		{name: "body event alternative", observation: cover.ClauseObservation{ClauseID: 10, Event: cover.ClauseBodyExecution, AlternativeKnown: true}, wantErr: "body event carries a case alternative"},
 		{name: "selection on select clause", observation: cover.ClauseObservation{ClauseID: 12, Event: cover.ClauseDirectSelection, AlternativeKnown: true}, wantErr: "cannot carry direct-selection evidence"},
-		{name: "default alternative", observation: cover.ClauseObservation{ClauseID: 11, Event: cover.ClauseDirectSelection, AlternativeKnown: true}, wantErr: "default clause"},
-		{name: "case alternative missing", observation: cover.ClauseObservation{ClauseID: 10, Event: cover.ClauseDirectSelection}, wantErr: "invalid case alternative"},
-		{name: "case alternative out of range", observation: cover.ClauseObservation{ClauseID: 10, Event: cover.ClauseDirectSelection, AlternativeKnown: true, AlternativeIndex: 2}, wantErr: "invalid case alternative"},
+		{name: "default alternative", observation: cover.ClauseObservation{SwitchID: 100, ClauseID: 11, Event: cover.ClauseDirectSelection, AlternativeKnown: true}, wantErr: "default clause"},
+		{name: "case alternative missing", observation: cover.ClauseObservation{SwitchID: 100, ClauseID: 10, Event: cover.ClauseDirectSelection}, wantErr: "invalid case alternative"},
+		{name: "case alternative out of range", observation: cover.ClauseObservation{SwitchID: 100, ClauseID: 10, Event: cover.ClauseDirectSelection, AlternativeKnown: true, AlternativeIndex: 2}, wantErr: "invalid case alternative"},
 		{name: "unsupported event", observation: cover.ClauseObservation{ClauseID: 10, Event: cover.ClauseEventKind("invented")}, wantErr: "unsupported event"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			validated, err := validateObservations(
-				nil, clauses, runtimecov.Collection{Clauses: []cover.ClauseObservation{test.observation}}, "run", noMatches,
+			validated, err := verifyRuntimeEvidence(
+				nil, clauses, runtimecov.RecordedEvidence{ClauseEvents: []runtimecov.RecordedClauseEvent{recordedClauseEvent(test.observation)}}, "run", noMatches,
 			)
 			if test.wantErr == "" {
-				if err != nil || len(validated.Clauses) != 1 {
+				if err != nil || len(validated.ClauseObservations) != 1 {
 					t.Fatalf("valid clause evidence rejected: validated=%#v err=%v", validated, err)
 				}
 				return
 			}
-			if err == nil || !strings.Contains(err.Error(), test.wantErr) || len(validated.Clauses) != 0 {
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) || len(validated.ClauseObservations) != 0 {
 				t.Fatalf("validated=%#v err=%v, want rejection containing %q", validated, err, test.wantErr)
 			}
 		})
+	}
+}
+
+func recordedClauseEvent(observation cover.ClauseObservation) runtimecov.RecordedClauseEvent {
+	return runtimecov.RecordedClauseEvent{
+		RunID:            "run",
+		PackagePath:      "example.test/p",
+		ProcessID:        12,
+		SwitchID:         observation.SwitchID,
+		ClauseID:         observation.ClauseID,
+		Event:            observation.Event,
+		AlternativeIndex: observation.AlternativeIndex,
+		AlternativeKnown: observation.AlternativeKnown,
+	}
+}
+
+func TestClauseEvidenceRequiresValidProvenanceBeforeDeduplication(t *testing.T) {
+	t.Parallel()
+	metadata := []cover.ClauseMetadata{{
+		ID: 10, Package: "example.test/p", SwitchID: 100,
+		Kind: cover.ClauseExpressionSwitch, Role: cover.ClauseCase, Expressions: []string{"1"},
+	}}
+	valid := recordedClauseEvent(cover.ClauseObservation{
+		SwitchID: 100, ClauseID: 10, Event: cover.ClauseDirectSelection,
+		AlternativeKnown: true, AlternativeIndex: 0,
+	})
+
+	for _, test := range []struct {
+		name    string
+		mutate  func(*runtimecov.RecordedClauseEvent)
+		wantErr string
+	}{
+		{name: "wrong run", mutate: func(event *runtimecov.RecordedClauseEvent) { event.RunID = "other" }, wantErr: "invalid provenance"},
+		{name: "wrong package", mutate: func(event *runtimecov.RecordedClauseEvent) { event.PackagePath = "example.test/other" }, wantErr: "belongs to package"},
+		{name: "zero process", mutate: func(event *runtimecov.RecordedClauseEvent) { event.ProcessID = 0 }, wantErr: "invalid provenance"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			event := valid
+			test.mutate(&event)
+			verified, err := verifyRuntimeEvidence(nil, metadata, runtimecov.RecordedEvidence{ClauseEvents: []runtimecov.RecordedClauseEvent{event}}, "run", nil)
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) || len(verified.ClauseObservations) != 0 {
+				t.Fatalf("verified=%#v err=%v, want rejection containing %q", verified, err, test.wantErr)
+			}
+		})
+	}
+
+	secondProcess := valid
+	secondProcess.ProcessID++
+	verified, err := verifyRuntimeEvidence(nil, metadata, runtimecov.RecordedEvidence{ClauseEvents: []runtimecov.RecordedClauseEvent{valid, secondProcess}}, "run", nil)
+	if err != nil || len(verified.ClauseObservations) != 1 {
+		t.Fatalf("valid cross-process duplicate was not projected idempotently: verified=%#v err=%v", verified, err)
+	}
+}
+
+func TestProcessFileProvenanceIsVerified(t *testing.T) {
+	t.Parallel()
+	for _, file := range []runtimecov.ProcessFile{
+		{Path: "/tmp/wrong-run", RunID: "other", PackagePath: "example.test/p", ProcessID: 1},
+		{Path: "/tmp/missing-package", RunID: "run", ProcessID: 1},
+		{Path: "/tmp/zero-process", RunID: "run", PackagePath: "example.test/p"},
+		{Path: "/tmp/unknown-package", RunID: "run", PackagePath: "example.test/other", ProcessID: 1},
+	} {
+		verified, err := verifyRuntimeEvidence(nil, nil, runtimecov.RecordedEvidence{Files: []runtimecov.ProcessFile{file}}, "run", nil)
+		if err == nil || !strings.Contains(err.Error(), "invalid provenance") || len(verified.Files) != 1 {
+			t.Fatalf("file=%#v verified=%#v err=%v", file, verified, err)
+		}
+	}
+	metadata := []cover.DecisionMetadata{{ID: 1, Package: "example.test/p"}}
+	valid := runtimecov.ProcessFile{Path: "/tmp/valid", RunID: "run", PackagePath: "example.test/p", ProcessID: 1}
+	if _, err := verifyRuntimeEvidence(metadata, nil, runtimecov.RecordedEvidence{Files: []runtimecov.ProcessFile{valid}}, "run", nil); err != nil {
+		t.Fatalf("valid process file provenance was rejected: %v", err)
 	}
 }
 

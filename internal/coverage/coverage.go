@@ -116,8 +116,10 @@ const (
 	ClauseNoMatchSelection ClauseEventKind = "no-match-selection"
 )
 
-// ClauseObservation is one runtime clause event. AlternativeKnown distinguishes
-// case alternative zero from default/no-match events, which have no alternative.
+// ClauseObservation is a verified, provenance-free coverage observation used
+// for aggregation. AlternativeKnown distinguishes case alternative zero from
+// default/no-match events, which have no alternative. Runtime transport data
+// must retain provenance until it is verified and projected into this type.
 type ClauseObservation struct {
 	SwitchID         SwitchID        `json:"switchId,omitempty"`
 	ClauseID         ClauseID        `json:"clauseId,omitempty"`
@@ -346,7 +348,7 @@ const (
 	CoverageCovered            CoverageStatus = "covered"
 	CoverageNotCovered         CoverageStatus = "not-covered"
 	CoverageAnalysisIncomplete CoverageStatus = "analysis-incomplete"
-	CoveragePossiblyInfeasible CoverageStatus = "infeasible"
+	CoverageInfeasible         CoverageStatus = "infeasible"
 )
 
 // CoverageOutcome describes only whether an applicable obligation was
@@ -378,12 +380,12 @@ const (
 // CoverageCount carries the numerator and denominator plus categories that are
 // excluded from the denominator by the default reporting policy.
 type CoverageCount struct {
-	Covered            int `json:"covered"`
-	Total              int `json:"total"`
-	Unsupported        int `json:"unsupported,omitempty"`
-	Unknown            int `json:"unknown,omitempty"`
-	Aborted            int `json:"aborted,omitempty"`
-	PossiblyInfeasible int `json:"possiblyInfeasible,omitempty"`
+	Covered     int `json:"covered"`
+	Total       int `json:"total"`
+	Unsupported int `json:"unsupported,omitempty"`
+	Unknown     int `json:"unknown,omitempty"`
+	Aborted     int `json:"aborted,omitempty"`
+	Infeasible  int `json:"infeasible,omitempty"`
 }
 
 // Percentage returns a stable zero value for an empty denominator.

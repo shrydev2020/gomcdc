@@ -41,7 +41,8 @@ func newBuildContext(input Input) *buildContext {
 		}
 	}
 	report := Report{
-		Version:         SchemaVersion,
+		SchemaVersion:   SchemaVersion,
+		ToolVersion:     normalizedToolVersion(input.ToolVersion),
 		Module:          input.ModulePath,
 		Run:             Run{Status: input.RunStatus, FailureKind: input.FailureKind, Complete: input.Complete, Results: normalizeRunResults(input.Results)},
 		MeasurementMode: input.MeasurementMode,
@@ -161,6 +162,13 @@ func newBuildContext(input Input) *buildContext {
 		observationCounts: observationCounts, selectedAlternatives: selectedAlternatives, noMatchObservations: noMatchObservations,
 		packageEvidence: packageEvidence, astPackageEvidence: astPackageEvidence, builders: builders,
 	}
+}
+
+func normalizedToolVersion(version string) string {
+	if version == "" {
+		return "unknown"
+	}
+	return version
 }
 
 func normalizeRunResults(results RunResults) RunResults {

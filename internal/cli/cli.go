@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/shrydev2020/gomcdc/internal/analyzer"
+	"github.com/shrydev2020/gomcdc/internal/buildinfo"
 	"github.com/shrydev2020/gomcdc/internal/c0"
 	"github.com/shrydev2020/gomcdc/internal/c0map"
 	"github.com/shrydev2020/gomcdc/internal/config"
@@ -87,7 +88,7 @@ func runAt(ctx context.Context, workingDir string, args []string, stdout, stderr
 			fmt.Fprintln(stderr, "gomcdc: version does not accept arguments")
 			return ExitInvalidUsage
 		}
-		fmt.Fprintf(stdout, "gomcdc %s\n", toolVersion)
+		fmt.Fprintf(stdout, "gomcdc %s\n", buildinfo.Version())
 		return ExitSuccess
 	}
 	if args[0] != "test" {
@@ -238,9 +239,10 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	}
 
 	input := assembleReportInput(reportAssembly{
-		loaded: loaded, sources: sources, coverage: opts.metrics, decisions: decisions,
+		toolVersion: buildinfo.Version(),
+		loaded:      loaded, sources: sources, coverage: opts.metrics, decisions: decisions,
 		clauses: clauses, noMatches: noMatches,
-		collection: measurement.collection, c0: measurement.c0, standardResult: measurement.standardResult, astResult: measurement.astResult,
+		evidence: measurement.evidence, c0: measurement.c0, standardResult: measurement.standardResult, astResult: measurement.astResult,
 		standardCoverRequested: needsC0, astRequested: needsASTRun,
 		astEvidenceUnknown: measurement.astEvidenceIntegrityUnknown, c0EvidenceUnknown: measurement.c0EvidenceIntegrityUnknown,
 		instrumentationUnknown: analysisUnknown, integrityFailure: measurement.integrityFailure, analysisIncomplete: analysisIncomplete,
@@ -631,39 +633,68 @@ func buildC0Report(
 	return &analyzed, nil
 }
 
-func validateObservations(
+// verifiedRuntimeEvidence is the only runtime evidence allowed to reach report
+// construction. Transport provenance has been checked against the requested
+// run and source inventory, while ClauseObservations are the provenance-free,
+// idempotent domain projection used for coverage aggregation.
+type verifiedRuntimeEvidence struct {
+	Evaluations           []cover.DecisionEvaluation
+	NotEvaluatedDecisions []cover.DecisionNotEvaluatedObservation
+	ClauseObservations    []cover.ClauseObservation
+	Diagnostics           []runtimecov.Diagnostic
+	Files                 []runtimecov.ProcessFile
+}
+
+func verifyRuntimeEvidence(
 	decisions []cover.DecisionMetadata,
 	clauses []cover.ClauseMetadata,
-	collection runtimecov.Collection,
+	recorded runtimecov.RecordedEvidence,
 	runID string,
 	noMatches []cover.NoMatchMetadata,
-) (runtimecov.Collection, error) {
+) (verifiedRuntimeEvidence, error) {
 	knownDecisions := make(map[cover.DecisionID]cover.DecisionMetadata, len(decisions))
+	knownPackages := make(map[string]struct{})
 	for _, decision := range decisions {
 		knownDecisions[decision.ID] = decision
+		knownPackages[decision.Package] = struct{}{}
 	}
 	knownClauses := make(map[cover.ClauseID]cover.ClauseMetadata, len(clauses))
 	for _, clause := range clauses {
 		knownClauses[clause.ID] = clause
+		knownPackages[clause.Package] = struct{}{}
 	}
-	knownNoMatches := make(map[cover.SwitchID]struct{})
+	knownNoMatches := make(map[cover.SwitchID]cover.NoMatchMetadata)
 	for _, noMatch := range noMatches {
-		knownNoMatches[noMatch.SwitchID] = struct{}{}
+		knownNoMatches[noMatch.SwitchID] = noMatch
+		knownPackages[noMatch.Package] = struct{}{}
 	}
 	switchDecisions := conditionlessSwitchDecisionOrder(clauses)
-	validated := runtimecov.Collection{
-		Diagnostics: append([]runtimecov.Diagnostic(nil), collection.Diagnostics...),
-		Files:       append([]runtimecov.ProcessFile(nil), collection.Files...),
+	verified := verifiedRuntimeEvidence{
+		Diagnostics: append([]runtimecov.Diagnostic(nil), recorded.Diagnostics...),
+		Files:       append([]runtimecov.ProcessFile(nil), recorded.Files...),
 	}
 	var validationErrors []error
+	for _, file := range recorded.Files {
+		if file.RunID == "" && file.PackagePath == "" && file.ProcessID == 0 {
+			continue
+		}
+		_, knownPackage := knownPackages[file.PackagePath]
+		if file.RunID != runID || !knownPackage || file.ProcessID <= 0 {
+			validationErrors = append(validationErrors, fmt.Errorf(
+				"process event file %q has invalid provenance run=%q package=%q process=%d",
+				filepath.Base(file.Path), file.RunID, file.PackagePath, file.ProcessID,
+			))
+		}
+	}
 	validEvaluations := make(map[cover.EvaluationIdentity]cover.DecisionEvaluation)
+	validEvaluationCandidates := make([]cover.DecisionEvaluation, 0, len(recorded.Evaluations))
 	type skipCauseKey struct {
 		Identity   cover.EvaluationIdentity
 		DecisionID cover.DecisionID
 	}
 	observedSkips := make(map[skipCauseKey]map[cover.DecisionID]struct{})
 	candidateSkips := make(map[skipCauseKey][]cover.DecisionNotEvaluatedObservation)
-	for _, evaluation := range collection.Evaluations {
+	for _, evaluation := range recorded.Evaluations {
 		metadata, exists := knownDecisions[evaluation.DecisionID]
 		if !exists {
 			validationErrors = append(validationErrors, fmt.Errorf("event contains unknown decision ID 0x%016x", uint64(evaluation.DecisionID)))
@@ -671,6 +702,10 @@ func validateObservations(
 		}
 		if evaluation.EvaluationID == 0 {
 			validationErrors = append(validationErrors, fmt.Errorf("decision 0x%016x has reserved evaluation ID zero", uint64(evaluation.DecisionID)))
+			continue
+		}
+		if evaluation.ProcessID <= 0 {
+			validationErrors = append(validationErrors, fmt.Errorf("decision 0x%016x has invalid process provenance %d", uint64(evaluation.DecisionID), evaluation.ProcessID))
 			continue
 		}
 		if evaluation.RunID != runID {
@@ -698,10 +733,10 @@ func validateObservations(
 			))
 			continue
 		}
-		validated.Evaluations = append(validated.Evaluations, evaluation)
+		validEvaluationCandidates = append(validEvaluationCandidates, evaluation)
 		validEvaluations[evaluation.Identity()] = evaluation
 	}
-	for _, observation := range collection.NotEvaluatedDecisions {
+	for _, observation := range recorded.NotEvaluatedDecisions {
 		target, targetExists := knownDecisions[observation.DecisionID]
 		cause, causeExists := knownDecisions[observation.CauseDecisionID]
 		identity := cover.EvaluationIdentity{
@@ -718,7 +753,7 @@ func validateObservations(
 		case !causeExists:
 			validationErrors = append(validationErrors, fmt.Errorf("event contains unknown skip-cause decision ID 0x%016x", uint64(observation.CauseDecisionID)))
 			continue
-		case observation.RunID != runID || observation.PackagePath != target.Package || cause.Package != target.Package:
+		case observation.RunID != runID || observation.PackagePath != target.Package || cause.Package != target.Package || observation.ProcessID <= 0:
 			validationErrors = append(validationErrors, fmt.Errorf("skipped decision 0x%016x has inconsistent run or package provenance", uint64(observation.DecisionID)))
 			continue
 		case target.Kind != cover.DecisionSwitchCase || cause.Kind != cover.DecisionSwitchCase:
@@ -741,7 +776,7 @@ func validateObservations(
 		observedSkips[key][observation.DecisionID] = struct{}{}
 		candidateSkips[key] = append(candidateSkips[key], observation)
 	}
-	for _, evaluation := range validated.Evaluations {
+	for _, evaluation := range validEvaluationCandidates {
 		identity := evaluation.Identity()
 		order, exists := switchDecisions[evaluation.DecisionID]
 		if !exists || evaluation.Status != cover.EvaluationCompleted || !evaluation.Result || len(order.suffix) == 0 {
@@ -771,21 +806,55 @@ func validateObservations(
 			}
 		}
 		if complete {
-			validated.NotEvaluatedDecisions = append(validated.NotEvaluatedDecisions, candidateSkips[key]...)
+			verified.NotEvaluatedDecisions = append(verified.NotEvaluatedDecisions, candidateSkips[key]...)
 		}
 	}
-	for _, observation := range collection.Clauses {
+	verified.Evaluations = deduplicateVerifiedEvaluations(validEvaluationCandidates)
+	verifiedClauses := make(map[cover.ClauseObservation]struct{})
+	for _, event := range recorded.ClauseEvents {
+		observation := cover.ClauseObservation{
+			SwitchID:         event.SwitchID,
+			ClauseID:         event.ClauseID,
+			Event:            event.Event,
+			AlternativeIndex: event.AlternativeIndex,
+			AlternativeKnown: event.AlternativeKnown,
+		}
+		if event.RunID != runID || event.PackagePath == "" || event.ProcessID <= 0 {
+			validationErrors = append(validationErrors, fmt.Errorf(
+				"clause event 0x%016x has invalid provenance run=%q package=%q process=%d",
+				uint64(observation.ClauseID), event.RunID, event.PackagePath, event.ProcessID,
+			))
+			continue
+		}
 		if observation.Event == cover.ClauseNoMatchSelection {
-			if _, exists := knownNoMatches[observation.SwitchID]; !exists || observation.AlternativeKnown {
+			metadata, exists := knownNoMatches[observation.SwitchID]
+			if !exists || observation.AlternativeKnown {
 				validationErrors = append(validationErrors, fmt.Errorf("event contains unknown no-match switch ID 0x%016x", uint64(observation.SwitchID)))
 				continue
 			}
-			validated.Clauses = append(validated.Clauses, observation)
+			if event.PackagePath != metadata.Package {
+				validationErrors = append(validationErrors, fmt.Errorf(
+					"no-match switch 0x%016x belongs to package %q, want %q",
+					uint64(observation.SwitchID), event.PackagePath, metadata.Package,
+				))
+				continue
+			}
+			if _, duplicate := verifiedClauses[observation]; !duplicate {
+				verifiedClauses[observation] = struct{}{}
+				verified.ClauseObservations = append(verified.ClauseObservations, observation)
+			}
 			continue
 		}
 		metadata, exists := knownClauses[observation.ClauseID]
 		if !exists {
 			validationErrors = append(validationErrors, fmt.Errorf("event contains unknown clause ID 0x%016x", uint64(observation.ClauseID)))
+			continue
+		}
+		if event.PackagePath != metadata.Package {
+			validationErrors = append(validationErrors, fmt.Errorf(
+				"clause 0x%016x belongs to package %q, want %q",
+				uint64(observation.ClauseID), event.PackagePath, metadata.Package,
+			))
 			continue
 		}
 		if observation.SwitchID != 0 && observation.SwitchID != metadata.SwitchID {
@@ -801,6 +870,10 @@ func validateObservations(
 		case cover.ClauseDirectSelection:
 			if metadata.Kind != cover.ClauseExpressionSwitch && metadata.Kind != cover.ClauseTypeSwitch {
 				validationErrors = append(validationErrors, fmt.Errorf("clause 0x%016x kind %q cannot carry direct-selection evidence", uint64(observation.ClauseID), metadata.Kind))
+				continue
+			}
+			if observation.SwitchID == 0 || observation.SwitchID != metadata.SwitchID {
+				validationErrors = append(validationErrors, fmt.Errorf("clause 0x%016x direct selection has inconsistent switch ID", uint64(observation.ClauseID)))
 				continue
 			}
 			alternatives := len(metadata.Expressions)
@@ -820,9 +893,46 @@ func validateObservations(
 			validationErrors = append(validationErrors, fmt.Errorf("clause 0x%016x has unsupported event %q", uint64(observation.ClauseID), observation.Event))
 			continue
 		}
-		validated.Clauses = append(validated.Clauses, observation)
+		if _, duplicate := verifiedClauses[observation]; !duplicate {
+			verifiedClauses[observation] = struct{}{}
+			verified.ClauseObservations = append(verified.ClauseObservations, observation)
+		}
 	}
-	return validated, errors.Join(validationErrors...)
+	return verified, errors.Join(validationErrors...)
+}
+
+type verifiedEvaluationKey struct {
+	RunID       string
+	PackagePath string
+	DecisionID  cover.DecisionID
+	Conditions  string
+	Result      bool
+	Status      cover.EvaluationStatus
+}
+
+func deduplicateVerifiedEvaluations(evaluations []cover.DecisionEvaluation) []cover.DecisionEvaluation {
+	result := make([]cover.DecisionEvaluation, 0, len(evaluations))
+	seen := make(map[verifiedEvaluationKey]int, len(evaluations))
+	for _, evaluation := range evaluations {
+		encodedConditions := make([]byte, len(evaluation.Conditions))
+		for index, condition := range evaluation.Conditions {
+			encodedConditions[index] = byte(condition)
+		}
+		key := verifiedEvaluationKey{
+			RunID: evaluation.RunID, PackagePath: evaluation.PackagePath,
+			DecisionID: evaluation.DecisionID, Conditions: string(encodedConditions),
+			Result: evaluation.Result, Status: evaluation.Status,
+		}
+		if index, duplicate := seen[key]; duplicate {
+			if result[index].TestID == cover.UnknownTestID && evaluation.TestID != cover.UnknownTestID {
+				result[index].TestID = evaluation.TestID
+			}
+			continue
+		}
+		seen[key] = len(result)
+		result = append(result, evaluation)
+	}
+	return result
 }
 
 type switchDecisionOrder struct {

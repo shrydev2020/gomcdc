@@ -66,15 +66,30 @@ type ProcessFile struct {
 	ProcessID   int    `json:"processId,omitempty"`
 }
 
-// Collection is the loss-preserving runtime projection. Exact duplicate
-// evaluation vectors are aggregated across process streams; one representative
-// EvaluationID is retained for each distinct piece of coverage evidence. Only
+// RecordedClauseEvent is transport evidence read from one runtime journal.
+// Provenance remains attached until the CLI verifies the event against the
+// requested run and the source inventory. Only then may it be projected to a
+// coverage.ClauseObservation.
+type RecordedClauseEvent struct {
+	RunID            string
+	PackagePath      string
+	ProcessID        int
+	SwitchID         cover.SwitchID
+	ClauseID         cover.ClauseID
+	Event            cover.ClauseEventKind
+	AlternativeIndex uint16
+	AlternativeKnown bool
+}
+
+// RecordedEvidence is the provenance-preserving runtime projection. Transport
+// provenance remains attached to every evaluation and clause event until the
+// CLI verifies it against the requested run and static inventory. Only verified
 // completed evaluations may subsequently establish decision, condition, or
 // MC/DC coverage; aborted records remain diagnostics/evidence of interruption.
-type Collection struct {
+type RecordedEvidence struct {
 	Evaluations           []cover.DecisionEvaluation              `json:"evaluations"`
 	NotEvaluatedDecisions []cover.DecisionNotEvaluatedObservation `json:"notEvaluatedDecisions,omitempty"`
-	Clauses               []cover.ClauseObservation               `json:"clauses"`
+	ClauseEvents          []RecordedClauseEvent                   `json:"clauseEvents"`
 	Diagnostics           []Diagnostic                            `json:"diagnostics,omitempty"`
 	Files                 []ProcessFile                           `json:"files,omitempty"`
 }
@@ -130,23 +145,22 @@ func Inject(moduleDir, modulePath string) (_ Package, err error) {
 // malformed line is diagnosed while earlier and later complete records remain
 // available. Begin records without a terminal record become aborted
 // evaluations and can never be used as coverage evidence.
-func CollectDetailed(dataDir string) (Collection, error) {
+func CollectDetailed(dataDir string) (RecordedEvidence, error) {
 	entries, err := os.ReadDir(dataDir)
 	if err != nil {
-		return Collection{}, fmt.Errorf("read runtime event directory %q: %w", dataDir, err)
+		return RecordedEvidence{}, fmt.Errorf("read runtime event directory %q: %w", dataDir, err)
 	}
 	collector := eventCollector{
 		begun:                make(map[cover.EvaluationIdentity]wireRecord),
 		finished:             make(map[cover.EvaluationIdentity]struct{}),
-		evaluationEvidence:   make(map[evaluationEvidenceKey]int),
 		notEvaluatedEvidence: make(map[cover.DecisionNotEvaluatedObservation]struct{}),
-		clauseEvidence:       make(map[cover.ClauseObservation]struct{}),
+		clauseEvidence:       make(map[RecordedClauseEvent]struct{}),
 	}
 	for _, entry := range entries {
 		path := filepath.Join(dataDir, entry.Name())
 		info, infoErr := entry.Info()
 		if infoErr != nil {
-			return Collection{}, fmt.Errorf("inspect runtime event file %q: %w", path, infoErr)
+			return RecordedEvidence{}, fmt.Errorf("inspect runtime event file %q: %w", path, infoErr)
 		}
 		if !info.Mode().IsRegular() || entry.Type()&os.ModeSymlink != 0 {
 			collector.diagnostic(path, 0, false, "event entry is not a regular file")
@@ -157,7 +171,7 @@ func CollectDetailed(dataDir string) (Collection, error) {
 			continue
 		}
 		if err := collector.collectFile(path); err != nil {
-			return Collection{}, err
+			return RecordedEvidence{}, err
 		}
 	}
 	collector.finishAborted()
@@ -186,21 +200,11 @@ type wireRecord struct {
 }
 
 type eventCollector struct {
-	result               Collection
+	result               RecordedEvidence
 	begun                map[cover.EvaluationIdentity]wireRecord
 	finished             map[cover.EvaluationIdentity]struct{}
-	evaluationEvidence   map[evaluationEvidenceKey]int
 	notEvaluatedEvidence map[cover.DecisionNotEvaluatedObservation]struct{}
-	clauseEvidence       map[cover.ClauseObservation]struct{}
-}
-
-type evaluationEvidenceKey struct {
-	RunID       string
-	PackagePath string
-	DecisionID  cover.DecisionID
-	Conditions  string
-	Result      bool
-	Status      cover.EvaluationStatus
+	clauseEvidence       map[RecordedClauseEvent]struct{}
 }
 
 func (collector *eventCollector) collectFile(path string) (err error) {
@@ -211,6 +215,7 @@ func (collector *eventCollector) collectFile(path string) (err error) {
 	defer func() { err = errors.Join(err, file.Close()) }()
 	collector.result.Files = append(collector.result.Files, ProcessFile{Path: path})
 	fileIndex := len(collector.result.Files) - 1
+	provenanceEstablished := false
 	reader := bufio.NewReaderSize(file, maxEventLine)
 	lineNumber := 0
 	for {
@@ -229,10 +234,16 @@ func (collector *eventCollector) collectFile(path string) (err error) {
 				continue
 			}
 			processFile := &collector.result.Files[fileIndex]
-			if processFile.RunID == "" {
+			if !provenanceEstablished {
 				processFile.RunID = record.RunID
 				processFile.PackagePath = record.PackagePath
 				processFile.ProcessID = record.ProcessID
+				provenanceEstablished = true
+			} else if processFile.RunID != record.RunID ||
+				processFile.PackagePath != record.PackagePath ||
+				processFile.ProcessID != record.ProcessID {
+				collector.diagnostic(path, lineNumber, false, "event record provenance differs within one process file")
+				continue
 			}
 			collector.consume(path, lineNumber, record)
 		case errors.Is(readErr, bufio.ErrBufferFull):
@@ -357,7 +368,10 @@ func (collector *eventCollector) consume(path string, line int, record wireRecor
 			collector.diagnostic(path, line, false, "invalid clause record")
 			return
 		}
-		collector.addClause(cover.ClauseObservation{
+		collector.addClause(RecordedClauseEvent{
+			RunID:            record.RunID,
+			PackagePath:      record.PackagePath,
+			ProcessID:        record.ProcessID,
 			SwitchID:         cover.SwitchID(record.SwitchID),
 			ClauseID:         cover.ClauseID(record.ClauseID),
 			Event:            event,
@@ -428,25 +442,6 @@ func evaluationFromRecord(record wireRecord, states []cover.ConditionState) cove
 }
 
 func (collector *eventCollector) addEvaluation(evaluation cover.DecisionEvaluation) cover.DecisionEvaluation {
-	encodedConditions := make([]byte, len(evaluation.Conditions))
-	for index, condition := range evaluation.Conditions {
-		encodedConditions[index] = byte(condition)
-	}
-	key := evaluationEvidenceKey{
-		RunID:       evaluation.RunID,
-		PackagePath: evaluation.PackagePath,
-		DecisionID:  evaluation.DecisionID,
-		Conditions:  string(encodedConditions),
-		Result:      evaluation.Result,
-		Status:      evaluation.Status,
-	}
-	if index, exists := collector.evaluationEvidence[key]; exists {
-		if collector.result.Evaluations[index].TestID == cover.UnknownTestID && evaluation.TestID != cover.UnknownTestID {
-			collector.result.Evaluations[index].TestID = evaluation.TestID
-		}
-		return collector.result.Evaluations[index]
-	}
-	collector.evaluationEvidence[key] = len(collector.result.Evaluations)
 	collector.result.Evaluations = append(collector.result.Evaluations, evaluation)
 	return evaluation
 }
@@ -485,12 +480,12 @@ func (collector *eventCollector) addNotEvaluatedDecisions(
 	}
 }
 
-func (collector *eventCollector) addClause(observation cover.ClauseObservation) {
-	if _, exists := collector.clauseEvidence[observation]; exists {
+func (collector *eventCollector) addClause(event RecordedClauseEvent) {
+	if _, exists := collector.clauseEvidence[event]; exists {
 		return
 	}
-	collector.clauseEvidence[observation] = struct{}{}
-	collector.result.Clauses = append(collector.result.Clauses, observation)
+	collector.clauseEvidence[event] = struct{}{}
+	collector.result.ClauseEvents = append(collector.result.ClauseEvents, event)
 }
 
 func (collector *eventCollector) diagnostic(path string, line int, truncated bool, message string) {
@@ -520,9 +515,9 @@ func (collector *eventCollector) sort() {
 		}
 		return left.EvaluationID < right.EvaluationID
 	})
-	sort.Slice(collector.result.Clauses, func(i, j int) bool {
-		left := collector.result.Clauses[i]
-		right := collector.result.Clauses[j]
+	sort.Slice(collector.result.ClauseEvents, func(i, j int) bool {
+		left := collector.result.ClauseEvents[i]
+		right := collector.result.ClauseEvents[j]
 		if left.ClauseID != right.ClauseID {
 			return left.ClauseID < right.ClauseID
 		}
@@ -535,7 +530,16 @@ func (collector *eventCollector) sort() {
 		if left.AlternativeIndex != right.AlternativeIndex {
 			return left.AlternativeIndex < right.AlternativeIndex
 		}
-		return false
+		if left.SwitchID != right.SwitchID {
+			return left.SwitchID < right.SwitchID
+		}
+		if left.RunID != right.RunID {
+			return left.RunID < right.RunID
+		}
+		if left.PackagePath != right.PackagePath {
+			return left.PackagePath < right.PackagePath
+		}
+		return left.ProcessID < right.ProcessID
 	})
 	sort.Slice(collector.result.NotEvaluatedDecisions, func(i, j int) bool {
 		left := collector.result.NotEvaluatedDecisions[i]

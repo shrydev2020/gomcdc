@@ -134,7 +134,7 @@ func TestJSONSchemaUsesExactSpecificationKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertJSONKeys(t, "root", root, []string{
-		"version", "module", "run", "measurementMode", "measurements",
+		"schemaVersion", "toolVersion", "module", "run", "measurementMode", "measurements",
 		"capabilities", "backendCapabilities", "instrumentationCoverage",
 		"summary", "packages", "errors",
 	})
@@ -267,7 +267,7 @@ func TestANDShortCircuitDistinguishesUniqueAndMasking(t *testing.T) {
 	got := built.Packages[0].Files[0].Functions[0].Decisions[0]
 	assertMetric(t, "unique", got.MCDCUnique.Metric, true, 1, 1, 100, 0, 0, 0, 1)
 	assertMetric(t, "masking", got.MCDCMasking.Metric, true, 2, 2, 100, 0, 0, 0, 0)
-	if got.MCDCUnique.Conditions[0].Status != string(cover.CoveragePossiblyInfeasible) ||
+	if got.MCDCUnique.Conditions[0].Status != string(cover.CoverageInfeasible) ||
 		got.MCDCMasking.Conditions[0].Status != string(cover.CoverageCovered) {
 		t.Fatalf("condition 0 statuses unique=%q masking=%q", got.MCDCUnique.Conditions[0].Status, got.MCDCMasking.Conditions[0].Status)
 	}
@@ -289,6 +289,9 @@ func TestANDShortCircuitDistinguishesUniqueAndMasking(t *testing.T) {
 	}
 
 	text := report.RenderText(input)
+	if !strings.HasPrefix(text, "gomcdc unknown report schema 1.0\n") {
+		t.Fatalf("text report does not distinguish tool and schema identities:\n%s", text)
+	}
 	for _, required := range []string{"Unique-Cause MC/DC", "Masking MC/DC", "witness=", "[false,not-evaluated] -> false", "[true,true] -> true", "completions=([false,true] [true,true])"} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("text report missing %q:\n%s", required, text)
@@ -890,7 +893,7 @@ func assertMetric(
 	t.Helper()
 	want := report.MetricSummary{
 		Enabled: enabled, Covered: covered, Total: total,
-		Unsupported: unsupported, Unknown: unknown, PossiblyInfeasible: infeasible,
+		Unsupported: unsupported, Unknown: unknown, Infeasible: infeasible,
 		AnalysisIncomplete: analysisIncomplete,
 	}
 	if total > 0 {

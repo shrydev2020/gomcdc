@@ -14,21 +14,25 @@ selection, Unique-Cause MC/DC, and Masking MC/DC coverage in one report.
 ## Install
 
 ```sh
-go install github.com/shrydev2020/gomcdc@v1.0.0
+go install github.com/shrydev2020/gomcdc@latest
 ```
 
 ## Run
 
 ```sh
+cd /path/to/your/module
 gomcdc test ./...
 gomcdc test --format html --output coverage-html ./...
 gomcdc version
 ```
 
-The HTML report is written to coverage-html/index.html.
+Run `gomcdc test` from the target module. The HTML report is written to
+`coverage-html/index.html`.
 
-Each file section shows the original source bytes with byte-range annotations for
-statement, decision, condition, clause, and both MC/DC strategies.
+See the [normative specification](docs/specification.ja.md),
+[English reference](docs/specification.md), and
+[JSON report schema](schema/report-v1.0.schema.json) for report semantics and
+the machine-readable output contract.
 
 ## Development
 

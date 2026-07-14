@@ -136,7 +136,7 @@ func TestCollectDetailedRetainsValidEvidenceAndSynthesizesAbort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := len(collected.Evaluations), 2; got != want {
+	if got, want := len(collected.Evaluations), 3; got != want {
 		t.Fatalf("evaluations = %d, want %d: %#v", got, want, collected.Evaluations)
 	}
 	completed := collected.Evaluations[0]
@@ -147,10 +147,15 @@ func TestCollectDetailedRetainsValidEvidenceAndSynthesizesAbort(t *testing.T) {
 	if aborted.Status != cover.EvaluationAborted || aborted.Result {
 		t.Errorf("aborted = %#v", aborted)
 	}
-	if got := len(collected.Clauses); got != 3 || collected.Clauses[0].SwitchID != 77 || collected.Clauses[0].ClauseID != 0 || collected.Clauses[0].Event != cover.ClauseNoMatchSelection || collected.Clauses[1].ClauseID != 55 || collected.Clauses[1].Event != cover.ClauseBodyExecution || collected.Clauses[2].Event != cover.ClauseDirectSelection || !collected.Clauses[2].AlternativeKnown || collected.Clauses[2].AlternativeIndex != 1 {
-		t.Errorf("clauses = %#v", collected.Clauses)
+	if repeated := collected.Evaluations[2]; repeated.EvaluationID == completed.EvaluationID || repeated.TestID != "TestRepeat" || fmt.Sprint(repeated.Conditions) != fmt.Sprint(completed.Conditions) {
+		t.Errorf("raw duplicate vector provenance was lost: completed=%#v repeated=%#v", completed, repeated)
 	}
-	if got := collected.NotEvaluatedDecisions; len(got) != 1 || got[0].DecisionID != 8 || got[0].CauseDecisionID != 7 || got[0].CauseEvaluationID != 1 {
+	if got := len(collected.ClauseEvents); got != 3 || collected.ClauseEvents[0].SwitchID != 77 || collected.ClauseEvents[0].ClauseID != 0 || collected.ClauseEvents[0].Event != cover.ClauseNoMatchSelection || collected.ClauseEvents[1].ClauseID != 55 || collected.ClauseEvents[1].Event != cover.ClauseBodyExecution || collected.ClauseEvents[2].Event != cover.ClauseDirectSelection || !collected.ClauseEvents[2].AlternativeKnown || collected.ClauseEvents[2].AlternativeIndex != 1 {
+		t.Errorf("clauses = %#v", collected.ClauseEvents)
+	}
+	if got := collected.NotEvaluatedDecisions; len(got) != 2 ||
+		got[0].DecisionID != 8 || got[0].CauseDecisionID != 7 || got[0].CauseEvaluationID != 1 ||
+		got[1].DecisionID != 8 || got[1].CauseDecisionID != 7 || got[1].CauseEvaluationID != 3 {
 		t.Errorf("not-evaluated decisions = %#v", got)
 	}
 	if got := len(collected.Diagnostics); got != 2 {
@@ -199,9 +204,9 @@ func TestCollectDetailedRejectsMalformedJournalRecords(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(collected.Evaluations) != test.wantEvaluations || len(collected.Clauses) != test.wantClauses {
+			if len(collected.Evaluations) != test.wantEvaluations || len(collected.ClauseEvents) != test.wantClauses {
 				t.Fatalf("evaluations=%d clauses=%d, want %d/%d; diagnostics=%#v",
-					len(collected.Evaluations), len(collected.Clauses), test.wantEvaluations, test.wantClauses, collected.Diagnostics)
+					len(collected.Evaluations), len(collected.ClauseEvents), test.wantEvaluations, test.wantClauses, collected.Diagnostics)
 			}
 			if test.wantDiagnostic == "" {
 				if len(collected.Diagnostics) != 0 {
@@ -217,6 +222,36 @@ func TestCollectDetailedRejectsMalformedJournalRecords(t *testing.T) {
 				t.Fatalf("diagnostics=%#v, want message containing %q", collected.Diagnostics, test.wantDiagnostic)
 			}
 		})
+	}
+}
+
+func TestCollectDetailedRejectsMixedProvenanceWithinProcessFile(t *testing.T) {
+	t.Parallel()
+	dataDir := t.TempDir()
+	writeEventFile(t, dataDir, "mixed-provenance.jsonl", strings.Join([]string{
+		`{"type":"clause","runId":"run","packagePath":"example.test/p","processId":7,"clauseId":10,"event":"body-execution"}`,
+		`{"type":"clause","runId":"other","packagePath":"example.test/p","processId":7,"clauseId":11,"event":"body-execution"}`,
+		`{"type":"clause","runId":"run","packagePath":"example.test/other","processId":7,"clauseId":12,"event":"body-execution"}`,
+		`{"type":"clause","runId":"run","packagePath":"example.test/p","processId":8,"clauseId":13,"event":"body-execution"}`,
+	}, "\n")+"\n")
+
+	collected, err := CollectDetailed(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := collected.ClauseEvents; len(got) != 1 || got[0].ClauseID != 10 {
+		t.Fatalf("mixed-provenance events became evidence: %#v", got)
+	}
+	if got := collected.Files; len(got) != 1 || got[0].RunID != "run" || got[0].PackagePath != "example.test/p" || got[0].ProcessID != 7 {
+		t.Fatalf("process file provenance = %#v", got)
+	}
+	if len(collected.Diagnostics) != 3 {
+		t.Fatalf("diagnostics = %#v, want one per mixed-provenance record", collected.Diagnostics)
+	}
+	for _, diagnostic := range collected.Diagnostics {
+		if diagnostic.Severity != DiagnosticIntegrity || !strings.Contains(diagnostic.Message, "provenance differs") {
+			t.Fatalf("diagnostic = %#v", diagnostic)
+		}
 	}
 }
 
@@ -269,13 +304,13 @@ func TestCollectDetailedRejectsTerminalWithoutBeginAsCoverageEvidence(t *testing
 	}
 }
 
-func TestCollectDetailedAggregatesJournalAndCompactedEvaluationRecords(t *testing.T) {
+func TestCollectDetailedRetainsJournalAndCompactedEvaluationProvenance(t *testing.T) {
 	dataDir := t.TempDir()
 	content := strings.Join([]string{
 		`{"type":"begin","runId":"run","packagePath":"example.test/p","processId":1,"evaluationId":1,"decisionId":7,"conditionCount":2,"testId":"unknown"}`,
 		`{"type":"terminal","runId":"run","packagePath":"example.test/p","processId":1,"evaluationId":1,"decisionId":7,"testId":"unknown","conditions":[2,1],"result":false,"status":0}`,
-		`{"type":"evaluation","runId":"run","packagePath":"example.test/p","processId":2,"evaluationId":9,"decisionId":7,"testId":"unknown","conditions":[2,1],"result":false,"status":0}`,
-		`{"type":"evaluation","runId":"run","packagePath":"example.test/p","processId":2,"evaluationId":10,"decisionId":7,"testId":"named-test","conditions":[2,2],"result":true,"status":0}`,
+		`{"type":"evaluation","runId":"run","packagePath":"example.test/p","processId":1,"evaluationId":9,"decisionId":7,"testId":"unknown","conditions":[2,1],"result":false,"status":0}`,
+		`{"type":"evaluation","runId":"run","packagePath":"example.test/p","processId":1,"evaluationId":10,"decisionId":7,"testId":"named-test","conditions":[2,2],"result":true,"status":0}`,
 	}, "\n") + "\n"
 	writeEventFile(t, dataDir, "mixed.jsonl", content)
 
@@ -286,14 +321,18 @@ func TestCollectDetailedAggregatesJournalAndCompactedEvaluationRecords(t *testin
 	if len(collected.Diagnostics) != 0 {
 		t.Fatalf("diagnostics = %#v", collected.Diagnostics)
 	}
-	if got, want := len(collected.Evaluations), 2; got != want {
+	if got, want := len(collected.Evaluations), 3; got != want {
 		t.Fatalf("evaluations = %d, want %d: %#v", got, want, collected.Evaluations)
 	}
 	if got := fmt.Sprint(collected.Evaluations[0].Conditions); got != fmt.Sprint([]cover.ConditionState{cover.ConditionTrue, cover.ConditionFalse}) {
 		t.Errorf("first conditions = %s", got)
 	}
-	if !collected.Evaluations[1].Result || collected.Evaluations[1].TestID != "named-test" {
-		t.Errorf("second evaluation = %#v", collected.Evaluations[1])
+	if collected.Evaluations[0].EvaluationID == collected.Evaluations[1].EvaluationID ||
+		fmt.Sprint(collected.Evaluations[0].Conditions) != fmt.Sprint(collected.Evaluations[1].Conditions) {
+		t.Errorf("duplicate vector provenance was lost: %#v", collected.Evaluations)
+	}
+	if !collected.Evaluations[2].Result || collected.Evaluations[2].TestID != "named-test" {
+		t.Errorf("third evaluation = %#v", collected.Evaluations[2])
 	}
 }
 
@@ -364,10 +403,11 @@ func main() {
 	if len(collected.Diagnostics) != 0 {
 		t.Fatalf("concurrent runtime diagnostics = %#v", collected.Diagnostics)
 	}
-	if got, want := len(collected.Evaluations), 5; got != want {
-		t.Fatalf("evaluations = %d, want %d; diagnostics=%#v", got, want, collected.Diagnostics)
+	if len(collected.Evaluations) < 5 {
+		t.Fatalf("evaluations = %d, want at least one record per semantic vector; diagnostics=%#v", len(collected.Evaluations), collected.Diagnostics)
 	}
 	seen := make(map[cover.EvaluationIdentity]struct{})
+	semanticVectors := make(map[string]struct{})
 	aborted := 0
 	longSeen := false
 	for _, evaluation := range collected.Evaluations {
@@ -376,6 +416,7 @@ func main() {
 			t.Fatalf("duplicate evaluation identity %#v", identity)
 		}
 		seen[identity] = struct{}{}
+		semanticVectors[fmt.Sprintf("%d:%s:%v:%t:%d", evaluation.DecisionID, evaluation.PackagePath, evaluation.Conditions, evaluation.Result, evaluation.Status)] = struct{}{}
 		if evaluation.Status == cover.EvaluationAborted {
 			aborted++
 		}
@@ -388,6 +429,9 @@ func main() {
 	}
 	if aborted != 1 {
 		t.Errorf("aborted evaluations = %d, want 1", aborted)
+	}
+	if len(semanticVectors) != 5 {
+		t.Errorf("semantic evaluation vectors = %d, want 5: %#v", len(semanticVectors), semanticVectors)
 	}
 	if !longSeen {
 		t.Error("long package path was not retained in event provenance")

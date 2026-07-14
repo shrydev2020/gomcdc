@@ -44,7 +44,7 @@ func TestUniqueCauseStrategy(t *testing.T) {
 				completed(2, []cover.ConditionState{conditionTrue, conditionTrue}, true),
 				completed(3, []cover.ConditionState{conditionTrue, conditionFalse}, false),
 			},
-			want: []string{string(cover.CoveragePossiblyInfeasible), string(cover.CoverageCovered)},
+			want: []string{string(cover.CoverageInfeasible), string(cover.CoverageCovered)},
 		},
 		{
 			name:     "OR preserves not evaluated as a distinct value",
@@ -54,7 +54,7 @@ func TestUniqueCauseStrategy(t *testing.T) {
 				completed(2, []cover.ConditionState{conditionFalse, conditionTrue}, true),
 				completed(3, []cover.ConditionState{conditionFalse, conditionFalse}, false),
 			},
-			want: []string{string(cover.CoveragePossiblyInfeasible), string(cover.CoverageCovered)},
+			want: []string{string(cover.CoverageInfeasible), string(cover.CoverageCovered)},
 		},
 		{
 			name: "nested a AND b OR c",
@@ -69,8 +69,8 @@ func TestUniqueCauseStrategy(t *testing.T) {
 				completed(4, []cover.ConditionState{conditionTrue, conditionFalse, conditionTrue}, true),
 			},
 			want: []string{
-				string(cover.CoveragePossiblyInfeasible),
-				string(cover.CoveragePossiblyInfeasible),
+				string(cover.CoverageInfeasible),
+				string(cover.CoverageInfeasible),
 				string(cover.CoverageCovered),
 			},
 		},
@@ -331,8 +331,8 @@ func TestMaskingStrategy(t *testing.T) {
 				completed(1, []cover.ConditionState{conditionFalse}, false),
 				completed(2, []cover.ConditionState{conditionTrue}, false),
 			},
-			want:        []string{string(cover.CoveragePossiblyInfeasible)},
-			wantOverall: string(cover.CoveragePossiblyInfeasible),
+			want:        []string{string(cover.CoverageInfeasible)},
+			wantOverall: string(cover.CoverageInfeasible),
 		},
 		{
 			name: "structurally impossible short circuit vector is invalid",
@@ -886,7 +886,7 @@ func mcdcStatus(outcome cover.CoverageOutcome, support cover.SupportStatus, anal
 	case analysis == cover.AnalysisIncomplete:
 		return string(cover.CoverageAnalysisIncomplete)
 	case analysis == cover.AnalysisInfeasible:
-		return string(cover.CoveragePossiblyInfeasible)
+		return string(cover.CoverageInfeasible)
 	case outcome == cover.CoverageOutcomeCovered:
 		return string(cover.CoverageCovered)
 	case outcome == cover.CoverageOutcomeNotCovered:

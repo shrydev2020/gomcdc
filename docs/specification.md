@@ -4,11 +4,13 @@ This document defines the semantics and conformance requirements of `gomcdc` 1.0
 
 The `gomcdc` v1 series treats this specification as its compatibility contract. The v1 series does not remove or change the meaning of existing metrics, CLI options and exit codes, or required JSON fields. It may add opt-in capabilities and optional fields that do not require existing data to be reinterpreted.
 
+A public JSON field-set change uses a new `schemaVersion` and a new checked-in schema; schema `1.0` is never changed in place.
+
 ## 1. Scope
 
 For one logical `gomcdc test` measurement request, the tool aggregates eleven metrics over one source model: Statement, Function, Decision, Switch Clause Body, Type Switch Clause Body, Select Clause Body, Switch Clause Selection, Type Switch Clause Selection, Condition, Unique-Cause MC/DC, and Masking MC/DC.
 
-`gomcdc version` performs no measurement, writes the release identity in the form `gomcdc vMAJOR.MINOR.PATCH` to standard output, and exits with code 0. Additional arguments are invalid CLI usage.
+`gomcdc version` performs no measurement, writes the build identity to standard output, and exits with code 0. A module-version build uses `gomcdc vMAJOR.MINOR.PATCH` (or the complete Go module version); a local build uses `gomcdc devel`, optionally followed by the abbreviated VCS revision and `dirty`. Additional arguments are invalid CLI usage. The identity comes from Go build information and requires no linker flag.
 
 The target environment is Go 1.26.5, Go Modules, Linux, and macOS. Because the compiler-aware backend applies an exact-anchor patch to Go compiler source, it does not treat another Go patch version as supported. Target sources are packages in the main module returned by `go list` for the supplied package patterns. The target set excludes the standard library, external modules, vendor, tool-generated sources, and sources with the standard Go generated-code comment. `_test.go` belongs to AST metrics only with `--include-tests`; that flag does not affect Statement or Function.
 
@@ -204,7 +206,7 @@ Instrumentation preserves Go evaluation order, short-circuiting, evaluation and 
 
 ### D25. Processes and collection
 
-Each test process writes to a distinct file whose name contains a collision-free encoding of package import path, PID, run ID, and nonce. The CLI merges completely validated records. It validates DecisionID, EvaluationIdentity, condition count, states, result, status, and short-circuit consistency. It constructs a partial report after test failure, build failure, timeout, panic, a truncated tail, or abnormal termination.
+Each test process writes to a distinct file whose name contains a collision-free encoding of package import path, PID, run ID, and nonce. Every record in one file has the same `(runID, packagePath, PID)` provenance. The CLI retains provenance on raw Decision and Clause events until it verifies the requested run, source-inventory ownership, process identity, condition count, states, result, status, and short-circuit consistency. Only verified events are projected to provenance-free, idempotent coverage observations. It constructs a partial report after test failure, build failure, timeout, panic, a truncated tail, or abnormal termination.
 
 ### D26. go test
 
@@ -241,7 +243,9 @@ Precedence is `4 > 2 > 1 > 3 > 0`. The overall result retains separate test, mea
 
 ### D29. JSON
 
-The root contains `version`, `module`, `run`, `measurementMode`, `measurements`, `capabilities`, `backendCapabilities`, `instrumentationCoverage`, `summary`, `packages`, and `errors`. `capabilities` is the tool-wide aggregate, while `backendCapabilities` exposes the per-producer authority required by D21. The version is `1.0`.
+The root contains `schemaVersion`, `toolVersion`, `module`, `run`, `measurementMode`, `measurements`, `capabilities`, `backendCapabilities`, `instrumentationCoverage`, `summary`, `packages`, and `errors`. `schemaVersion` is the report compatibility contract and is `1.0`; `toolVersion` is the build identity from `gomcdc version`. `capabilities` is the tool-wide aggregate, while `backendCapabilities` exposes the per-producer authority required by D21.
+
+[`schema/report-v1.0.schema.json`](../schema/report-v1.0.schema.json) is the machine-readable JSON Schema for every public field, required and optional key, type, enum, and nullability rule. The implementation and this specification must conform to that checked-in schema.
 
 The summary keys are `statement`, `function`, `decision`, `switchClauseBody`, `typeSwitchClauseBody`, `selectClauseBody`, `switchClauseSelection`, `typeSwitchClauseSelection`, `condition`, `mcdcUnique`, and `mcdcMasking`.
 
@@ -261,7 +265,7 @@ The output is one self-contained static HTML file with no external asset, CDN, n
 
 ### D32. Resources and trust boundary
 
-One instrumented run collects all non-standard-cover evidence with one source instrumentation, compiler instrumentation, build, and test. The event journal aggregates and compacts without losing witnesses and does not retain every record in memory in proportion to loop iterations. Targets relative to ordinary `go test` are at most 2x for AST-only and 5x with both MC/DC metrics, but these targets do not determine conformance.
+One instrumented run collects all non-standard-cover evidence with one source instrumentation, compiler instrumentation, build, and test. The event journal aggregates and compacts without losing witnesses and does not retain every record in memory in proportion to loop iterations. Performance claims require a checked-in benchmark and are not part of v1 conformance.
 
 The tool builds and tests a trusted target module with the current user's authority. The temporary workspace is not a security sandbox, and evidence authenticity is not guaranteed against malicious target code. Temporary directories and event files are readable and writable only by the current user. Source copying prevents symlinks and hardlinks from writing outside the workspace. Normal reports contain no user absolute local path.
 
@@ -289,7 +293,7 @@ An implementation conforms only when all conditions hold.
 
 ## 10. Acceptance verification
 
-The acceptance suite includes AND, OR, NOT, nested expressions, side effects, evaluation order, conditionless switch, expression switch, type switch, select, empty bodies, fallthrough, direct selection, no-match, recursion, nested decisions, loops, multiple goroutines, panic, recover, defer, `runtime.Goexit`, multiple packages, external test packages, build tags, test/build failure, timeout, truncated events, partial recovery, source mapping, user `//line`, generated-code exclusion, and all eleven thresholds. For `a && b`, Unique-Cause yields `a=infeasible` and `b=covered`, while Masking covers both conditions.
+The acceptance suite includes AND, OR, NOT, nested expressions, side effects, evaluation order, conditionless switch, expression switch, type switch, select, empty bodies, fallthrough, direct selection, no-match, recursion, nested decisions, loops, multiple goroutines, panic, recover, defer, `runtime.Goexit`, multiple packages, external test packages, build tags, test/build failure, timeout, truncated events, partial recovery, provenance mutation, source mapping, user `//line`, generated-code exclusion, JSON Schema contract mutation, and all eleven thresholds. For `a && b`, Unique-Cause yields `a=infeasible` and `b=covered`, while Masking covers both conditions.
 
 Completion requires successful `go test -count=1 ./...`, `go test -race -count=1 ./...`, and `go vet ./...`, and integer equality between fixture-module aggregation and the sum of its package aggregations.
 
