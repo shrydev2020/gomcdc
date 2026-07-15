@@ -44,23 +44,17 @@ func Prepare(ctx context.Context, root string) (Toolchain, error) {
 	}
 
 	realSwitchPath := filepath.Join(goroot, "src", "cmd", "compile", "internal", "walk", "switch.go")
-	source, err := os.ReadFile(realSwitchPath)
+	source, err := readFile(ctx, realSwitchPath)
 	if err != nil {
 		return Toolchain{}, fmt.Errorf("read Go %s switch lowering source: %w", version, err)
-	}
-	if err := ctx.Err(); err != nil {
-		return Toolchain{}, err
 	}
 	patched, err := PatchSwitchSource(source)
 	if err != nil {
 		return Toolchain{}, fmt.Errorf("Go %s compiler source is incompatible with the clause-selection producer: %w", version, err)
 	}
-	if err := ctx.Err(); err != nil {
-		return Toolchain{}, err
-	}
 
 	toolDir := filepath.Join(root, "compiler-aware")
-	if err := os.MkdirAll(toolDir, 0o700); err != nil {
+	if err := filesystemEffect(ctx, func() error { return os.MkdirAll(toolDir, 0o700) }); err != nil {
 		return Toolchain{}, fmt.Errorf("create compiler-aware tool directory: %w", err)
 	}
 	// Downloaded toolchains live below GOMODCACHE, where cmd/go deliberately
@@ -71,15 +65,9 @@ func Prepare(ctx context.Context, root string) (Toolchain, error) {
 	if err := createGOROOTView(ctx, goroot, shadowGOROOT); err != nil {
 		return Toolchain{}, err
 	}
-	if err := ctx.Err(); err != nil {
-		return Toolchain{}, err
-	}
 	switchPath := filepath.Join(shadowGOROOT, "src", "cmd", "compile", "internal", "walk", "switch.go")
 	patchedPath := filepath.Join(toolDir, "switch.go")
-	if err := ctx.Err(); err != nil {
-		return Toolchain{}, err
-	}
-	if err := os.WriteFile(patchedPath, patched, 0o600); err != nil {
+	if err := filesystemEffect(ctx, func() error { return os.WriteFile(patchedPath, patched, 0o600) }); err != nil {
 		return Toolchain{}, fmt.Errorf("write patched switch lowering source: %w", err)
 	}
 	overlayPath := filepath.Join(toolDir, "overlay.json")
@@ -89,11 +77,8 @@ func Prepare(ctx context.Context, root string) (Toolchain, error) {
 	if err != nil {
 		return Toolchain{}, fmt.Errorf("encode compiler overlay: %w", err)
 	}
-	if err := os.WriteFile(overlayPath, overlay, 0o600); err != nil {
+	if err := filesystemEffect(ctx, func() error { return os.WriteFile(overlayPath, overlay, 0o600) }); err != nil {
 		return Toolchain{}, fmt.Errorf("write compiler overlay: %w", err)
-	}
-	if err := ctx.Err(); err != nil {
-		return Toolchain{}, err
 	}
 
 	compilerPath := filepath.Join(toolDir, "compile")
@@ -107,11 +92,8 @@ func Prepare(ctx context.Context, root string) (Toolchain, error) {
 	if err != nil {
 		return Toolchain{}, fmt.Errorf("build compiler-aware Go %s compiler: %w: %s", version, err, strings.TrimSpace(string(output)))
 	}
-	if err := os.Chmod(compilerPath, 0o700); err != nil {
+	if err := filesystemEffect(ctx, func() error { return os.Chmod(compilerPath, 0o700) }); err != nil {
 		return Toolchain{}, fmt.Errorf("set compiler executable mode: %w", err)
-	}
-	if err := ctx.Err(); err != nil {
-		return Toolchain{}, err
 	}
 
 	toolexecPath := filepath.Join(toolDir, "toolexec")
@@ -130,16 +112,29 @@ case "$tool" in
 	*) exec "$tool" "$@" ;;
 esac
 `, version, patchID)
-	if err := ctx.Err(); err != nil {
-		return Toolchain{}, err
-	}
-	if err := os.WriteFile(toolexecPath, []byte(shim), 0o700); err != nil {
+	if err := filesystemEffect(ctx, func() error { return os.WriteFile(toolexecPath, []byte(shim), 0o700) }); err != nil {
 		return Toolchain{}, fmt.Errorf("write compiler-aware toolexec shim: %w", err)
 	}
 	return Toolchain{
 		Toolexec:    toolexecPath,
 		Environment: map[string]string{compilerEnvironment: compilerPath},
 	}, nil
+}
+
+func readFile(ctx context.Context, path string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return os.ReadFile(path)
+}
+
+// filesystemEffect keeps each compiler-preparation mutation inside the
+// request's cancellation boundary without duplicating phase checks.
+func filesystemEffect(ctx context.Context, effect func() error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return effect()
 }
 
 func createGOROOTView(ctx context.Context, source, destination string) error {

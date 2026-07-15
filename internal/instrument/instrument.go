@@ -205,6 +205,9 @@ func InstrumentFile(copyPath string, analysis analyzer.File, helperName string) 
 // SelectHelperName scans every supplied source/test file and returns a package-
 // wide identifier absent from all of them.
 func SelectHelperName(ctx context.Context, activeFiles []string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	used := make(map[string]struct{})
 	paths := append([]string(nil), activeFiles...)
 	sort.Strings(paths)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,57 @@ import (
 	"github.com/shrydev2020/gomcdc/internal/report"
 	"github.com/shrydev2020/gomcdc/internal/runtimecov"
 )
+
+func TestCancellationBoundariesStopHelperWork(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := goFilesInDirectory(ctx, t.TempDir()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("goFilesInDirectory error = %v, want context.Canceled", err)
+	}
+	if _, err := verifyRuntimeEvidence(ctx, nil, nil, runtimecov.RecordedEvidence{}, "run", nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("verifyRuntimeEvidence error = %v, want context.Canceled", err)
+	}
+	if _, err := conditionlessSwitchDecisionOrder(ctx, []cover.ClauseMetadata{{GroupID: 1}}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("conditionlessSwitchDecisionOrder error = %v, want context.Canceled", err)
+	}
+	if _, err := deduplicateVerifiedEvaluations(ctx, []cover.DecisionEvaluation{{}}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("deduplicateVerifiedEvaluations error = %v, want context.Canceled", err)
+	}
+	if _, err := runtimeDiagnosticsInvalidate(ctx, []runtimecov.Diagnostic{{Severity: runtimecov.DiagnosticRecoverable}}, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("runtimeDiagnosticsInvalidate error = %v, want context.Canceled", err)
+	}
+	if _, err := instrumentPackages(ctx, t.TempDir(), nil, "example.test/runtime", false); !errors.Is(err, context.Canceled) {
+		t.Fatalf("instrumentPackages error = %v, want context.Canceled", err)
+	}
+}
+
+func TestGoFilesInDirectoryFiltersDirectoriesAndNonGoFiles(t *testing.T) {
+	t.Parallel()
+
+	directory := t.TempDir()
+	if err := os.Mkdir(filepath.Join(directory, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "notes.txt"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	goFile := filepath.Join(directory, "active.go")
+	if err := os.WriteFile(goFile, []byte("package active\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files, err := goFilesInDirectory(t.Context(), directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0] != goFile {
+		t.Fatalf("goFilesInDirectory = %v, want [%s]", files, goFile)
+	}
+	if _, err := goFilesInDirectory(t.Context(), filepath.Join(directory, "missing")); err == nil {
+		t.Fatal("goFilesInDirectory accepted a missing directory")
+	}
+}
 
 func TestIntegratedFixtureWritesPackageCenteredHTML(t *testing.T) {
 	configureIntegrationEnvironment(t)

@@ -3,6 +3,7 @@ package instrument
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -18,6 +19,19 @@ import (
 	cover "github.com/shrydev2020/gomcdc/internal/coverage"
 	"github.com/shrydev2020/gomcdc/internal/runtimecov"
 )
+
+func TestInstrumentationRejectsCanceledWork(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := SelectHelperName(ctx, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("SelectHelperName error = %v, want context.Canceled", err)
+	}
+	if _, err := InstrumentPackage(PackageOptions{Context: ctx}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("InstrumentPackage error = %v, want context.Canceled", err)
+	}
+}
 
 func TestInstrumentFileRewritesCopiedConditionsOnly(t *testing.T) {
 	t.Parallel()

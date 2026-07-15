@@ -49,6 +49,47 @@ func TestCreateGOROOTViewRejectsCanceledWork(t *testing.T) {
 	}
 }
 
+func TestFilesystemEffectHonorsCancellation(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	if err := filesystemEffect(t.Context(), func() error {
+		called = true
+		return nil
+	}); err != nil || !called {
+		t.Fatalf("active filesystem effect: called=%v err=%v", called, err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	called = false
+	if err := filesystemEffect(ctx, func() error {
+		called = true
+		return nil
+	}); !errors.Is(err, context.Canceled) || called {
+		t.Fatalf("canceled filesystem effect: called=%v err=%v", called, err)
+	}
+}
+
+func TestReadFileHonorsCancellation(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "value.txt")
+	if err := os.WriteFile(path, []byte("value"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := readFile(t.Context(), path)
+	if err != nil || string(contents) != "value" {
+		t.Fatalf("active read: contents=%q err=%v", contents, err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := readFile(ctx, path); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled read error = %v, want context.Canceled", err)
+	}
+}
+
 func TestPrepareRejectsUnsupportedGoVersionBeforeReadingCompilerSources(t *testing.T) {
 	for _, version := range []string{"go1.25.9", "go1.26.4", "go1.26.6", "go1.27.0"} {
 		t.Run(version, func(t *testing.T) {

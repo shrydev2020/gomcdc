@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/format"
@@ -19,6 +20,45 @@ import (
 
 	cover "github.com/shrydev2020/gomcdc/internal/coverage"
 )
+
+func TestRuntimeWorkRejectsCanceledContext(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := Inject(ctx, t.TempDir(), "example.test/project"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Inject error = %v, want context.Canceled", err)
+	}
+	if _, err := CollectDetailed(ctx, t.TempDir()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("CollectDetailed error = %v, want context.Canceled", err)
+	}
+	collector := eventCollector{
+		ctx:   ctx,
+		begun: map[cover.EvaluationIdentity]wireRecord{{RunID: "run", EvaluationID: 1}: {DecisionID: 1}},
+	}
+	if err := collector.finishAborted(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("finishAborted error = %v, want context.Canceled", err)
+	}
+}
+
+func TestCollectDetailedDiagnosesNonEventEntries(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dataDir, eventFilePrefix+"directory"+eventFileSuffix), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, "unexpected.txt"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	collected, err := CollectDetailed(t.Context(), dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(collected.Diagnostics) != 2 {
+		t.Fatalf("diagnostics = %#v, want two rejected entries", collected.Diagnostics)
+	}
+}
 
 func TestInjectCreatesDistinctGeneratedInternalPackages(t *testing.T) {
 	moduleDir := t.TempDir()
