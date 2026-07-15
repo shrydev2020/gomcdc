@@ -208,6 +208,8 @@ runtime は EvaluationID を衝突させず、package-global な current evaluat
 
 各 test process は package import path の衝突不能なencoding、PID、run ID、nonceを含む固有 file へ evidence を書く。同一file内の全recordは同じ `(runID, packagePath, PID)` provenanceを持つ。CLIはraw Decision eventとClause eventのprovenanceを、要求run、source inventory上の所有package、process identity、condition count、state、result、status、短絡規則の整合性を検証するまで保持する。検証済みeventだけをprovenance-freeで冪等なcoverage observationへ射影する。test failure、build failure、timeout、panic、truncated tail、異常終了時も取得済み evidence と静的 inventory から partial report を構成する。
 
+SIGINTとSIGTERMはactive requestをcancelする。cancellationはmeasurement所有の全subprocess groupを終了し、後続measurement phaseを開始せず、時間制限付きevidence recovery、report構築、workspace cleanupだけを許可する。caller cancellationはtimeoutやcommand failureではなく `failureKind=interrupted` とする。
+
 ### D26. go test
 
 package pattern は一つ以上必須とする。CLI は `go test -count=1` を使用する。ユーザーまたはGOFLAGSによる `-count`、`-cover`、`-coverprofile`、`-covermode`、`-coverpkg`、`-json`、`-overlay`、`-toolexec` はCLI errorとする。`--`以降の非競合引数は解析と全runへ同じ意味で適用する。解析とtestは同じGOOS、GOARCH、build tags、CGO、module設定を使用する。activeな複数main moduleを持つgo.workは対象外とする。
@@ -235,17 +237,19 @@ condition, mcdc-unique, mcdc-masking, all
 2 measurement, instrumentation, integrity, or report failure
 3 coverage threshold failure
 4 invalid CLI usage
+130 interrupted by SIGINT
+143 interrupted by SIGTERM
 ```
 
-優先順位は `4 > 2 > 1 > 3 > 0` とする。overall result は test、measurement、integrity、strict、threshold の結果を別 field で保持する。
+通常完了の優先順位は `4 > 2 > 1 > 3 > 0` とする。処理したtermination signalはrecoveryとcleanup後にsignal由来の終了codeを返す。overall result は test、measurement、integrity、strict、threshold の結果を別 field で保持する。
 
 `run.results` は `test`、`measurement`、`integrity`、`strict`、`threshold` を持つ。各値は `passed`、`failed`、`timeout`、`not-run`、`not-requested` のいずれかとする。`timeout` は test にだけ使用する。strict と threshold は対応する policy が指定されなければ `not-requested` とし、終了codeの優先順位によって他のfieldを上書きしない。
 
 ### D29. JSON
 
-root は `schemaVersion`、`toolVersion`、`module`、`run`、`measurementMode`、`measurements`、`capabilities`、`backendCapabilities`、`instrumentationCoverage`、`summary`、`packages`、`errors` を持つ。`schemaVersion` はreport互換性契約であり `1.0`、`toolVersion` は `gomcdc version` が返すbuild identityである。`capabilities` はtool全体のaggregate、`backendCapabilities` はD21のproducer別authorityを表す。
+root は `schemaVersion`、`toolVersion`、`module`、`run`、`measurementMode`、`measurements`、`capabilities`、`backendCapabilities`、`instrumentationCoverage`、`summary`、`packages`、`errors` を持つ。`schemaVersion` はreport互換性契約であり `1.1` とする。tool interruptionはtimeoutやcommand failureと混同せず、`failureKind` の `interrupted` で表す。`toolVersion` は `gomcdc version` が返すbuild identityである。`capabilities` はtool全体のaggregate、`backendCapabilities` はD21のproducer別authorityを表す。
 
-[`schema/report-v1.0.schema.json`](../schema/report-v1.0.schema.json) は全公開field、必須・任意key、型、enum、nullabilityを定める機械可読JSON Schemaである。実装と本仕様はrepository内のこのschemaへ適合しなければならない。
+[`schema/report-v1.1.schema.json`](../schema/report-v1.1.schema.json) は現在の全公開field、必須・任意key、型、enum、nullabilityを定める機械可読JSON Schemaである。schema 1.0は直前の不変な契約としてrepositoryに保持する。
 
 summary key は `statement`、`function`、`decision`、`switchClauseBody`、`typeSwitchClauseBody`、`selectClauseBody`、`switchClauseSelection`、`typeSwitchClauseSelection`、`condition`、`mcdcUnique`、`mcdcMasking` である。
 

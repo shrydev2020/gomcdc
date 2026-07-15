@@ -1,12 +1,24 @@
 package workspace
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 )
+
+func TestCreateRejectsCanceledWork(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := Create(ctx, Options{SourceDir: t.TempDir(), TempParent: t.TempDir()}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Create error = %v, want context cancellation", err)
+	}
+}
 
 func TestCreateCopiesModuleTree(t *testing.T) {
 	source := t.TempDir()
@@ -21,9 +33,9 @@ func TestCreateCopiesModuleTree(t *testing.T) {
 		t.Fatalf("create source symlink: %v", err)
 	}
 
-	workspace, err := Create(Options{SourceDir: source, TempParent: t.TempDir()})
+	workspace, err := Create(context.Background(), Options{SourceDir: source, TempParent: t.TempDir()})
 	if err != nil {
-		t.Fatalf("Create() error = %v", err)
+		t.Fatalf("Create(context.Background(), ) error = %v", err)
 	}
 	t.Cleanup(func() {
 		if err := workspace.Remove(); err != nil {
@@ -106,7 +118,7 @@ func TestCreateRewritesRelativeModuleReplacementsOnlyInCopy(t *testing.T) {
 	writeFile(t, filepath.Join(source, "go.mod"), original, 0o644)
 	writeFile(t, filepath.Join(dependency, "go.mod"), "module example.test/dependency\n\ngo 1.26\n", 0o644)
 
-	work, err := Create(Options{SourceDir: source, TempParent: t.TempDir()})
+	work, err := Create(context.Background(), Options{SourceDir: source, TempParent: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,8 +148,8 @@ func TestCreateRejectsTempParentInsideSourceTree(t *testing.T) {
 
 	for _, parent := range []string{source, inside} {
 		t.Run(filepath.Base(parent), func(t *testing.T) {
-			if _, err := Create(Options{SourceDir: source, TempParent: parent}); err == nil {
-				t.Fatal("Create() error = nil, want containment error")
+			if _, err := Create(context.Background(), Options{SourceDir: source, TempParent: parent}); err == nil {
+				t.Fatal("Create(context.Background(), ) error = nil, want containment error")
 			}
 		})
 	}
@@ -154,8 +166,8 @@ func TestCreateRejectsSymlinkedTempParentInsideSourceTree(t *testing.T) {
 		t.Fatalf("create temp parent symlink: %v", err)
 	}
 
-	if _, err := Create(Options{SourceDir: source, TempParent: alias}); err == nil {
-		t.Fatal("Create() error = nil, want containment error through symlink")
+	if _, err := Create(context.Background(), Options{SourceDir: source, TempParent: alias}); err == nil {
+		t.Fatal("Create(context.Background(), ) error = nil, want containment error through symlink")
 	}
 }
 
@@ -164,9 +176,9 @@ func TestWorkspaceCleanupAndKeep(t *testing.T) {
 		t.Helper()
 		source := t.TempDir()
 		writeFile(t, filepath.Join(source, "go.mod"), "module example.test/source\n", 0o644)
-		workspace, err := Create(Options{SourceDir: source, TempParent: t.TempDir(), Keep: keep})
+		workspace, err := Create(context.Background(), Options{SourceDir: source, TempParent: t.TempDir(), Keep: keep})
 		if err != nil {
-			t.Fatalf("Create() error = %v", err)
+			t.Fatalf("Create(context.Background(), ) error = %v", err)
 		}
 		return workspace
 	}
@@ -231,8 +243,8 @@ func TestCreateValidatesDirectories(t *testing.T) {
 		{SourceDir: t.TempDir(), TempParent: file},
 	}
 	for index, options := range tests {
-		if _, err := Create(options); err == nil {
-			t.Errorf("Create(test %d) error = nil, want validation error", index)
+		if _, err := Create(context.Background(), options); err == nil {
+			t.Errorf("Create(context.Background(), test %d) error = nil, want validation error", index)
 		}
 	}
 }

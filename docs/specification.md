@@ -208,6 +208,8 @@ Instrumentation preserves Go evaluation order, short-circuiting, evaluation and 
 
 Each test process writes to a distinct file whose name contains a collision-free encoding of package import path, PID, run ID, and nonce. Every record in one file has the same `(runID, packagePath, PID)` provenance. The CLI retains provenance on raw Decision and Clause events until it verifies the requested run, source-inventory ownership, process identity, condition count, states, result, status, and short-circuit consistency. Only verified events are projected to provenance-free, idempotent coverage observations. It constructs a partial report after test failure, build failure, timeout, panic, a truncated tail, or abnormal termination.
 
+SIGINT and SIGTERM cancel the active request. Cancellation terminates every measurement-owned subprocess group, starts no later measurement phase, and then permits only bounded evidence recovery, report construction, and workspace cleanup. Caller cancellation is `failureKind=interrupted`, not timeout or command failure.
+
 ### D26. go test
 
 At least one package pattern is required. The CLI invokes `go test -count=1`. User or GOFLAGS settings for `-count`, `-cover`, `-coverprofile`, `-covermode`, `-coverpkg`, `-json`, `-overlay`, or `-toolexec` are CLI errors. Non-conflicting arguments after `--` apply with the same meaning to analysis and every run. Analysis and tests use identical GOOS, GOARCH, build tags, CGO, and module settings. A go.work with multiple active main modules is outside the target set.
@@ -235,17 +237,19 @@ Each metric has exactly one `--fail-under-<metric>` threshold flag. A threshold 
 2 measurement, instrumentation, integrity, or report failure
 3 coverage threshold failure
 4 invalid CLI usage
+130 interrupted by SIGINT
+143 interrupted by SIGTERM
 ```
 
-Precedence is `4 > 2 > 1 > 3 > 0`. The overall result retains separate test, measurement, integrity, strict, and threshold fields.
+Precedence for ordinary completion is `4 > 2 > 1 > 3 > 0`. A handled termination signal returns its signal-derived exit code after recovery and cleanup. The overall result retains separate test, measurement, integrity, strict, and threshold fields.
 
 `run.results` contains `test`, `measurement`, `integrity`, `strict`, and `threshold`. Each value is one of `passed`, `failed`, `timeout`, `not-run`, or `not-requested`; only test uses `timeout`. Strict and threshold are `not-requested` when their corresponding policy was not specified, and exit-code precedence never overwrites another result field.
 
 ### D29. JSON
 
-The root contains `schemaVersion`, `toolVersion`, `module`, `run`, `measurementMode`, `measurements`, `capabilities`, `backendCapabilities`, `instrumentationCoverage`, `summary`, `packages`, and `errors`. `schemaVersion` is the report compatibility contract and is `1.0`; `toolVersion` is the build identity from `gomcdc version`. `capabilities` is the tool-wide aggregate, while `backendCapabilities` exposes the per-producer authority required by D21.
+The root contains `schemaVersion`, `toolVersion`, `module`, `run`, `measurementMode`, `measurements`, `capabilities`, `backendCapabilities`, `instrumentationCoverage`, `summary`, `packages`, and `errors`. `schemaVersion` is the report compatibility contract and is `1.1`; tool interruption adds `interrupted` to `failureKind` without conflating it with timeout or a command failure. `toolVersion` is the build identity from `gomcdc version`. `capabilities` is the tool-wide aggregate, while `backendCapabilities` exposes the per-producer authority required by D21.
 
-[`schema/report-v1.0.schema.json`](../schema/report-v1.0.schema.json) is the machine-readable JSON Schema for every public field, required and optional key, type, enum, and nullability rule. The implementation and this specification must conform to that checked-in schema.
+[`schema/report-v1.1.schema.json`](../schema/report-v1.1.schema.json) is the machine-readable JSON Schema for every current public field, required and optional key, type, enum, and nullability rule. Schema 1.0 remains checked in as the immutable preceding contract.
 
 The summary keys are `statement`, `function`, `decision`, `switchClauseBody`, `typeSwitchClauseBody`, `selectClauseBody`, `switchClauseSelection`, `typeSwitchClauseSelection`, `condition`, `mcdcUnique`, and `mcdcMasking`.
 

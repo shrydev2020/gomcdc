@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/shrydev2020/gomcdc/internal/processgroup"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -158,6 +159,7 @@ func overrideEnvironment(key, value string) []string {
 
 func rejectActiveGoWorkspace(ctx context.Context, dir string) error {
 	command := exec.CommandContext(ctx, "go", "env", "GOWORK")
+	processgroup.ConfigureCancellation(command)
 	command.Dir = dir
 	output, err := command.Output()
 	if err != nil {

@@ -2,6 +2,7 @@ package instrument
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -125,9 +126,9 @@ var __gomcdcHooks = 1
 func TestBroken( {
 	__gomcdcHooks_1 := 2
 `)
-	name, err := SelectHelperName([]string{brokenTest, production})
+	name, err := SelectHelperName(context.Background(), []string{brokenTest, production})
 	if err != nil {
-		t.Fatalf("SelectHelperName() error = %v", err)
+		t.Fatalf("SelectHelperName(context.Background(), ) error = %v", err)
 	}
 	if name != "__gomcdcHooks_2" {
 		t.Fatalf("helper name = %q", name)
@@ -562,7 +563,7 @@ func TestCoverageFixture(t *testing.T) {
 	testPath := writeFile(t, workspace, "logic/logic_test.go", tests)
 	writeFile(t, workspace, "go.mod", "module example.com/fixture\n\ngo 1.26.0\n")
 	analysis := analyze(t, originalPath, originalRoot, "example.com/fixture", "example.com/fixture/logic")
-	injected, err := runtimecov.Inject(workspace, "example.com/fixture")
+	injected, err := runtimecov.Inject(context.Background(), workspace, "example.com/fixture")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -594,7 +595,7 @@ func TestCoverageFixture(t *testing.T) {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("instrumented fixture failed: %v\n%s", err, output)
 	}
-	collected, err := runtimecov.CollectDetailed(dataDir)
+	collected, err := runtimecov.CollectDetailed(context.Background(), dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}

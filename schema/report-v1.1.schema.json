@@ -1,0 +1,491 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/shrydev2020/gomcdc/schema/report-v1.1.schema.json",
+  "title": "gomcdc report schema 1.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "toolVersion", "module", "run", "measurementMode",
+    "measurements", "capabilities", "backendCapabilities",
+    "instrumentationCoverage", "summary", "packages", "errors"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.1" },
+    "toolVersion": { "type": "string", "minLength": 1 },
+    "module": { "type": "string" },
+    "run": { "$ref": "#/$defs/run" },
+    "measurementMode": {
+      "enum": ["single-run", "standard-cover", "dual-run-standard-cover"]
+    },
+    "measurements": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/measurementRun" }
+    },
+    "capabilities": { "$ref": "#/$defs/capabilitySet" },
+    "backendCapabilities": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/producerCapabilities" }
+    },
+    "instrumentationCoverage": { "$ref": "#/$defs/instrumentationReport" },
+    "summary": { "$ref": "#/$defs/summary" },
+    "packages": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/packageReport" }
+    },
+    "errors": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/reportError" }
+    }
+  },
+  "$defs": {
+    "nonNegativeInteger": { "type": "integer", "minimum": 0 },
+    "uint16": { "type": "integer", "minimum": 0, "maximum": 65535 },
+    "id": { "type": "string", "pattern": "^0x[0-9a-f]{16}$" },
+    "resultStatus": {
+      "enum": ["passed", "failed", "timeout", "not-run", "not-requested"]
+    },
+    "runStatus": { "enum": ["passed", "failed", "timeout"] },
+    "failureKind": { "enum": ["none", "build", "test", "mixed", "command", "timeout", "interrupted"] },
+    "packageStatus": {
+      "enum": ["started", "passed", "failed", "timeout", "build-failed", "skipped"]
+    },
+    "reportError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phase", "code", "message"],
+      "properties": {
+        "phase": { "type": "string" },
+        "code": { "type": "string" },
+        "message": { "type": "string" },
+        "package": { "type": "string" },
+        "path": { "type": "string" }
+      }
+    },
+    "measurementRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "run", "packages"],
+      "properties": {
+        "name": { "enum": ["standard-cover", "ast"] },
+        "run": { "$ref": "#/$defs/testRun" },
+        "packages": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/packageStatus" }
+        }
+      }
+    },
+    "runResults": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["test", "measurement", "integrity", "strict", "threshold"],
+      "properties": {
+        "test": { "$ref": "#/$defs/resultStatus" },
+        "measurement": { "$ref": "#/$defs/resultStatus" },
+        "integrity": { "$ref": "#/$defs/resultStatus" },
+        "strict": { "$ref": "#/$defs/resultStatus" },
+        "threshold": { "$ref": "#/$defs/resultStatus" }
+      }
+    },
+    "testRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "failureKind", "complete"],
+      "properties": {
+        "status": { "$ref": "#/$defs/runStatus" },
+        "failureKind": { "$ref": "#/$defs/failureKind" },
+        "complete": { "type": "boolean" }
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "failureKind", "complete", "results"],
+      "properties": {
+        "status": { "$ref": "#/$defs/runStatus" },
+        "failureKind": { "$ref": "#/$defs/failureKind" },
+        "complete": { "type": "boolean" },
+        "results": { "$ref": "#/$defs/runResults" }
+      }
+    },
+    "metricSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled", "covered", "total", "percentage", "unsupported",
+        "unknown", "infeasible", "analysisIncomplete"
+      ],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "covered": { "$ref": "#/$defs/nonNegativeInteger" },
+        "total": { "$ref": "#/$defs/nonNegativeInteger" },
+        "percentage": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 100
+        },
+        "unsupported": { "$ref": "#/$defs/nonNegativeInteger" },
+        "unknown": { "$ref": "#/$defs/nonNegativeInteger" },
+        "infeasible": { "$ref": "#/$defs/nonNegativeInteger" },
+        "analysisIncomplete": { "$ref": "#/$defs/nonNegativeInteger" }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "statement", "function", "decision", "switchClauseBody",
+        "typeSwitchClauseBody", "selectClauseBody", "switchClauseSelection",
+        "typeSwitchClauseSelection", "condition", "mcdcUnique", "mcdcMasking"
+      ],
+      "properties": {
+        "statement": { "$ref": "#/$defs/metricSummary" },
+        "function": { "$ref": "#/$defs/metricSummary" },
+        "decision": { "$ref": "#/$defs/metricSummary" },
+        "switchClauseBody": { "$ref": "#/$defs/metricSummary" },
+        "typeSwitchClauseBody": { "$ref": "#/$defs/metricSummary" },
+        "selectClauseBody": { "$ref": "#/$defs/metricSummary" },
+        "switchClauseSelection": { "$ref": "#/$defs/metricSummary" },
+        "typeSwitchClauseSelection": { "$ref": "#/$defs/metricSummary" },
+        "condition": { "$ref": "#/$defs/metricSummary" },
+        "mcdcUnique": { "$ref": "#/$defs/metricSummary" },
+        "mcdcMasking": { "$ref": "#/$defs/metricSummary" }
+      }
+    },
+    "capabilityStatus": {
+      "enum": ["supported", "unsupported-by-backend", "unknown"]
+    },
+    "capabilitySet": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "statementCoverage": { "$ref": "#/$defs/capabilityStatus" },
+        "functionCoverage": { "$ref": "#/$defs/capabilityStatus" },
+        "ifDecision": { "$ref": "#/$defs/capabilityStatus" },
+        "forDecision": { "$ref": "#/$defs/capabilityStatus" },
+        "conditionlessSwitchDecision": { "$ref": "#/$defs/capabilityStatus" },
+        "conditionCoverage": { "$ref": "#/$defs/capabilityStatus" },
+        "mcdcUnique": { "$ref": "#/$defs/capabilityStatus" },
+        "mcdcMasking": { "$ref": "#/$defs/capabilityStatus" },
+        "switchClauseBody": { "$ref": "#/$defs/capabilityStatus" },
+        "typeSwitchClauseBody": { "$ref": "#/$defs/capabilityStatus" },
+        "selectClauseBody": { "$ref": "#/$defs/capabilityStatus" },
+        "switchClauseSelection": { "$ref": "#/$defs/capabilityStatus" },
+        "typeSwitchClauseSelection": { "$ref": "#/$defs/capabilityStatus" },
+        "expressionSwitchMatchedExpression": { "$ref": "#/$defs/capabilityStatus" },
+        "typeSwitchMatchedTypeAlternative": { "$ref": "#/$defs/capabilityStatus" },
+        "directCaseSelection": { "$ref": "#/$defs/capabilityStatus" },
+        "fallthroughEdge": { "$ref": "#/$defs/capabilityStatus" },
+        "cfgEdge": { "$ref": "#/$defs/capabilityStatus" },
+        "implicitBranch": { "$ref": "#/$defs/capabilityStatus" }
+      }
+    },
+    "producerCapabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["backend", "capabilities"],
+      "properties": {
+        "backend": { "type": "string" },
+        "capabilities": { "$ref": "#/$defs/capabilitySet" }
+      }
+    },
+    "instrumentationCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["discovered", "supported", "instrumented", "unsupported", "unknown", "percentage"],
+      "properties": {
+        "discovered": { "$ref": "#/$defs/nonNegativeInteger" },
+        "supported": { "$ref": "#/$defs/nonNegativeInteger" },
+        "instrumented": { "$ref": "#/$defs/nonNegativeInteger" },
+        "unsupported": { "$ref": "#/$defs/nonNegativeInteger" },
+        "unknown": { "$ref": "#/$defs/nonNegativeInteger" },
+        "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "instrumentationMetric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["metric", "coverage"],
+      "properties": {
+        "metric": {
+          "enum": [
+            "statement", "function", "decision", "switch-clause-body",
+            "type-switch-clause-body", "select-clause-body",
+            "switch-clause-selection", "type-switch-clause-selection",
+            "condition", "mcdc-unique", "mcdc-masking", "sourceAnalysis"
+          ]
+        },
+        "coverage": { "$ref": "#/$defs/instrumentationCoverage" }
+      }
+    },
+    "instrumentationReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "metrics"],
+      "properties": {
+        "total": { "$ref": "#/$defs/instrumentationCoverage" },
+        "metrics": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/instrumentationMetric" }
+        }
+      }
+    },
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["line", "column"],
+      "properties": {
+        "line": { "$ref": "#/$defs/nonNegativeInteger" },
+        "column": { "$ref": "#/$defs/nonNegativeInteger" }
+      }
+    },
+    "sourceLocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "start", "end"],
+      "properties": {
+        "file": { "type": "string" },
+        "start": { "$ref": "#/$defs/position" },
+        "end": { "$ref": "#/$defs/position" }
+      }
+    },
+    "statementReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["location", "statements", "count", "covered", "metric"],
+      "properties": {
+        "location": { "$ref": "#/$defs/sourceLocation" },
+        "statements": { "$ref": "#/$defs/nonNegativeInteger" },
+        "count": { "$ref": "#/$defs/nonNegativeInteger" },
+        "covered": { "type": "boolean" },
+        "metric": { "$ref": "#/$defs/metricSummary" }
+      }
+    },
+    "evaluationReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decisionId", "evaluationId", "status", "runId", "packagePath",
+        "processId", "testId", "conditions", "result"
+      ],
+      "properties": {
+        "decisionId": { "$ref": "#/$defs/id" },
+        "evaluationId": { "$ref": "#/$defs/id" },
+        "status": { "enum": ["completed", "aborted", "unknown"] },
+        "runId": { "type": "string" },
+        "packagePath": { "type": "string" },
+        "processId": { "type": "integer", "minimum": 1 },
+        "testId": { "type": "string" },
+        "conditions": {
+          "type": "array",
+          "items": { "enum": ["not-evaluated", "false", "true"] }
+        },
+        "result": { "type": "boolean" }
+      }
+    },
+    "witnessReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "first", "second", "firstCompletion", "secondCompletion",
+        "unobservedConditions", "maskedConditions"
+      ],
+      "properties": {
+        "first": { "$ref": "#/$defs/evaluationReport" },
+        "second": { "$ref": "#/$defs/evaluationReport" },
+        "firstCompletion": {
+          "type": "array",
+          "items": { "enum": ["not-evaluated", "false", "true"] }
+        },
+        "secondCompletion": {
+          "type": "array",
+          "items": { "enum": ["not-evaluated", "false", "true"] }
+        },
+        "unobservedConditions": { "type": "array", "items": { "$ref": "#/$defs/uint16" } },
+        "maskedConditions": { "type": "array", "items": { "$ref": "#/$defs/uint16" } }
+      }
+    },
+    "mcdcStatus": {
+      "enum": [
+        "", "disabled", "covered", "not-covered", "analysis-incomplete",
+        "infeasible", "unsupported-by-backend", "unknown"
+      ]
+    },
+    "mcdcOutcome": { "enum": ["", "covered", "not-covered", "unknown"] },
+    "supportStatus": { "enum": ["", "supported", "unsupported-by-backend", "unknown"] },
+    "analysisStatus": { "enum": ["", "complete", "incomplete", "infeasible"] },
+    "mcdcConditionReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "status", "outcome", "support", "analysis", "reason", "witness"],
+      "properties": {
+        "index": { "$ref": "#/$defs/uint16" },
+        "status": { "$ref": "#/$defs/mcdcStatus" },
+        "outcome": { "$ref": "#/$defs/mcdcOutcome" },
+        "support": { "$ref": "#/$defs/supportStatus" },
+        "analysis": { "$ref": "#/$defs/analysisStatus" },
+        "reason": { "type": "string" },
+        "witness": {
+          "oneOf": [
+            { "$ref": "#/$defs/witnessReport" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "mcdcAnalysisReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled", "status", "outcome", "support", "analysis", "metric",
+        "evaluationsAnalyzed", "abortedEvaluations", "invalidEvaluations",
+        "reason", "conditions"
+      ],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "status": { "$ref": "#/$defs/mcdcStatus" },
+        "outcome": { "$ref": "#/$defs/mcdcOutcome" },
+        "support": { "$ref": "#/$defs/supportStatus" },
+        "analysis": { "$ref": "#/$defs/analysisStatus" },
+        "metric": { "$ref": "#/$defs/metricSummary" },
+        "evaluationsAnalyzed": { "$ref": "#/$defs/nonNegativeInteger" },
+        "abortedEvaluations": { "$ref": "#/$defs/nonNegativeInteger" },
+        "invalidEvaluations": { "$ref": "#/$defs/nonNegativeInteger" },
+        "reason": { "type": "string" },
+        "conditions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/mcdcConditionReport" }
+        }
+      }
+    },
+    "decisionCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["true", "false", "metric"],
+      "properties": {
+        "true": { "type": "boolean" },
+        "false": { "type": "boolean" },
+        "metric": { "$ref": "#/$defs/metricSummary" }
+      }
+    },
+    "conditionReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "conditionId", "index", "expression", "location", "true", "false",
+        "notEvaluated", "metric", "mcdcUnique", "mcdcMasking"
+      ],
+      "properties": {
+        "conditionId": { "$ref": "#/$defs/id" },
+        "index": { "$ref": "#/$defs/uint16" },
+        "expression": { "type": "string" },
+        "location": { "$ref": "#/$defs/sourceLocation" },
+        "true": { "type": "boolean" },
+        "false": { "type": "boolean" },
+        "notEvaluated": { "$ref": "#/$defs/nonNegativeInteger" },
+        "metric": { "$ref": "#/$defs/metricSummary" },
+        "mcdcUnique": { "$ref": "#/$defs/mcdcConditionReport" },
+        "mcdcMasking": { "$ref": "#/$defs/mcdcConditionReport" }
+      }
+    },
+    "decisionReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decisionId", "kind", "location", "expression", "notEvaluated",
+        "summary", "decisionCoverage", "conditions", "mcdcUnique",
+        "mcdcMasking", "evaluations"
+      ],
+      "properties": {
+        "decisionId": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["if", "for", "switch-case"] },
+        "location": { "$ref": "#/$defs/sourceLocation" },
+        "expression": { "type": "string" },
+        "notEvaluated": { "$ref": "#/$defs/nonNegativeInteger" },
+        "summary": { "$ref": "#/$defs/summary" },
+        "decisionCoverage": { "$ref": "#/$defs/decisionCoverage" },
+        "conditions": { "type": "array", "items": { "$ref": "#/$defs/conditionReport" } },
+        "mcdcUnique": { "$ref": "#/$defs/mcdcAnalysisReport" },
+        "mcdcMasking": { "$ref": "#/$defs/mcdcAnalysisReport" },
+        "evaluations": { "type": "array", "items": { "$ref": "#/$defs/evaluationReport" } }
+      }
+    },
+    "clauseReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "clauseId", "groupId", "switchId", "kind", "role", "index",
+        "location", "expressions", "types", "decisionIds", "bodyExecutions",
+        "directSelections", "selectedAlternatives", "bodyCoverage", "selectionCoverage"
+      ],
+      "properties": {
+        "clauseId": { "$ref": "#/$defs/id" },
+        "groupId": { "$ref": "#/$defs/id" },
+        "switchId": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["expression-switch", "type-switch", "select", "conditionless-switch"] },
+        "role": { "enum": ["case", "default"] },
+        "index": { "$ref": "#/$defs/uint16" },
+        "location": { "$ref": "#/$defs/sourceLocation" },
+        "expressions": { "type": "array", "items": { "type": "string" } },
+        "types": { "type": "array", "items": { "type": "string" } },
+        "decisionIds": { "type": "array", "items": { "$ref": "#/$defs/id" } },
+        "bodyExecutions": { "$ref": "#/$defs/nonNegativeInteger" },
+        "directSelections": { "$ref": "#/$defs/nonNegativeInteger" },
+        "selectedAlternatives": { "type": "array", "items": { "$ref": "#/$defs/uint16" } },
+        "bodyCoverage": { "$ref": "#/$defs/metricSummary" },
+        "selectionCoverage": { "$ref": "#/$defs/metricSummary" }
+      }
+    },
+    "noMatchReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["switchId", "kind", "location", "selectionCoverage"],
+      "properties": {
+        "switchId": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["expression-switch", "type-switch"] },
+        "location": { "$ref": "#/$defs/sourceLocation" },
+        "selectionCoverage": { "$ref": "#/$defs/metricSummary" }
+      }
+    },
+    "functionReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "location", "summary", "statements", "decisions", "clauses"],
+      "properties": {
+        "name": { "type": "string" },
+        "location": {
+          "oneOf": [
+            { "$ref": "#/$defs/sourceLocation" },
+            { "type": "null" }
+          ]
+        },
+        "summary": { "$ref": "#/$defs/summary" },
+        "statements": { "type": "array", "items": { "$ref": "#/$defs/statementReport" } },
+        "decisions": { "type": "array", "items": { "$ref": "#/$defs/decisionReport" } },
+        "clauses": { "type": "array", "items": { "$ref": "#/$defs/clauseReport" } },
+        "noMatchSelections": { "type": "array", "items": { "$ref": "#/$defs/noMatchReport" } }
+      }
+    },
+    "fileReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "summary", "functions"],
+      "properties": {
+        "path": { "type": "string" },
+        "summary": { "$ref": "#/$defs/summary" },
+        "functions": { "type": "array", "items": { "$ref": "#/$defs/functionReport" } }
+      }
+    },
+    "packageReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "status", "evidence", "summary", "files"],
+      "properties": {
+        "path": { "type": "string" },
+        "status": { "$ref": "#/$defs/packageStatus" },
+        "evidence": { "type": "boolean" },
+        "summary": { "$ref": "#/$defs/summary" },
+        "files": { "type": "array", "items": { "$ref": "#/$defs/fileReport" } }
+      }
+    }
+  }
+}

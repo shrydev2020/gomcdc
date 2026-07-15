@@ -14,6 +14,7 @@ import (
 
 	cover "github.com/shrydev2020/gomcdc/internal/coverage"
 	"github.com/shrydev2020/gomcdc/internal/goflags"
+	"github.com/shrydev2020/gomcdc/internal/processgroup"
 )
 
 type Options struct {
@@ -92,7 +93,7 @@ func Run(ctx context.Context, opts Options) Result {
 		args = append(args, binaryArgs...)
 	}
 	cmd := exec.CommandContext(ctx, "go", args...)
-	configureCancellation(cmd)
+	processgroup.ConfigureCancellation(cmd)
 	cmd.Dir = opts.Dir
 	environment := append([]string(nil), os.Environ()...)
 	if opts.DataDirEnv != "" {
@@ -146,6 +147,9 @@ func Run(ctx context.Context, opts Options) Result {
 	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return Result{Status: cover.RunTimeout, FailureKind: cover.RunFailureTimeout, Err: fmt.Errorf("go test timed out: %w", ctx.Err()), Packages: packageStatuses, RuntimeDiagnostics: runtimeDiagnostics(events)}
+	}
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return Result{Status: cover.RunFailed, FailureKind: cover.RunFailureInterrupted, Err: fmt.Errorf("go test interrupted: %w", ctx.Err()), Packages: packageStatuses, RuntimeDiagnostics: runtimeDiagnostics(events)}
 	}
 	failureKind := classifyFailure(events)
 	status := cover.RunFailed

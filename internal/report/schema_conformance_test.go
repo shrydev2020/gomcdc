@@ -42,6 +42,7 @@ func TestCheckedInSchemaEnumsMatchPublicDomains(t *testing.T) {
 	assertSchemaEnum(t, "failureKind", document.Defs["failureKind"], []string{
 		string(cover.RunFailureNone), string(cover.RunFailureBuild), string(cover.RunFailureTest),
 		string(cover.RunFailureMixed), string(cover.RunFailureCommand), string(cover.RunFailureTimeout),
+		string(cover.RunFailureInterrupted),
 	})
 	assertSchemaEnum(t, "packageStatus", document.Defs["packageStatus"], []string{
 		string(gotest.PackageStarted), string(gotest.PackagePassed), string(gotest.PackageFailed),
@@ -196,7 +197,7 @@ func TestRenderedReportsCarrySchemaAndToolIdentities(t *testing.T) {
 
 func readReportSchema(t *testing.T) *reportSchema {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "report-v1.0.schema.json"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "report-v1.1.schema.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +210,7 @@ func readReportSchema(t *testing.T) *reportSchema {
 
 func readReportSchemaJSON(t *testing.T) map[string]any {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "report-v1.0.schema.json"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "report-v1.1.schema.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

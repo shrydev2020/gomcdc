@@ -43,6 +43,7 @@ type measurementOutcome struct {
 	astEvidenceIntegrityUnknown bool
 	c0EvidenceIntegrityUnknown  bool
 	integrityFailure            bool
+	interrupted                 bool
 	diagnostics                 []measurementDiagnostic
 }
 
@@ -84,8 +85,17 @@ func (set *measurementWorkspaces) cleanup(stderr io.Writer) error {
 // returns a workspace set so the caller can preserve cleanup timing.
 func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, *measurementWorkspaces, error) {
 	outcome := measurementOutcome{}
+	markInterrupted := func() {
+		if outcome.interrupted {
+			return
+		}
+		outcome.interrupted = true
+		outcome.diagnostics = append(outcome.diagnostics, measurementDiagnostic{
+			phase: "execution", code: "measurement-interrupted", message: "measurement was interrupted",
+		})
+	}
 	workspaces := &measurementWorkspaces{}
-	primary, err := workspace.Create(workspace.Options{
+	primary, err := workspace.Create(request.context, workspace.Options{
 		SourceDir:  request.loaded.ModuleRoot,
 		TempParent: request.workDirParent,
 		Keep:       request.keepWorkDir,
@@ -102,7 +112,7 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 		workspaces.add("standard-cover", standardWork)
 	}
 	if request.needsC0 && request.needsAST {
-		standardWork, err = workspace.Create(workspace.Options{
+		standardWork, err = workspace.Create(request.context, workspace.Options{
 			SourceDir:  request.loaded.ModuleRoot,
 			TempParent: request.workDirParent,
 			Keep:       request.keepWorkDir,
@@ -130,28 +140,52 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 			Output:        stderr,
 		})
 		outcome.standardResult = &result
+		if request.context.Err() != nil {
+			markInterrupted()
+		}
+	}
+	if request.context.Err() != nil {
+		markInterrupted()
 	}
 
-	if request.needsAST && (len(request.decisions) > 0 || len(request.clauses) > 0) {
-		injected, injectErr := runtimecov.Inject(astWork.ModuleDir, request.loaded.ModulePath)
+	if !outcome.interrupted && request.needsAST && (len(request.decisions) > 0 || len(request.clauses) > 0) {
+		injected, injectErr := runtimecov.Inject(request.context, astWork.ModuleDir, request.loaded.ModulePath)
 		if injectErr != nil {
-			return outcome, workspaces, fmt.Errorf("runtime instrumentation failed: %w", injectErr)
+			if request.context.Err() != nil {
+				markInterrupted()
+			} else {
+				return outcome, workspaces, fmt.Errorf("runtime instrumentation failed: %w", injectErr)
+			}
 		}
-		if _, instrumentErr := instrumentPackages(astWork.ModuleDir, request.sources, injected.ImportPath, request.compilerClauseSelection); instrumentErr != nil {
-			return outcome, workspaces, fmt.Errorf("source instrumentation failed: %w", instrumentErr)
+		if request.context.Err() != nil {
+			markInterrupted()
+		}
+		if !outcome.interrupted {
+			_, instrumentErr := instrumentPackages(request.context, astWork.ModuleDir, request.sources, injected.ImportPath, request.compilerClauseSelection)
+			if instrumentErr != nil {
+				if request.context.Err() != nil {
+					markInterrupted()
+				} else {
+					return outcome, workspaces, fmt.Errorf("source instrumentation failed: %w", instrumentErr)
+				}
+			}
 		}
 	}
 
 	compilerToolchain := compileraware.Toolchain{}
-	if request.needsAST && request.compilerClauseSelection {
+	if !outcome.interrupted && request.needsAST && request.compilerClauseSelection {
 		compilerToolchain, err = compileraware.Prepare(request.context, filepath.Join(astWork.RootDir, "tools"))
 		if err != nil {
-			return outcome, workspaces, fmt.Errorf("compiler-aware instrumentation failed: %w", err)
+			if request.context.Err() != nil {
+				markInterrupted()
+			} else {
+				return outcome, workspaces, fmt.Errorf("compiler-aware instrumentation failed: %w", err)
+			}
 		}
 	}
 
 	runID := ""
-	if request.needsAST {
+	if !outcome.interrupted && request.needsAST {
 		runID, err = newRunID()
 		if err != nil {
 			return outcome, workspaces, fmt.Errorf("create coverage run ID: %w", err)
@@ -177,12 +211,18 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 			Output:       stderr,
 		})
 		outcome.astResult = &result
+		if request.context.Err() != nil {
+			markInterrupted()
+		}
 	}
+
+	recoveryContext, cancelRecovery := newRecoveryContext(request.context, interruptedRecoveryTimeout)
+	defer cancelRecovery()
 
 	recorded := runtimecov.RecordedEvidence{}
 	var collectionErr error
 	if request.needsAST {
-		recorded, collectionErr = runtimecov.CollectDetailed(astWork.EventDir)
+		recorded, collectionErr = runtimecov.CollectDetailed(recoveryContext, astWork.EventDir)
 	}
 	if collectionErr != nil {
 		fmt.Fprintf(stderr, "gomcdc: runtime coverage collection failed: %v\n", collectionErr)
@@ -192,7 +232,7 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 		outcome.integrityFailure = true
 		outcome.astEvidenceIntegrityUnknown = true
 	}
-	verified, validationErr := verifyRuntimeEvidence(request.decisions, request.clauses, recorded, runID, request.noMatches)
+	verified, validationErr := verifyRuntimeEvidence(recoveryContext, request.decisions, request.clauses, recorded, runID, request.noMatches)
 	if validationErr != nil {
 		fmt.Fprintf(stderr, "gomcdc: runtime coverage validation failed: %v\n", validationErr)
 		outcome.diagnostics = append(outcome.diagnostics, measurementDiagnostic{
@@ -202,19 +242,29 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 		outcome.astEvidenceIntegrityUnknown = true
 	}
 	for _, diagnostic := range verified.Diagnostics {
+		if err := recoveryContext.Err(); err != nil {
+			outcome.integrityFailure = true
+			outcome.astEvidenceIntegrityUnknown = true
+			break
+		}
 		fmt.Fprintf(stderr, "gomcdc: runtime coverage diagnostic: %s\n", formatRuntimeDiagnostic(diagnostic))
 		outcome.diagnostics = append(outcome.diagnostics, measurementDiagnostic{
 			phase: "collection", code: "runtime-" + string(diagnostic.Severity), message: runtimeDiagnosticReportMessage(diagnostic.Severity),
 		})
 	}
-	if runtimeDiagnosticsInvalidate(verified.Diagnostics, outcome.astResult) {
+	diagnosticsInvalidate, diagnosticsErr := runtimeDiagnosticsInvalidate(recoveryContext, verified.Diagnostics, outcome.astResult)
+	if diagnosticsErr != nil {
+		outcome.integrityFailure = true
+		outcome.astEvidenceIntegrityUnknown = true
+	}
+	if diagnosticsInvalidate {
 		outcome.integrityFailure = true
 		outcome.astEvidenceIntegrityUnknown = true
 	}
 	outcome.evidence = verified
 
 	if request.needsC0 {
-		analyzed, c0Err := collectC0(coverProfile, request.loaded, request.sources, request.generated)
+		analyzed, c0Err := collectC0(recoveryContext, coverProfile, request.loaded, request.sources, request.generated)
 		if c0Err != nil {
 			outcome.diagnostics = append(outcome.diagnostics, measurementDiagnostic{
 				phase: "collection", code: "standard-cover-collection-failed", message: "standard cover profile collection failed",
@@ -225,7 +275,7 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 				fmt.Fprintf(stderr, "gomcdc: C0 coverage collection failed: %v\n", c0Err)
 				outcome.integrityFailure = true
 			}
-			partialInventory, inventoryErr := buildC0Report(c0.Profile{Mode: c0.ModeSet}, request.loaded, request.sources, request.generated)
+			partialInventory, inventoryErr := buildC0Report(recoveryContext, c0.Profile{Mode: c0.ModeSet}, request.loaded, request.sources, request.generated)
 			if inventoryErr != nil {
 				fmt.Fprintf(stderr, "gomcdc: C0 inventory recovery failed after %v: %v\n", c0Err, inventoryErr)
 				outcome.diagnostics = append(outcome.diagnostics, measurementDiagnostic{
@@ -238,5 +288,29 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 			outcome.c0 = analyzed
 		}
 	}
+	if request.context.Err() != nil {
+		markInterrupted()
+	}
 	return outcome, workspaces, nil
+}
+
+const interruptedRecoveryTimeout = 30 * time.Second
+
+// newRecoveryContext separates bounded finalization from normal measurement.
+// Cancellation starts the recovery deadline instead of aborting evidence
+// collection immediately; a second OS signal restores forced termination in
+// main.
+func newRecoveryContext(request context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	base := context.WithoutCancel(request)
+	if request.Err() != nil {
+		return context.WithTimeout(base, timeout)
+	}
+	recovery, cancel := context.WithCancel(base)
+	stopDeadline := context.AfterFunc(request, func() {
+		time.AfterFunc(timeout, cancel)
+	})
+	return recovery, func() {
+		stopDeadline()
+		cancel()
+	}
 }

@@ -1,12 +1,25 @@
 package c0_test
 
 import (
+	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/shrydev2020/gomcdc/internal/c0"
 )
+
+func TestAnalyzeRejectsCanceledWork(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := c0.Analyze(ctx, c0.Profile{Mode: c0.ModeSet}, c0.SourceMap{ModulePath: "example.test/m"}, c0.Options{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Analyze error = %v, want context.Canceled", err)
+	}
+}
 
 func TestAnalyzeMultiPackageIdentityMappingsAndCounts(t *testing.T) {
 	t.Parallel()
@@ -30,7 +43,7 @@ func TestAnalyzeMultiPackageIdentityMappingsAndCounts(t *testing.T) {
 		},
 	}
 
-	report, err := c0.ParseAndAnalyze(strings.NewReader(profile), sourceMap, c0.Options{})
+	report, err := c0.ParseAndAnalyze(context.Background(), strings.NewReader(profile), sourceMap, c0.Options{})
 	if err != nil {
 		t.Fatalf("ParseAndAnalyze: %v", err)
 	}
@@ -79,7 +92,7 @@ func TestAnalyzeBlockOverridesAndExposesGeneratedOrUnmappableData(t *testing.T) 
 		},
 	}
 
-	report, err := c0.ParseAndAnalyze(strings.NewReader(profile), sourceMap, c0.Options{})
+	report, err := c0.ParseAndAnalyze(context.Background(), strings.NewReader(profile), sourceMap, c0.Options{})
 	if err != nil {
 		t.Fatalf("ParseAndAnalyze: %v", err)
 	}
@@ -125,7 +138,7 @@ func TestAnalyzeEmptyFunctionsDefaultAndIncluded(t *testing.T) {
 		},
 	}
 
-	defaultReport, err := c0.ParseAndAnalyze(strings.NewReader(profile), sourceMap, c0.Options{})
+	defaultReport, err := c0.ParseAndAnalyze(context.Background(), strings.NewReader(profile), sourceMap, c0.Options{})
 	if err != nil {
 		t.Fatalf("default ParseAndAnalyze: %v", err)
 	}
@@ -134,7 +147,7 @@ func TestAnalyzeEmptyFunctionsDefaultAndIncluded(t *testing.T) {
 	}
 	assertCounts(t, "default functions", defaultReport.Summary.Functions, c0.Counts{Covered: 1, Total: 1})
 
-	includedReport, err := c0.ParseAndAnalyze(strings.NewReader(profile), sourceMap, c0.Options{IncludeEmptyFunctions: true})
+	includedReport, err := c0.ParseAndAnalyze(context.Background(), strings.NewReader(profile), sourceMap, c0.Options{IncludeEmptyFunctions: true})
 	if err != nil {
 		t.Fatalf("included ParseAndAnalyze: %v", err)
 	}
@@ -165,7 +178,7 @@ func TestAnalyzeAssignsNestedLiteralStatementsToInnermostFunction(t *testing.T) 
 		},
 	}
 
-	report, err := c0.ParseAndAnalyze(strings.NewReader(profile), sourceMap, c0.Options{})
+	report, err := c0.ParseAndAnalyze(context.Background(), strings.NewReader(profile), sourceMap, c0.Options{})
 	if err != nil {
 		t.Fatalf("ParseAndAnalyze: %v", err)
 	}
@@ -195,13 +208,13 @@ func TestAnalyzeIsDeterministicAcrossInputOrder(t *testing.T) {
 			{ProfilePath: "/tmp/a.go", PackagePath: "a", OriginalPath: "a.go", OriginalSource: []byte("package a\nfunc A() {\nAct()\n}\n")},
 		},
 	}
-	first, err := c0.Analyze(profile, sourceMap, c0.Options{})
+	first, err := c0.Analyze(context.Background(), profile, sourceMap, c0.Options{})
 	if err != nil {
 		t.Fatalf("first Analyze: %v", err)
 	}
 	profile.Files[0], profile.Files[1] = profile.Files[1], profile.Files[0]
 	sourceMap.Files[0], sourceMap.Files[1] = sourceMap.Files[1], sourceMap.Files[0]
-	second, err := c0.Analyze(profile, sourceMap, c0.Options{})
+	second, err := c0.Analyze(context.Background(), profile, sourceMap, c0.Options{})
 	if err != nil {
 		t.Fatalf("second Analyze: %v", err)
 	}
@@ -223,7 +236,7 @@ func TestAnalyzeGeneratedOriginalSourceIsCovered(t *testing.T) {
 			},
 		},
 	}
-	report, err := c0.ParseAndAnalyze(strings.NewReader(profile), sourceMap, c0.Options{})
+	report, err := c0.ParseAndAnalyze(context.Background(), strings.NewReader(profile), sourceMap, c0.Options{})
 	if err != nil {
 		t.Fatalf("ParseAndAnalyze: %v", err)
 	}

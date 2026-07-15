@@ -1,6 +1,8 @@
 //go:build unix
 
-package gotest
+// Package processgroup keeps subprocess descendants inside one cancellation
+// boundary on Unix systems.
+package processgroup
 
 import (
 	"errors"
@@ -9,10 +11,9 @@ import (
 	"syscall"
 )
 
-// configureCancellation gives the go command and every package test binary a
-// private process group. A wrapper timeout must not leave instrumented test
-// processes running and writing into a workspace after collection starts.
-func configureCancellation(command *exec.Cmd) {
+// ConfigureCancellation gives command and its descendants a private process
+// group and makes context cancellation terminate that entire group.
+func ConfigureCancellation(command *exec.Cmd) {
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	command.Cancel = func() error {
 		if command.Process == nil {

@@ -4,6 +4,7 @@ package runtimecov
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -94,9 +95,12 @@ type RecordedEvidence struct {
 	Files                 []ProcessFile                           `json:"files,omitempty"`
 }
 
-// Inject creates a new target-local internal runtime package. Each call uses a
-// fresh directory and never replaces an existing target package.
-func Inject(moduleDir, modulePath string) (_ Package, err error) {
+// Inject creates the target-local runtime while ctx permits instrumentation
+// work. Cancellation removes a partially-created package.
+func Inject(ctx context.Context, moduleDir, modulePath string) (_ Package, err error) {
+	if err := ctx.Err(); err != nil {
+		return Package{}, err
+	}
 	moduleDir, err = canonicalModuleDirectory(moduleDir)
 	if err != nil {
 		return Package{}, err
@@ -106,6 +110,9 @@ func Inject(moduleDir, modulePath string) (_ Package, err error) {
 	}
 
 	internalDir := filepath.Join(moduleDir, "internal")
+	if err := ctx.Err(); err != nil {
+		return Package{}, err
+	}
 	if err := ensureRealDirectory(internalDir); err != nil {
 		return Package{}, fmt.Errorf("prepare target internal directory: %w", err)
 	}
@@ -121,6 +128,9 @@ func Inject(moduleDir, modulePath string) (_ Package, err error) {
 	}()
 	if err := os.Chmod(runtimeDir, 0o755); err != nil {
 		return Package{}, fmt.Errorf("set target runtime directory mode: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return Package{}, err
 	}
 	sourceFile := filepath.Join(runtimeDir, "runtime.go")
 	if err := os.WriteFile(sourceFile, []byte(runtimeSource), 0o644); err != nil {
@@ -141,22 +151,28 @@ func Inject(moduleDir, modulePath string) (_ Package, err error) {
 	}, nil
 }
 
-// CollectDetailed recovers every complete JSONL record. A truncated tail or
-// malformed line is diagnosed while earlier and later complete records remain
-// available. Begin records without a terminal record become aborted
-// evaluations and can never be used as coverage evidence.
-func CollectDetailed(dataDir string) (RecordedEvidence, error) {
+// CollectDetailed recovers complete JSONL records until ctx no longer permits
+// recovery work. A truncated tail or malformed line is diagnosed while
+// complete records remain available.
+func CollectDetailed(ctx context.Context, dataDir string) (RecordedEvidence, error) {
+	if err := ctx.Err(); err != nil {
+		return RecordedEvidence{}, err
+	}
 	entries, err := os.ReadDir(dataDir)
 	if err != nil {
 		return RecordedEvidence{}, fmt.Errorf("read runtime event directory %q: %w", dataDir, err)
 	}
 	collector := eventCollector{
+		ctx:                  ctx,
 		begun:                make(map[cover.EvaluationIdentity]wireRecord),
 		finished:             make(map[cover.EvaluationIdentity]struct{}),
 		notEvaluatedEvidence: make(map[cover.DecisionNotEvaluatedObservation]struct{}),
 		clauseEvidence:       make(map[RecordedClauseEvent]struct{}),
 	}
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return RecordedEvidence{}, err
+		}
 		path := filepath.Join(dataDir, entry.Name())
 		info, infoErr := entry.Info()
 		if infoErr != nil {
@@ -174,8 +190,16 @@ func CollectDetailed(dataDir string) (RecordedEvidence, error) {
 			return RecordedEvidence{}, err
 		}
 	}
-	collector.finishAborted()
+	if err := collector.finishAborted(); err != nil {
+		return RecordedEvidence{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return RecordedEvidence{}, err
+	}
 	collector.sort()
+	if err := ctx.Err(); err != nil {
+		return RecordedEvidence{}, err
+	}
 	return collector.result, nil
 }
 
@@ -200,6 +224,7 @@ type wireRecord struct {
 }
 
 type eventCollector struct {
+	ctx                  context.Context
 	result               RecordedEvidence
 	begun                map[cover.EvaluationIdentity]wireRecord
 	finished             map[cover.EvaluationIdentity]struct{}
@@ -219,6 +244,9 @@ func (collector *eventCollector) collectFile(path string) (err error) {
 	reader := bufio.NewReaderSize(file, maxEventLine)
 	lineNumber := 0
 	for {
+		if err := collector.ctx.Err(); err != nil {
+			return err
+		}
 		line, readErr := reader.ReadSlice('\n')
 		switch {
 		case readErr == nil:
@@ -396,8 +424,11 @@ func optionalUint16(value *uint16) uint16 {
 	return *value
 }
 
-func (collector *eventCollector) finishAborted() {
+func (collector *eventCollector) finishAborted() error {
 	for identity, begin := range collector.begun {
+		if err := collector.ctx.Err(); err != nil {
+			return err
+		}
 		collector.addEvaluation(cover.DecisionEvaluation{
 			DecisionID:   cover.DecisionID(begin.DecisionID),
 			EvaluationID: identity.EvaluationID,
@@ -409,6 +440,7 @@ func (collector *eventCollector) finishAborted() {
 			Status:       cover.EvaluationAborted,
 		})
 	}
+	return nil
 }
 
 func (collector *eventCollector) conditionStates(path string, line int, kind string, encoded []uint8) ([]cover.ConditionState, bool) {

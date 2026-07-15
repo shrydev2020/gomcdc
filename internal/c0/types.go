@@ -2,7 +2,10 @@
 // instrumented workspace back to original module-relative source.
 package c0
 
-import "io"
+import (
+	"context"
+	"io"
+)
 
 // Mode is a Go coverprofile counter mode.
 type Mode string
@@ -192,10 +195,10 @@ type ExcludedBlock struct {
 }
 
 // ParseAndAnalyze parses a coverprofile then maps and aggregates it.
-func ParseAndAnalyze(reader io.Reader, sourceMap SourceMap, options Options) (Report, error) {
+func ParseAndAnalyze(ctx context.Context, reader io.Reader, sourceMap SourceMap, options Options) (Report, error) {
 	profile, err := ParseProfile(reader)
 	if err != nil {
 		return Report{}, err
 	}
-	return Analyze(profile, sourceMap, options)
+	return Analyze(ctx, profile, sourceMap, options)
 }

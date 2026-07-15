@@ -176,7 +176,7 @@ gomcdc test \
 
 - [規範仕様](docs/specification.ja.md)
 - [英語参考仕様](docs/specification.md)
-- [JSON report schema](schema/report-v1.0.schema.json)
+- [JSON report schema](schema/report-v1.1.schema.json)
 
 ## 開発時の確認
 

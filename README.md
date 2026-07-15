@@ -180,7 +180,7 @@ gomcdc test \
 
 - [Normative specification](docs/specification.ja.md)
 - [English reference specification](docs/specification.md)
-- [JSON report schema](schema/report-v1.0.schema.json)
+- [JSON report schema](schema/report-v1.1.schema.json)
 
 ## Development
 

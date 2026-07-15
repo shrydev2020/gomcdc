@@ -309,6 +309,18 @@ func TestRunReportsTimeout(t *testing.T) {
 	}
 }
 
+func TestRunReportsCallerInterruptionSeparatelyFromTimeout(t *testing.T) {
+	bin := t.TempDir()
+	writeExecutable(t, filepath.Join(bin, "go"), "#!/bin/sh\nwhile :; do :; done\n")
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(20*time.Millisecond, cancel)
+	result := Run(ctx, Options{Dir: t.TempDir(), DataDirEnv: "COVER", DataDir: t.TempDir()})
+	if result.Status != cover.RunFailed || result.FailureKind != cover.RunFailureInterrupted || result.Err == nil {
+		t.Fatalf("Run() = %#v, want caller interruption", result)
+	}
+}
+
 func writeExecutable(t *testing.T, path, contents string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(contents), 0o755); err != nil {

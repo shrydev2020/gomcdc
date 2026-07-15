@@ -40,3 +40,18 @@ func TestAssembleReportInputPreservesMeasurementBoundaries(t *testing.T) {
 		t.Fatalf("measurements = %#v", input.Measurements)
 	}
 }
+
+func TestAssembleReportInputClassifiesCallerInterruption(t *testing.T) {
+	t.Parallel()
+
+	input := assembleReportInput(reportAssembly{
+		loaded:      loader.Result{ModulePath: "example.test/m"},
+		interrupted: true,
+	})
+	if input.RunStatus != cover.RunFailed || input.FailureKind != cover.RunFailureInterrupted || input.Complete {
+		t.Fatalf("interrupted run state = %#v", input)
+	}
+	if input.Results.Test != report.ResultFailed || input.Results.Measurement != report.ResultFailed {
+		t.Fatalf("interrupted results = %#v", input.Results)
+	}
+}

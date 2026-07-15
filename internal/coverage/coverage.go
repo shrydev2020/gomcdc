@@ -465,4 +465,7 @@ const (
 	RunFailureMixed   RunFailureKind = "mixed"
 	RunFailureCommand RunFailureKind = "command"
 	RunFailureTimeout RunFailureKind = "timeout"
+	// RunFailureInterrupted means the caller canceled the measurement rather
+	// than the test, build, or go command reporting a failure.
+	RunFailureInterrupted RunFailureKind = "interrupted"
 )

@@ -4,6 +4,7 @@ package instrument
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -52,6 +53,7 @@ type FileMapping struct {
 // include every build-active source and test file whose identifiers may collide
 // with the generated package-wide helper.
 type PackageOptions struct {
+	Context                 context.Context
 	Directory               string
 	PackageName             string
 	PackagePath             string
@@ -96,6 +98,13 @@ type GeneratedRegion struct {
 // InstrumentPackage selects one collision-free helper name, validates and
 // transforms every requested copied file, then creates the generated bridge.
 func InstrumentPackage(options PackageOptions) (PackageResult, error) {
+	ctx := options.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return PackageResult{}, err
+	}
 	if options.Directory == "" {
 		return PackageResult{}, errors.New("instrument package: directory is empty")
 	}
@@ -115,7 +124,7 @@ func InstrumentPackage(options PackageOptions) (PackageResult, error) {
 			activeFiles = append(activeFiles, mapping.CopyPath)
 		}
 	}
-	helperName, err := SelectHelperName(activeFiles)
+	helperName, err := SelectHelperName(ctx, activeFiles)
 	if err != nil {
 		return PackageResult{}, fmt.Errorf("instrument package: select helper name: %w", err)
 	}
@@ -128,6 +137,9 @@ func InstrumentPackage(options PackageOptions) (PackageResult, error) {
 	}
 	transformed := make([]transformedFile, 0, len(options.Files))
 	for _, mapping := range options.Files {
+		if err := ctx.Err(); err != nil {
+			return PackageResult{}, err
+		}
 		if len(mapping.Analysis.Decisions) == 0 && len(mapping.Analysis.Clauses) == 0 {
 			continue
 		}
@@ -135,14 +147,23 @@ func InstrumentPackage(options PackageOptions) (PackageResult, error) {
 		if err != nil {
 			return PackageResult{}, err
 		}
+		if err := ctx.Err(); err != nil {
+			return PackageResult{}, err
+		}
 		transformed = append(transformed, transformedFile{path: mapping.CopyPath, mode: mode, data: data, map_: sourceMap})
 	}
 	for _, file := range transformed {
+		if err := ctx.Err(); err != nil {
+			return PackageResult{}, err
+		}
 		if err := replaceFile(file.path, file.data, file.mode); err != nil {
 			return PackageResult{}, fmt.Errorf("instrument copied file %q: write: %w", file.path, err)
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return PackageResult{}, err
+	}
 	bridgePath, err := WriteBridge(BridgeOptions{
 		Directory:         options.Directory,
 		PackageName:       options.PackageName,
@@ -183,11 +204,14 @@ func InstrumentFile(copyPath string, analysis analyzer.File, helperName string) 
 
 // SelectHelperName scans every supplied source/test file and returns a package-
 // wide identifier absent from all of them.
-func SelectHelperName(activeFiles []string) (string, error) {
+func SelectHelperName(ctx context.Context, activeFiles []string) (string, error) {
 	used := make(map[string]struct{})
 	paths := append([]string(nil), activeFiles...)
 	sort.Strings(paths)
 	for _, path := range paths {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		contents, err := os.ReadFile(path)
 		if err != nil {
 			return "", fmt.Errorf("read active file %q: %w", path, err)
@@ -199,6 +223,9 @@ func SelectHelperName(activeFiles []string) (string, error) {
 		// failures, so scanner diagnostics are intentionally ignored here.
 		lexer.Init(file, contents, nil, 0)
 		for {
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
 			_, kind, literal := lexer.Scan()
 			if kind == token.EOF {
 				break

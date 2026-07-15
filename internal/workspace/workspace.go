@@ -2,6 +2,7 @@
 package workspace
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -42,10 +43,12 @@ type Workspace struct {
 	removed bool
 }
 
-// Create copies a module tree into a newly-created temporary workspace.
-// Git administrative entries are omitted, while all regular files (including
-// non-Go assets) and symbolic links are copied.
-func Create(options Options) (_ *Workspace, err error) {
+// Create copies a module tree while ctx permits new workspace work. A
+// cancellation removes any partially-created workspace before returning.
+func Create(ctx context.Context, options Options) (_ *Workspace, err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	sourceDir, err := existingDirectory(options.SourceDir, "source directory")
 	if err != nil {
 		return nil, err
@@ -78,10 +81,13 @@ func Create(options Options) (_ *Workspace, err error) {
 	if err := os.Mkdir(moduleDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create workspace module directory: %w", err)
 	}
-	if err := copyTree(sourceDir, moduleDir); err != nil {
+	if err := copyTree(ctx, sourceDir, moduleDir); err != nil {
 		return nil, fmt.Errorf("copy module tree: %w", err)
 	}
-	if err := rewriteRelativeReplacements(sourceDir, moduleDir); err != nil {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := rewriteRelativeReplacements(ctx, sourceDir, moduleDir); err != nil {
 		return nil, fmt.Errorf("rewrite copied module replacements: %w", err)
 	}
 
@@ -104,7 +110,10 @@ func Create(options Options) (_ *Workspace, err error) {
 // after the main module moves to a temporary directory. Only the copied
 // go.mod is changed; replacement modules remain read-only inputs at their
 // original absolute paths.
-func rewriteRelativeReplacements(sourceDir, moduleDir string) error {
+func rewriteRelativeReplacements(ctx context.Context, sourceDir, moduleDir string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	sourcePath := filepath.Join(sourceDir, "go.mod")
 	contents, err := os.ReadFile(sourcePath)
 	if err != nil {
@@ -116,6 +125,9 @@ func rewriteRelativeReplacements(sourceDir, moduleDir string) error {
 	}
 	changed := false
 	for _, replacement := range parsed.Replace {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if replacement.New.Version != "" || filepath.IsAbs(replacement.New.Path) {
 			continue
 		}
@@ -135,6 +147,9 @@ func rewriteRelativeReplacements(sourceDir, moduleDir string) error {
 	}
 	if !changed {
 		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	formatted, err := parsed.Format()
 	if err != nil {
@@ -243,9 +258,12 @@ type directoryMode struct {
 	mode fs.FileMode
 }
 
-func copyTree(sourceDir, destinationDir string) error {
+func copyTree(ctx context.Context, sourceDir, destinationDir string) error {
 	var directories []directoryMode
 	err := filepath.WalkDir(sourceDir, func(sourcePath string, entry fs.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if walkErr != nil {
 			return walkErr
 		}
@@ -279,7 +297,7 @@ func copyTree(sourceDir, destinationDir string) error {
 			directories = append(directories, directoryMode{path: destinationPath, mode: info.Mode()})
 			return nil
 		case info.Mode().IsRegular():
-			if err := copyRegularFile(sourcePath, destinationPath, info.Mode()); err != nil {
+			if err := copyRegularFile(ctx, sourcePath, destinationPath, info.Mode()); err != nil {
 				return err
 			}
 			return nil
@@ -303,6 +321,9 @@ func copyTree(sourceDir, destinationDir string) error {
 	// Restore directory permissions after copying so read-only source
 	// directories do not prevent their children from being created.
 	for index := len(directories) - 1; index >= 0; index-- {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := os.Chmod(directories[index].path, directories[index].mode.Perm()); err != nil {
 			return fmt.Errorf("preserve directory mode for %q: %w", directories[index].path, err)
 		}
@@ -310,7 +331,7 @@ func copyTree(sourceDir, destinationDir string) error {
 	return nil
 }
 
-func copyRegularFile(sourcePath, destinationPath string, mode fs.FileMode) (err error) {
+func copyRegularFile(ctx context.Context, sourcePath, destinationPath string, mode fs.FileMode) (err error) {
 	source, err := os.Open(sourcePath)
 	if err != nil {
 		return fmt.Errorf("open source file %q: %w", sourcePath, err)
@@ -327,11 +348,23 @@ func copyRegularFile(sourcePath, destinationPath string, mode fs.FileMode) (err 
 		err = errors.Join(err, destination.Close())
 	}()
 
-	if _, err := io.Copy(destination, source); err != nil {
+	if _, err := io.Copy(destination, contextReader{ctx: ctx, reader: source}); err != nil {
 		return fmt.Errorf("copy %q to %q: %w", sourcePath, destinationPath, err)
 	}
 	if err := destination.Chmod(mode.Perm()); err != nil {
 		return fmt.Errorf("preserve file mode for %q: %w", destinationPath, err)
 	}
 	return nil
+}
+
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (reader contextReader) Read(destination []byte) (int, error) {
+	if err := reader.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return reader.reader.Read(destination)
 }

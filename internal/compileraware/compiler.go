@@ -16,6 +16,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/shrydev2020/gomcdc/internal/processgroup"
 )
 
 const compilerEnvironment = "GOMCDC_COMPILER"
@@ -46,9 +48,15 @@ func Prepare(ctx context.Context, root string) (Toolchain, error) {
 	if err != nil {
 		return Toolchain{}, fmt.Errorf("read Go %s switch lowering source: %w", version, err)
 	}
+	if err := ctx.Err(); err != nil {
+		return Toolchain{}, err
+	}
 	patched, err := PatchSwitchSource(source)
 	if err != nil {
 		return Toolchain{}, fmt.Errorf("Go %s compiler source is incompatible with the clause-selection producer: %w", version, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return Toolchain{}, err
 	}
 
 	toolDir := filepath.Join(root, "compiler-aware")
@@ -60,11 +68,17 @@ func Prepare(ctx context.Context, root string) (Toolchain, error) {
 	// installed files read-only through symlinks while giving the overlay a
 	// target outside GOMODCACHE.
 	shadowGOROOT := filepath.Join(toolDir, "goroot")
-	if err := createGOROOTView(goroot, shadowGOROOT); err != nil {
+	if err := createGOROOTView(ctx, goroot, shadowGOROOT); err != nil {
+		return Toolchain{}, err
+	}
+	if err := ctx.Err(); err != nil {
 		return Toolchain{}, err
 	}
 	switchPath := filepath.Join(shadowGOROOT, "src", "cmd", "compile", "internal", "walk", "switch.go")
 	patchedPath := filepath.Join(toolDir, "switch.go")
+	if err := ctx.Err(); err != nil {
+		return Toolchain{}, err
+	}
 	if err := os.WriteFile(patchedPath, patched, 0o600); err != nil {
 		return Toolchain{}, fmt.Errorf("write patched switch lowering source: %w", err)
 	}
@@ -78,10 +92,14 @@ func Prepare(ctx context.Context, root string) (Toolchain, error) {
 	if err := os.WriteFile(overlayPath, overlay, 0o600); err != nil {
 		return Toolchain{}, fmt.Errorf("write compiler overlay: %w", err)
 	}
+	if err := ctx.Err(); err != nil {
+		return Toolchain{}, err
+	}
 
 	compilerPath := filepath.Join(toolDir, "compile")
 	selectedGo := filepath.Join(goroot, "bin", "go")
 	command := exec.CommandContext(ctx, selectedGo, "build", "-overlay="+overlayPath, "-o="+compilerPath, "cmd/compile")
+	processgroup.ConfigureCancellation(command)
 	command.Dir = toolDir
 	command.Env = buildEnvironment(os.Environ())
 	command.Env = setEnvironment(command.Env, "GOROOT", shadowGOROOT)
@@ -91,6 +109,9 @@ func Prepare(ctx context.Context, root string) (Toolchain, error) {
 	}
 	if err := os.Chmod(compilerPath, 0o700); err != nil {
 		return Toolchain{}, fmt.Errorf("set compiler executable mode: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return Toolchain{}, err
 	}
 
 	toolexecPath := filepath.Join(toolDir, "toolexec")
@@ -109,6 +130,9 @@ case "$tool" in
 	*) exec "$tool" "$@" ;;
 esac
 `, version, patchID)
+	if err := ctx.Err(); err != nil {
+		return Toolchain{}, err
+	}
 	if err := os.WriteFile(toolexecPath, []byte(shim), 0o700); err != nil {
 		return Toolchain{}, fmt.Errorf("write compiler-aware toolexec shim: %w", err)
 	}
@@ -118,7 +142,10 @@ esac
 	}, nil
 }
 
-func createGOROOTView(source, destination string) error {
+func createGOROOTView(ctx context.Context, source, destination string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := os.Mkdir(destination, 0o700); err != nil {
 		return fmt.Errorf("create compiler GOROOT view: %w", err)
 	}
@@ -127,6 +154,9 @@ func createGOROOTView(source, destination string) error {
 	// real directories and symlink only files, so package discovery and overlay
 	// path identity both use the disposable lexical GOROOT.
 	return filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if walkErr != nil {
 			return fmt.Errorf("walk selected GOROOT at %q: %w", path, walkErr)
 		}
@@ -153,6 +183,7 @@ func createGOROOTView(source, destination string) error {
 
 func queryToolchain(ctx context.Context) (string, string, error) {
 	command := exec.CommandContext(ctx, "go", "env", "GOROOT", "GOVERSION")
+	processgroup.ConfigureCancellation(command)
 	command.Env = buildEnvironment(os.Environ())
 	output, err := command.Output()
 	if err != nil {

@@ -2,6 +2,7 @@ package c0
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"go/parser"
@@ -45,9 +46,11 @@ type analyzedFile struct {
 	report      FileReport
 }
 
-// Analyze maps parsed profile blocks back to original source, excludes data
-// that has no original statement owner, and aggregates deterministic C0 data.
-func Analyze(profile Profile, sourceMap SourceMap, options Options) (Report, error) {
+// Analyze maps and aggregates C0 evidence while ctx permits recovery work.
+func Analyze(ctx context.Context, profile Profile, sourceMap SourceMap, options Options) (Report, error) {
+	if err := ctx.Err(); err != nil {
+		return Report{}, err
+	}
 	if !profile.Mode.valid() {
 		return Report{}, fmt.Errorf("analyze C0 profile: unsupported mode %q", profile.Mode)
 	}
@@ -55,7 +58,7 @@ func Analyze(profile Profile, sourceMap SourceMap, options Options) (Report, err
 		return Report{}, errors.New("analyze C0 profile: source map module path is empty")
 	}
 
-	mappings, originals, err := prepareSourceMap(sourceMap)
+	mappings, originals, err := prepareSourceMap(ctx, sourceMap)
 	if err != nil {
 		return Report{}, err
 	}
@@ -64,6 +67,9 @@ func Analyze(profile Profile, sourceMap SourceMap, options Options) (Report, err
 	profileFiles := append([]ProfileFile(nil), profile.Files...)
 	sort.Slice(profileFiles, func(i, j int) bool { return profileFiles[i].Path < profileFiles[j].Path })
 	for _, profileFile := range profileFiles {
+		if err := ctx.Err(); err != nil {
+			return Report{}, err
+		}
 		if profileFile.Path == "" {
 			return Report{}, errors.New("analyze C0 profile: profile file path is empty")
 		}
@@ -75,6 +81,9 @@ func Analyze(profile Profile, sourceMap SourceMap, options Options) (Report, err
 		blocks := append([]ProfileBlock(nil), profileFile.Blocks...)
 		sort.Slice(blocks, func(i, j int) bool { return lessRange(blocks[i].Position, blocks[j].Position) })
 		for _, block := range blocks {
+			if err := ctx.Err(); err != nil {
+				return Report{}, err
+			}
 			if err := validateProfileBlock(block); err != nil {
 				return Report{}, fmt.Errorf("analyze C0 profile %q: %w", profileFile.Path, err)
 			}
@@ -105,7 +114,10 @@ func Analyze(profile Profile, sourceMap SourceMap, options Options) (Report, err
 
 	files := make([]analyzedFile, 0, len(originals))
 	for _, original := range originals {
-		fileReport, fileExcluded, include, err := analyzeOriginalFile(original, profile.Mode, options)
+		if err := ctx.Err(); err != nil {
+			return Report{}, err
+		}
+		fileReport, fileExcluded, include, err := analyzeOriginalFile(ctx, original, profile.Mode, options)
 		if err != nil {
 			return Report{}, err
 		}
@@ -129,6 +141,9 @@ func Analyze(profile Profile, sourceMap SourceMap, options Options) (Report, err
 		Excluded:   excluded,
 	}
 	for _, file := range files {
+		if err := ctx.Err(); err != nil {
+			return Report{}, err
+		}
 		packageReport := ensureReportPackage(&report, file.packagePath)
 		packageReport.Files = append(packageReport.Files, file.report)
 		packageReport.Evidence = packageReport.Evidence || file.report.Evidence
@@ -142,10 +157,13 @@ func Analyze(profile Profile, sourceMap SourceMap, options Options) (Report, err
 	return report, nil
 }
 
-func prepareSourceMap(sourceMap SourceMap) (map[string]preparedFileMapping, map[originalFileKey]*originalFileAccumulator, error) {
+func prepareSourceMap(ctx context.Context, sourceMap SourceMap) (map[string]preparedFileMapping, map[originalFileKey]*originalFileAccumulator, error) {
 	mappings := make(map[string]preparedFileMapping, len(sourceMap.Files))
 	originals := make(map[originalFileKey]*originalFileAccumulator)
 	for index, file := range sourceMap.Files {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
 		if file.ProfilePath == "" {
 			return nil, nil, fmt.Errorf("prepare C0 source map file %d: profile path is empty", index)
 		}
@@ -169,7 +187,7 @@ func prepareSourceMap(sourceMap SourceMap) (map[string]preparedFileMapping, map[
 			return nil, nil, fmt.Errorf("prepare C0 source map %q: %w", file.ProfilePath, err)
 		}
 		key := originalFileKey{packagePath: file.PackagePath, originalPath: originalPath}
-		inventory, err := cloneAndValidateInventory(file.Inventory)
+		inventory, err := cloneAndValidateInventory(ctx, file.Inventory)
 		if err != nil {
 			return nil, nil, fmt.Errorf("prepare C0 source map %q inventory: %w", file.ProfilePath, err)
 		}
@@ -189,6 +207,9 @@ func prepareSourceMap(sourceMap SourceMap) (map[string]preparedFileMapping, map[
 		}
 		prepared.original = original
 		for blockIndex, block := range file.Blocks {
+			if err := ctx.Err(); err != nil {
+				return nil, nil, err
+			}
 			if err := validateProfileRange(block.ProfileRange); err != nil {
 				return nil, nil, fmt.Errorf("prepare C0 source map %q block %d profile range: %w", file.ProfilePath, blockIndex, err)
 			}
@@ -207,12 +228,15 @@ func prepareSourceMap(sourceMap SourceMap) (map[string]preparedFileMapping, map[
 	return mappings, originals, nil
 }
 
-func cloneAndValidateInventory(inventory *FileInventory) (*FileInventory, error) {
+func cloneAndValidateInventory(ctx context.Context, inventory *FileInventory) (*FileInventory, error) {
 	if inventory == nil {
 		return nil, nil
 	}
 	cloned := &FileInventory{Blocks: make([]InventoryBlock, len(inventory.Blocks))}
 	for index, block := range inventory.Blocks {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if err := validateOriginalRange(block.PhysicalRange); err != nil {
 			return nil, fmt.Errorf("block %d physical range: %w", index, err)
 		}
@@ -225,6 +249,9 @@ func cloneAndValidateInventory(inventory *FileInventory) (*FileInventory, error)
 		cloned.Blocks[index] = block
 		cloned.Blocks[index].ProfileAnchors = append([]Position(nil), block.ProfileAnchors...)
 		for anchorIndex, anchor := range block.ProfileAnchors {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			if anchor.Line < 0 || anchor.Column < 0 {
 				return nil, fmt.Errorf("block %d anchor %d must be nonnegative: %s", index, anchorIndex, formatPosition(anchor))
 			}
@@ -259,20 +286,26 @@ func equalInventory(left, right *FileInventory) bool {
 	return true
 }
 
-func analyzeOriginalFile(original *originalFileAccumulator, mode Mode, options Options) (FileReport, []ExcludedBlock, bool, error) {
+func analyzeOriginalFile(ctx context.Context, original *originalFileAccumulator, mode Mode, options Options) (FileReport, []ExcludedBlock, bool, error) {
 	fset := token.NewFileSet()
 	parsed, err := parser.ParseFile(fset, original.key.originalPath, original.source, parser.ParseComments|parser.AllErrors)
 	if err != nil {
 		return FileReport{}, nil, false, fmt.Errorf("analyze C0 source %q: parse: %w", original.key.originalPath, err)
 	}
+	if err := ctx.Err(); err != nil {
+		return FileReport{}, nil, false, err
+	}
 	mappedBlocks := sortedMappedBlocks(original.blocks)
 	functions := discoverFunctions(fset, parsed)
 	if original.inventory != nil {
-		return analyzeOriginalInventory(original, mappedBlocks, functions, options)
+		return analyzeOriginalInventory(ctx, original, mappedBlocks, functions, options)
 	}
 	excluded := make([]ExcludedBlock, 0)
 	accepted := make(map[SourceRange]ProfileBlock)
 	for _, block := range mappedBlocks {
+		if err := ctx.Err(); err != nil {
+			return FileReport{}, nil, false, err
+		}
 		owner := ownerForBlock(functions, block.original.Position)
 		if owner < 0 || block.original.Statements == 0 {
 			originalRange := block.original.Position
@@ -301,11 +334,12 @@ func analyzeOriginalFile(original *originalFileAccumulator, mode Mode, options O
 	}
 
 	blocks := blocksWithEvidence(sortedBlocks(accepted), true)
-	fileReport, include, err := buildFileReport(original, functions, blocks, options)
+	fileReport, include, err := buildFileReport(ctx, original, functions, blocks, options)
 	return fileReport, excluded, include, err
 }
 
 func analyzeOriginalInventory(
+	ctx context.Context,
 	original *originalFileAccumulator,
 	mappedBlocks []mappedProfileBlock,
 	functions []functionExtent,
@@ -329,7 +363,13 @@ func analyzeOriginalInventory(
 	positiveUsed := make([]bool, len(mappedBlocks))
 	accepted := make([]analyzedProfileBlock, 0, len(inventoryBlocks))
 	for _, inventoryBlock := range inventoryBlocks {
-		candidateIndex := selectInventoryCandidate(inventoryBlock, mappedBlocks, used)
+		if err := ctx.Err(); err != nil {
+			return FileReport{}, nil, false, err
+		}
+		candidateIndex, err := selectInventoryCandidate(ctx, inventoryBlock, mappedBlocks, used)
+		if err != nil {
+			return FileReport{}, nil, false, err
+		}
 		count := uint64(0)
 		if candidateIndex >= 0 {
 			used[candidateIndex] = true
@@ -361,6 +401,9 @@ func analyzeOriginalInventory(
 
 	excluded := make([]ExcludedBlock, 0)
 	for index, block := range mappedBlocks {
+		if err := ctx.Err(); err != nil {
+			return FileReport{}, nil, false, err
+		}
 		if positiveUsed[index] {
 			continue
 		}
@@ -373,21 +416,28 @@ func analyzeOriginalInventory(
 			ExcludeNoOriginalStatement,
 		))
 	}
-	fileReport, include, err := buildFileReport(original, functions, accepted, options)
+	fileReport, include, err := buildFileReport(ctx, original, functions, accepted, options)
 	return fileReport, excluded, include, err
 }
 
-func selectInventoryCandidate(inventory InventoryBlock, candidates []mappedProfileBlock, used []bool) int {
-	if candidate := bestInventoryCandidate(inventory, candidates, used, true); candidate >= 0 {
-		return candidate
+func selectInventoryCandidate(ctx context.Context, inventory InventoryBlock, candidates []mappedProfileBlock, used []bool) (int, error) {
+	candidate, err := bestInventoryCandidate(ctx, inventory, candidates, used, true)
+	if err != nil {
+		return -1, err
 	}
-	return bestInventoryCandidate(inventory, candidates, used, false)
+	if candidate >= 0 {
+		return candidate, nil
+	}
+	return bestInventoryCandidate(ctx, inventory, candidates, used, false)
 }
 
-func bestInventoryCandidate(inventory InventoryBlock, candidates []mappedProfileBlock, used []bool, requireUnused bool) int {
+func bestInventoryCandidate(ctx context.Context, inventory InventoryBlock, candidates []mappedProfileBlock, used []bool, requireUnused bool) (int, error) {
 	bestIndex := -1
 	bestScore := 0
 	for index, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			return -1, err
+		}
 		if requireUnused && used[index] {
 			continue
 		}
@@ -400,7 +450,7 @@ func bestInventoryCandidate(inventory InventoryBlock, candidates []mappedProfile
 			bestScore = score
 		}
 	}
-	return bestIndex
+	return bestIndex, nil
 }
 
 func inventoryCandidateScore(inventory InventoryBlock, candidate mappedProfileBlock) int {
@@ -478,6 +528,7 @@ func lineOverlap(left, right SourceRange) int {
 }
 
 func buildFileReport(
+	ctx context.Context,
 	original *originalFileAccumulator,
 	functions []functionExtent,
 	blocks []analyzedProfileBlock,
@@ -489,6 +540,9 @@ func buildFileReport(
 		Functions: make([]FunctionReport, 0),
 	}
 	for _, block := range blocks {
+		if err := ctx.Err(); err != nil {
+			return FileReport{}, false, err
+		}
 		owner := ownerForBlock(functions, block.profile.Position)
 		statementBlock := newStatementBlock(block.profile, block.evidence)
 		owned[owner] = append(owned[owner], statementBlock)
@@ -499,6 +553,9 @@ func buildFileReport(
 	}
 
 	for index, function := range functions {
+		if err := ctx.Err(); err != nil {
+			return FileReport{}, false, err
+		}
 		blocks := owned[index]
 		if len(blocks) == 0 && !options.IncludeEmptyFunctions {
 			continue
@@ -513,6 +570,9 @@ func buildFileReport(
 			Blocks:           blocks,
 		}
 		for _, block := range blocks {
+			if err := ctx.Err(); err != nil {
+				return FileReport{}, false, err
+			}
 			functionReport.Evidence = functionReport.Evidence || block.Evidence
 			functionReport.CompleteEvidence = functionReport.CompleteEvidence && block.Evidence
 			if err := addSummary(&functionReport.Summary, block.Summary); err != nil {

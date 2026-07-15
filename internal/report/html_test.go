@@ -15,7 +15,7 @@ func TestWriteHTMLRendersGoHierarchyAndEscapesSourceText(t *testing.T) {
 	percentage := 50.0
 	metric.Percentage = &percentage
 	value := Report{
-		SchemaVersion: "1.0", ToolVersion: "v1.0.0", Module: "example.test/<script>alert(1)</script>",
+		SchemaVersion: "1.1", ToolVersion: "v1.0.0", Module: "example.test/<script>alert(1)</script>",
 		Run: Run{Status: cover.RunPassed, Complete: true}, MeasurementMode: MeasurementSingleRun,
 		Summary:  Summary{Statement: metric},
 		Packages: []PackageReport{{Path: "example.test/mod/pkg", Status: "passed", Evidence: true, Summary: Summary{Statement: metric}, Files: []FileReport{{Path: "pkg/value.go", Summary: Summary{Statement: metric}, Functions: []FunctionReport{{Name: "Check<script>", Location: &location, Summary: Summary{Statement: metric}, Decisions: []DecisionReport{{Expression: "a < b && <script>", Location: location, DecisionCoverage: DecisionCoverage{True: true}, Conditions: []ConditionReport{{Expression: "a < b", Location: location}}}}}}}}}},
@@ -31,7 +31,7 @@ func TestWriteHTMLRendersGoHierarchyAndEscapesSourceText(t *testing.T) {
 		t.Fatal("HTML output is not deterministic")
 	}
 	html := first.String()
-	for _, required := range []string{"Package navigation", "example.test/mod/pkg", "pkg/value.go", "Check&lt;script&gt;", "a &lt; b &amp;&amp; &lt;script&gt;", "UC MC/DC", "Mask MC/DC", "gomcdc v1.0.0 (report schema 1.0)"} {
+	for _, required := range []string{"Package navigation", "example.test/mod/pkg", "pkg/value.go", "Check&lt;script&gt;", "a &lt; b &amp;&amp; &lt;script&gt;", "UC MC/DC", "Mask MC/DC", "gomcdc v1.0.0 (report schema 1.1)"} {
 		if !strings.Contains(html, required) {
 			t.Errorf("HTML missing %q", required)
 		}

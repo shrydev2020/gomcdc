@@ -1,11 +1,24 @@
 package c0map
 
 import (
+	"context"
+	"errors"
 	"reflect"
 	"testing"
 
 	"github.com/shrydev2020/gomcdc/internal/c0"
 )
+
+func TestBuildRejectsCanceledWork(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := Build(ctx, c0.Profile{Mode: c0.ModeSet}, "example.test/m", nil, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Build error = %v, want context.Canceled", err)
+	}
+}
 
 func TestBuildMapsLogicalAbsoluteAndGeneratedPaths(t *testing.T) {
 	t.Parallel()
@@ -15,7 +28,7 @@ func TestBuildMapsLogicalAbsoluteAndGeneratedPaths(t *testing.T) {
 		{Path: "gomcdc-generated/internal_p_p.go"},
 		{Path: "external.test/dependency/value.go"},
 	}}
-	result, err := Build(profile, "example.test/project", []Source{
+	result, err := Build(context.Background(), profile, "example.test/project", []Source{
 		{PackagePath: "example.test/project/internal/p", RelativePath: "internal/p/p.go", OriginalSource: []byte("package p\n")},
 		{PackagePath: "example.test/project", RelativePath: "root.go", OriginalSource: []byte("package project\n")},
 	}, []GeneratedFile{{Path: "gomcdc-generated/internal_p_p.go"}})
@@ -34,7 +47,7 @@ func TestBuildIsDeterministicAndCopiesSource(t *testing.T) {
 	t.Parallel()
 	source := []byte("package p\n")
 	profile := c0.Profile{Mode: c0.ModeSet, Files: []c0.ProfileFile{{Path: "m/p.go"}}}
-	first, err := Build(profile, "m", []Source{{PackagePath: "m", RelativePath: "p.go", OriginalSource: source}}, nil)
+	first, err := Build(context.Background(), profile, "m", []Source{{PackagePath: "m", RelativePath: "p.go", OriginalSource: source}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,12 +60,12 @@ func TestBuildIsDeterministicAndCopiesSource(t *testing.T) {
 func TestBuildRejectsAmbiguousSuffix(t *testing.T) {
 	t.Parallel()
 	profile := c0.Profile{Mode: c0.ModeSet, Files: []c0.ProfileFile{{Path: "/tmp/p/value.go"}}}
-	_, err := Build(profile, "m", []Source{
+	_, err := Build(context.Background(), profile, "m", []Source{
 		{PackagePath: "m/a", RelativePath: "p/value.go"},
 		{PackagePath: "m/b", RelativePath: "p/value.go"},
 	}, nil)
 	if err == nil {
-		t.Fatal("Build() error = nil, want ambiguity error")
+		t.Fatal("Build(context.Background(), ) error = nil, want ambiguity error")
 	}
 }
 
@@ -60,7 +73,7 @@ func TestBuildPrefersExactModulePathOverShorterSuffix(t *testing.T) {
 	t.Parallel()
 
 	profile := c0.Profile{Mode: c0.ModeSet, Files: []c0.ProfileFile{{Path: "m/nested/p/x.go"}}}
-	result, err := Build(profile, "m", []Source{
+	result, err := Build(context.Background(), profile, "m", []Source{
 		{PackagePath: "m/p", RelativePath: "p/x.go", OriginalSource: []byte("package p\n")},
 		{PackagePath: "m/nested/p", RelativePath: "nested/p/x.go", OriginalSource: []byte("package p\n")},
 	}, nil)
@@ -119,13 +132,13 @@ func F(value bool) int {
 			Count:      count,
 		})
 	}
-	sourceMap, err := Build(profile, "example.test/m", []Source{{
+	sourceMap, err := Build(context.Background(), profile, "example.test/m", []Source{{
 		PackagePath: "example.test/m/p", RelativePath: "p/p.go", OriginalSource: []byte(source),
 	}}, nil)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	report, err := c0.Analyze(profile, sourceMap, c0.Options{})
+	report, err := c0.Analyze(context.Background(), profile, sourceMap, c0.Options{})
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)
 	}
@@ -141,7 +154,7 @@ func TestBuildRetainsInventoryWhenProfileIsPartial(t *testing.T) {
 	t.Parallel()
 
 	const source = "package p\nfunc Known() {\n\tprintln(\"known\")\n}\n"
-	sourceMap, err := Build(c0.Profile{Mode: c0.ModeSet}, "example.test/m", []Source{{
+	sourceMap, err := Build(context.Background(), c0.Profile{Mode: c0.ModeSet}, "example.test/m", []Source{{
 		PackagePath: "example.test/m/p", RelativePath: "p/p.go", OriginalSource: []byte(source),
 	}}, nil)
 	if err != nil {
@@ -150,7 +163,7 @@ func TestBuildRetainsInventoryWhenProfileIsPartial(t *testing.T) {
 	if got, want := len(sourceMap.Files), 1; got != want {
 		t.Fatalf("inventory-only mapping count = %d, want %d", got, want)
 	}
-	report, err := c0.Analyze(c0.Profile{Mode: c0.ModeSet}, sourceMap, c0.Options{})
+	report, err := c0.Analyze(context.Background(), c0.Profile{Mode: c0.ModeSet}, sourceMap, c0.Options{})
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)
 	}
@@ -182,13 +195,13 @@ func TestBuildMapsLineDirectiveProfileToPhysicalOriginal(t *testing.T) {
 			})
 		}
 	}
-	sourceMap, err := Build(profile, "example.test/m", []Source{{
+	sourceMap, err := Build(context.Background(), profile, "example.test/m", []Source{{
 		PackagePath: "example.test/m/p", RelativePath: "p/original.go", OriginalSource: source,
 	}}, nil)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	report, err := c0.Analyze(profile, sourceMap, c0.Options{})
+	report, err := c0.Analyze(context.Background(), profile, sourceMap, c0.Options{})
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)
 	}
@@ -209,7 +222,7 @@ func TestBuildRetainsUserGeneratedSourceInventory(t *testing.T) {
 	t.Parallel()
 
 	const generated = "// Code generated by fixture. DO NOT EDIT.\npackage p\nfunc Generated() { println(\"x\") }\n"
-	sourceMap, err := Build(c0.Profile{Mode: c0.ModeSet}, "example.test/m", []Source{{
+	sourceMap, err := Build(context.Background(), c0.Profile{Mode: c0.ModeSet}, "example.test/m", []Source{{
 		PackagePath: "example.test/m/p", RelativePath: "p/generated.go", OriginalSource: []byte(generated),
 	}}, nil)
 	if err != nil {

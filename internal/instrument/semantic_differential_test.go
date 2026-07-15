@@ -48,7 +48,7 @@ func TestInstrumentationModesPreserveProgramSemantics(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			workspace := t.TempDir()
 			copyPath := writeSemanticFixture(t, workspace)
-			injected, err := runtimecov.Inject(workspace, semanticFixtureModule)
+			injected, err := runtimecov.Inject(context.Background(), workspace, semanticFixtureModule)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -87,7 +87,7 @@ func TestInstrumentationModesPreserveProgramSemantics(t *testing.T) {
 				t.Fatalf("semantic transcript changed\noriginal:     %s\ninstrumented: %s", wantTranscript, gotTranscript)
 			}
 
-			collected, err := runtimecov.CollectDetailed(dataDir)
+			collected, err := runtimecov.CollectDetailed(context.Background(), dataDir)
 			if err != nil {
 				t.Fatal(err)
 			}

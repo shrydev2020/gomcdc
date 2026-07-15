@@ -2,6 +2,7 @@ package compileraware
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,6 +32,20 @@ func TestPrepareBuildsCompilerAwareToolchain(t *testing.T) {
 	}
 	if text := string(output); !strings.Contains(text, " gomcdc-") {
 		t.Fatalf("compiler ID does not isolate the build cache: %q", text)
+	}
+}
+
+func TestCreateGOROOTViewRejectsCanceledWork(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	destination := filepath.Join(t.TempDir(), "goroot")
+	if err := createGOROOTView(ctx, t.TempDir(), destination); !errors.Is(err, context.Canceled) {
+		t.Fatalf("createGOROOTView error = %v, want context cancellation", err)
+	}
+	if _, err := os.Stat(destination); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("canceled GOROOT view was created: %v", err)
 	}
 }
 

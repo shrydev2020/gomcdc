@@ -34,6 +34,7 @@ const (
 	ExitMeasurementFailed = 2
 	ExitCoverageThreshold = 3
 	ExitInvalidUsage      = 4
+	ExitInterrupted       = 130
 )
 
 // classifyExit applies D28 precedence: usage, measurement, test, threshold.
@@ -105,6 +106,10 @@ func runAt(ctx context.Context, workingDir string, args []string, stdout, stderr
 		fmt.Fprintf(stderr, "gomcdc: %v\n", err)
 		return ExitInvalidUsage
 	}
+	if err := ctx.Err(); err != nil {
+		fmt.Fprintf(stderr, "gomcdc: interrupted: %v\n", err)
+		return ExitInterrupted
+	}
 	return runCoverage(ctx, workingDir, opts, stdout, stderr)
 }
 
@@ -151,6 +156,10 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		GOFLAGS:      &filteredGOFLAGS,
 	})
 	if err != nil {
+		if ctx.Err() != nil {
+			fmt.Fprintf(stderr, "gomcdc: interrupted: %v\n", ctx.Err())
+			return ExitInterrupted
+		}
 		fmt.Fprintf(stderr, "gomcdc: package load failed: %v\n", err)
 		return ExitMeasurementFailed
 	}
@@ -161,6 +170,10 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	analysisIncomplete := false
 	analysisUnknown := 0
 	for _, file := range loaded.Files {
+		if err := ctx.Err(); err != nil {
+			fmt.Fprintf(stderr, "gomcdc: source analysis interrupted: %v\n", err)
+			return ExitInterrupted
+		}
 		relative, relErr := filepath.Rel(loaded.ModuleRoot, file.Path)
 		if relErr != nil {
 			fmt.Fprintf(stderr, "gomcdc: resolve source path %q: %v\n", file.Path, relErr)
@@ -175,6 +188,10 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 			ModulePath:  loaded.ModulePath,
 			PackagePath: file.PackagePath,
 		})
+		if err := ctx.Err(); err != nil {
+			fmt.Fprintf(stderr, "gomcdc: source analysis interrupted: %v\n", err)
+			return ExitInterrupted
+		}
 		if analysisErr != nil {
 			// Invalid source in one package is ultimately a go test build failure.
 			// Keep other packages reportable instead of failing before their tests
@@ -201,6 +218,10 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	if err := analyzer.DetectCollisions(analyses); err != nil {
 		fmt.Fprintf(stderr, "gomcdc: source analysis failed: %v\n", err)
 		return ExitMeasurementFailed
+	}
+	if err := ctx.Err(); err != nil {
+		fmt.Fprintf(stderr, "gomcdc: interrupted before measurement: %v\n", err)
+		return ExitInterrupted
 	}
 
 	needsC0 := opts.metrics.Enabled(config.MetricStatement) || opts.metrics.Enabled(config.MetricFunction)
@@ -234,6 +255,10 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		}()
 	}
 	if measurementErr != nil {
+		if ctx.Err() != nil {
+			fmt.Fprintf(stderr, "gomcdc: interrupted: %v\n", ctx.Err())
+			return ExitInterrupted
+		}
 		fmt.Fprintf(stderr, "gomcdc: %v\n", measurementErr)
 		return ExitMeasurementFailed
 	}
@@ -246,7 +271,8 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		standardCoverRequested: needsC0, astRequested: needsASTRun,
 		astEvidenceUnknown: measurement.astEvidenceIntegrityUnknown, c0EvidenceUnknown: measurement.c0EvidenceIntegrityUnknown,
 		instrumentationUnknown: analysisUnknown, integrityFailure: measurement.integrityFailure, analysisIncomplete: analysisIncomplete,
-		errors: reportErrors, measurementDiagnostics: measurement.diagnostics,
+		interrupted: measurement.interrupted,
+		errors:      reportErrors, measurementDiagnostics: measurement.diagnostics,
 	})
 	built := report.Build(input)
 	strictFailure := opts.strict && (built.Instrumentation.HasGaps() || summaryAnalysisIncomplete(built.Summary) > 0)
@@ -270,6 +296,9 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	if err := writeReport(opts, built, workingDir, stdout); err != nil {
 		fmt.Fprintf(stderr, "gomcdc: report generation failed: %v\n", err)
 		return ExitMeasurementFailed
+	}
+	if measurement.interrupted {
+		return ExitInterrupted
 	}
 	if measurement.integrityFailure {
 		return classifyExit(false, true, false, false)
@@ -366,9 +395,15 @@ type packageInstrumentation struct {
 	files       []instrument.FileMapping
 }
 
-func instrumentPackages(moduleDir string, sources []sourceInstrumentation, runtimeImportPath string, compilerClauseSelection bool) ([]instrument.PackageResult, error) {
+func instrumentPackages(ctx context.Context, moduleDir string, sources []sourceInstrumentation, runtimeImportPath string, compilerClauseSelection bool) ([]instrument.PackageResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	groups := make(map[string]*packageInstrumentation)
 	for _, item := range sources {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if len(item.analysis.Decisions) == 0 && len(item.analysis.Clauses) == 0 {
 			continue
 		}
@@ -398,12 +433,16 @@ func instrumentPackages(moduleDir string, sources []sourceInstrumentation, runti
 	sort.Strings(keys)
 	results := make([]instrument.PackageResult, 0, len(keys))
 	for _, key := range keys {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		group := groups[key]
-		activeFiles, err := goFilesInDirectory(group.directory)
+		activeFiles, err := goFilesInDirectory(ctx, group.directory)
 		if err != nil {
 			return nil, err
 		}
 		result, err := instrument.InstrumentPackage(instrument.PackageOptions{
+			Context:                 ctx,
 			Directory:               group.directory,
 			PackageName:             group.packageName,
 			PackagePath:             group.packagePath,
@@ -421,13 +460,19 @@ func instrumentPackages(moduleDir string, sources []sourceInstrumentation, runti
 	return results, nil
 }
 
-func goFilesInDirectory(directory string) ([]string, error) {
+func goFilesInDirectory(ctx context.Context, directory string) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	entries, err := os.ReadDir(directory)
 	if err != nil {
 		return nil, fmt.Errorf("read copied package directory %q: %w", directory, err)
 	}
 	var files []string
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
 			continue
 		}
@@ -590,6 +635,7 @@ func goTestJSONEnabled(arguments []string) bool {
 }
 
 func collectC0(
+	ctx context.Context,
 	profilePath string,
 	loaded loader.Result,
 	sources []sourceInstrumentation,
@@ -605,10 +651,11 @@ func collectC0(
 	if err != nil {
 		return nil, fmt.Errorf("parse %q: %w", profilePath, err)
 	}
-	return buildC0Report(profile, loaded, sources, generated)
+	return buildC0Report(ctx, profile, loaded, sources, generated)
 }
 
 func buildC0Report(
+	ctx context.Context,
 	profile c0.Profile,
 	loaded loader.Result,
 	sources []sourceInstrumentation,
@@ -616,17 +663,20 @@ func buildC0Report(
 ) (*c0.Report, error) {
 	mappedSources := make([]c0map.Source, 0, len(sources))
 	for _, source := range sources {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		mappedSources = append(mappedSources, c0map.Source{
 			PackagePath:    source.loaded.PackagePath,
 			RelativePath:   source.analysis.RelativePath,
 			OriginalSource: append([]byte(nil), source.analysis.Source...),
 		})
 	}
-	sourceMap, err := c0map.Build(profile, loaded.ModulePath, mappedSources, generated)
+	sourceMap, err := c0map.Build(ctx, profile, loaded.ModulePath, mappedSources, generated)
 	if err != nil {
 		return nil, err
 	}
-	analyzed, err := c0.Analyze(profile, sourceMap, c0.Options{})
+	analyzed, err := c0.Analyze(ctx, profile, sourceMap, c0.Options{})
 	if err != nil {
 		return nil, err
 	}
@@ -646,35 +696,54 @@ type verifiedRuntimeEvidence struct {
 }
 
 func verifyRuntimeEvidence(
+	ctx context.Context,
 	decisions []cover.DecisionMetadata,
 	clauses []cover.ClauseMetadata,
 	recorded runtimecov.RecordedEvidence,
 	runID string,
 	noMatches []cover.NoMatchMetadata,
 ) (verifiedRuntimeEvidence, error) {
+	if err := ctx.Err(); err != nil {
+		return verifiedRuntimeEvidence{}, err
+	}
 	knownDecisions := make(map[cover.DecisionID]cover.DecisionMetadata, len(decisions))
 	knownPackages := make(map[string]struct{})
 	for _, decision := range decisions {
+		if err := ctx.Err(); err != nil {
+			return verifiedRuntimeEvidence{}, err
+		}
 		knownDecisions[decision.ID] = decision
 		knownPackages[decision.Package] = struct{}{}
 	}
 	knownClauses := make(map[cover.ClauseID]cover.ClauseMetadata, len(clauses))
 	for _, clause := range clauses {
+		if err := ctx.Err(); err != nil {
+			return verifiedRuntimeEvidence{}, err
+		}
 		knownClauses[clause.ID] = clause
 		knownPackages[clause.Package] = struct{}{}
 	}
 	knownNoMatches := make(map[cover.SwitchID]cover.NoMatchMetadata)
 	for _, noMatch := range noMatches {
+		if err := ctx.Err(); err != nil {
+			return verifiedRuntimeEvidence{}, err
+		}
 		knownNoMatches[noMatch.SwitchID] = noMatch
 		knownPackages[noMatch.Package] = struct{}{}
 	}
-	switchDecisions := conditionlessSwitchDecisionOrder(clauses)
+	switchDecisions, orderErr := conditionlessSwitchDecisionOrder(ctx, clauses)
+	if orderErr != nil {
+		return verifiedRuntimeEvidence{}, orderErr
+	}
 	verified := verifiedRuntimeEvidence{
 		Diagnostics: append([]runtimecov.Diagnostic(nil), recorded.Diagnostics...),
 		Files:       append([]runtimecov.ProcessFile(nil), recorded.Files...),
 	}
 	var validationErrors []error
 	for _, file := range recorded.Files {
+		if err := ctx.Err(); err != nil {
+			return verified, errors.Join(append(validationErrors, err)...)
+		}
 		if file.RunID == "" && file.PackagePath == "" && file.ProcessID == 0 {
 			continue
 		}
@@ -695,6 +764,9 @@ func verifyRuntimeEvidence(
 	observedSkips := make(map[skipCauseKey]map[cover.DecisionID]struct{})
 	candidateSkips := make(map[skipCauseKey][]cover.DecisionNotEvaluatedObservation)
 	for _, evaluation := range recorded.Evaluations {
+		if err := ctx.Err(); err != nil {
+			return verified, errors.Join(append(validationErrors, err)...)
+		}
 		metadata, exists := knownDecisions[evaluation.DecisionID]
 		if !exists {
 			validationErrors = append(validationErrors, fmt.Errorf("event contains unknown decision ID 0x%016x", uint64(evaluation.DecisionID)))
@@ -737,6 +809,9 @@ func verifyRuntimeEvidence(
 		validEvaluations[evaluation.Identity()] = evaluation
 	}
 	for _, observation := range recorded.NotEvaluatedDecisions {
+		if err := ctx.Err(); err != nil {
+			return verified, errors.Join(append(validationErrors, err)...)
+		}
 		target, targetExists := knownDecisions[observation.DecisionID]
 		cause, causeExists := knownDecisions[observation.CauseDecisionID]
 		identity := cover.EvaluationIdentity{
@@ -777,6 +852,9 @@ func verifyRuntimeEvidence(
 		candidateSkips[key] = append(candidateSkips[key], observation)
 	}
 	for _, evaluation := range validEvaluationCandidates {
+		if err := ctx.Err(); err != nil {
+			return verified, errors.Join(append(validationErrors, err)...)
+		}
 		identity := evaluation.Identity()
 		order, exists := switchDecisions[evaluation.DecisionID]
 		if !exists || evaluation.Status != cover.EvaluationCompleted || !evaluation.Result || len(order.suffix) == 0 {
@@ -797,6 +875,9 @@ func verifyRuntimeEvidence(
 		}
 		complete := true
 		for _, expected := range order.suffix {
+			if err := ctx.Err(); err != nil {
+				return verified, errors.Join(append(validationErrors, err)...)
+			}
 			if _, found := observed[expected]; !found {
 				complete = false
 				validationErrors = append(validationErrors, fmt.Errorf(
@@ -809,9 +890,16 @@ func verifyRuntimeEvidence(
 			verified.NotEvaluatedDecisions = append(verified.NotEvaluatedDecisions, candidateSkips[key]...)
 		}
 	}
-	verified.Evaluations = deduplicateVerifiedEvaluations(validEvaluationCandidates)
+	var deduplicateErr error
+	verified.Evaluations, deduplicateErr = deduplicateVerifiedEvaluations(ctx, validEvaluationCandidates)
+	if deduplicateErr != nil {
+		return verified, errors.Join(append(validationErrors, deduplicateErr)...)
+	}
 	verifiedClauses := make(map[cover.ClauseObservation]struct{})
 	for _, event := range recorded.ClauseEvents {
+		if err := ctx.Err(); err != nil {
+			return verified, errors.Join(append(validationErrors, err)...)
+		}
 		observation := cover.ClauseObservation{
 			SwitchID:         event.SwitchID,
 			ClauseID:         event.ClauseID,
@@ -910,12 +998,18 @@ type verifiedEvaluationKey struct {
 	Status      cover.EvaluationStatus
 }
 
-func deduplicateVerifiedEvaluations(evaluations []cover.DecisionEvaluation) []cover.DecisionEvaluation {
+func deduplicateVerifiedEvaluations(ctx context.Context, evaluations []cover.DecisionEvaluation) ([]cover.DecisionEvaluation, error) {
 	result := make([]cover.DecisionEvaluation, 0, len(evaluations))
 	seen := make(map[verifiedEvaluationKey]int, len(evaluations))
 	for _, evaluation := range evaluations {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
 		encodedConditions := make([]byte, len(evaluation.Conditions))
 		for index, condition := range evaluation.Conditions {
+			if err := ctx.Err(); err != nil {
+				return result, err
+			}
 			encodedConditions[index] = byte(condition)
 		}
 		key := verifiedEvaluationKey{
@@ -932,7 +1026,7 @@ func deduplicateVerifiedEvaluations(evaluations []cover.DecisionEvaluation) []co
 		seen[key] = len(result)
 		result = append(result, evaluation)
 	}
-	return result
+	return result, nil
 }
 
 type switchDecisionOrder struct {
@@ -941,21 +1035,33 @@ type switchDecisionOrder struct {
 	suffix   []cover.DecisionID
 }
 
-func conditionlessSwitchDecisionOrder(clauses []cover.ClauseMetadata) map[cover.DecisionID]switchDecisionOrder {
+func conditionlessSwitchDecisionOrder(ctx context.Context, clauses []cover.ClauseMetadata) (map[cover.DecisionID]switchDecisionOrder, error) {
 	groups := make(map[cover.ClauseGroupID][]cover.ClauseMetadata)
 	for _, clause := range clauses {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if clause.Kind == cover.ClauseConditionlessSwitch && clause.GroupID != 0 {
 			groups[clause.GroupID] = append(groups[clause.GroupID], clause)
 		}
 	}
 	result := make(map[cover.DecisionID]switchDecisionOrder)
 	for groupID, members := range groups {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		sort.Slice(members, func(i, j int) bool { return members[i].Index < members[j].Index })
 		var sequence []cover.DecisionID
 		for _, clause := range members {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			sequence = append(sequence, clause.DecisionIDs...)
 		}
 		for position, decisionID := range sequence {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			result[decisionID] = switchDecisionOrder{
 				groupID:  groupID,
 				position: position,
@@ -963,7 +1069,7 @@ func conditionlessSwitchDecisionOrder(clauses []cover.ClauseMetadata) map[cover.
 			}
 		}
 	}
-	return result
+	return result, nil
 }
 
 func formatRuntimeDiagnostic(diagnostic runtimecov.Diagnostic) string {
@@ -992,16 +1098,19 @@ func runtimeDiagnosticReportMessage(severity runtimecov.DiagnosticSeverity) stri
 	}
 }
 
-func runtimeDiagnosticsInvalidate(diagnostics []runtimecov.Diagnostic, astResult *gotest.Result) bool {
+func runtimeDiagnosticsInvalidate(ctx context.Context, diagnostics []runtimecov.Diagnostic, astResult *gotest.Result) (bool, error) {
 	if astResult != nil && len(astResult.RuntimeDiagnostics) > 0 {
-		return true
+		return true, nil
 	}
 	for _, diagnostic := range diagnostics {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
 		if diagnostic.Severity != runtimecov.DiagnosticRecoverable {
-			return true
+			return true, nil
 		}
 	}
-	return len(diagnostics) > 0 && (astResult == nil || astResult.Status == cover.RunPassed)
+	return len(diagnostics) > 0 && (astResult == nil || astResult.Status == cover.RunPassed), nil
 }
 
 func thresholdFailures(opts options, summary report.Summary) []string {

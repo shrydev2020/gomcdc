@@ -13,8 +13,8 @@ import (
 	"github.com/shrydev2020/gomcdc/internal/mcdc"
 )
 
-// SchemaVersion identifies the stable v1 JSON and text report schema.
-const SchemaVersion = "1.0"
+// SchemaVersion identifies the current stable JSON and text report schema.
+const SchemaVersion = "1.1"
 
 const statusDisabled = "disabled"
 

@@ -31,6 +31,7 @@ type reportAssembly struct {
 	c0EvidenceUnknown      bool
 	instrumentationUnknown int
 	integrityFailure       bool
+	interrupted            bool
 	analysisIncomplete     bool
 	errors                 []report.ReportError
 	measurementDiagnostics []measurementDiagnostic
@@ -41,6 +42,10 @@ type reportAssembly struct {
 // runCoverage remains responsible for sequencing and exit-code policy only.
 func assembleReportInput(assembly reportAssembly) report.Input {
 	overallStatus, overallFailure := combineTestResults(assembly.standardResult, assembly.astResult)
+	if assembly.interrupted {
+		overallStatus = cover.RunFailed
+		overallFailure = cover.RunFailureInterrupted
+	}
 	packageStatuses := packageStatuses(assembly.loaded, assembly.standardResult, assembly.astResult, overallStatus)
 	astPackageStatuses := astPackageStatuses(assembly.loaded, assembly.astResult)
 
@@ -69,7 +74,7 @@ func assembleReportInput(assembly reportAssembly) report.Input {
 		FailureKind:           overallFailure,
 		Results: report.RunResults{
 			Test:        testResultStatus(overallStatus),
-			Measurement: passFailResult(!assembly.analysisIncomplete),
+			Measurement: passFailResult(!assembly.analysisIncomplete && !assembly.interrupted),
 			Integrity:   passFailResult(!assembly.integrityFailure),
 			Strict:      report.ResultNotRequested,
 			Threshold:   report.ResultNotRequested,
@@ -114,7 +119,9 @@ func measurementRunErrors(name string, result *gotest.Result) []report.ReportErr
 	}
 	code := "go-test-" + string(result.FailureKind)
 	message := name + " go test failed"
-	if result.Status == cover.RunTimeout {
+	if result.FailureKind == cover.RunFailureInterrupted {
+		message = name + " go test interrupted"
+	} else if result.Status == cover.RunTimeout {
 		message = name + " go test timed out"
 	}
 	return []report.ReportError{{Phase: "test", Code: code, Message: message}}

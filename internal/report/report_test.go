@@ -15,10 +15,10 @@ import (
 	"github.com/shrydev2020/gomcdc/internal/report"
 )
 
-func TestSchemaVersionIsStableV1(t *testing.T) {
+func TestSchemaVersionIsCurrent(t *testing.T) {
 	t.Parallel()
-	if report.SchemaVersion != "1.0" {
-		t.Fatalf("SchemaVersion = %q, want stable v1 schema 1.0", report.SchemaVersion)
+	if report.SchemaVersion != "1.1" {
+		t.Fatalf("SchemaVersion = %q, want schema 1.1", report.SchemaVersion)
 	}
 }
 
@@ -289,7 +289,7 @@ func TestANDShortCircuitDistinguishesUniqueAndMasking(t *testing.T) {
 	}
 
 	text := report.RenderText(input)
-	if !strings.HasPrefix(text, "gomcdc unknown report schema 1.0\n") {
+	if !strings.HasPrefix(text, "gomcdc unknown report schema 1.1\n") {
 		t.Fatalf("text report does not distinguish tool and schema identities:\n%s", text)
 	}
 	for _, required := range []string{"Unique-Cause MC/DC", "Masking MC/DC", "witness=", "[false,not-evaluated] -> false", "[true,true] -> true", "completions=([false,true] [true,true])"} {

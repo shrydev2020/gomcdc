@@ -1,6 +1,7 @@
 package runtimecov
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -31,7 +32,7 @@ func BenchmarkCollectDetailed(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for index := 0; index < b.N; index++ {
-		if _, err := CollectDetailed(dataDir); err != nil {
+		if _, err := CollectDetailed(context.Background(), dataDir); err != nil {
 			b.Fatal(err)
 		}
 	}
