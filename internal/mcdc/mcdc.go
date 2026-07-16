@@ -19,10 +19,37 @@ type MCDCStrategy interface {
 // identical in the witness pair. Not-evaluated is a distinct state.
 type UniqueCauseStrategy struct{}
 
+// AnalysisBudget bounds one Masking MC/DC condition-obligation search. Zero
+// values select the corresponding default so MaskingStrategy{} is safe for
+// callers that do not need custom limits.
+type AnalysisBudget struct {
+	MaxCompletions   uint64
+	MaxWitnessPairs  uint64
+	MaxBooleanChecks uint64
+}
+
+const (
+	defaultMaxCompletions   = uint64(65_536)
+	defaultMaxWitnessPairs  = uint64(1_000_000)
+	defaultMaxBooleanChecks = uint64(4_000_000)
+)
+
+// DefaultMaskingAnalysisBudget returns the deterministic resource limits used
+// by a zero-value MaskingStrategy.
+func DefaultMaskingAnalysisBudget() AnalysisBudget {
+	return AnalysisBudget{
+		MaxCompletions:   defaultMaxCompletions,
+		MaxWitnessPairs:  defaultMaxWitnessPairs,
+		MaxBooleanChecks: defaultMaxBooleanChecks,
+	}
+}
+
 // MaskingStrategy uses the decision expression's Boolean difference. A target
 // must be pivotal in both completed witness vectors; not-evaluated values are
 // completed counterfactually without changing either recorded decision result.
-type MaskingStrategy struct{}
+type MaskingStrategy struct {
+	Budget AnalysisBudget
+}
 
 var _ MCDCStrategy = UniqueCauseStrategy{}
 var _ MCDCStrategy = MaskingStrategy{}
@@ -143,7 +170,7 @@ func (UniqueCauseStrategy) Analyze(metadata cover.DecisionMetadata, evaluations 
 // Analyze applies Masking MC/DC using the Boolean expression tree. Merely
 // allowing arbitrary non-target differences is insufficient: the target must
 // be pivotal (its Boolean difference must be true) in both completed vectors.
-func (MaskingStrategy) Analyze(metadata cover.DecisionMetadata, evaluations []cover.DecisionEvaluation) cover.MCDCResult {
+func (strategy MaskingStrategy) Analyze(metadata cover.DecisionMetadata, evaluations []cover.DecisionEvaluation) cover.MCDCResult {
 	count, indexes, issue := conditionLayout(metadata, evaluations)
 	result := baseResult(metadata.ID, cover.CoverageMetricMCDCMasking, indexes)
 	if issue != nil {
@@ -169,8 +196,27 @@ func (MaskingStrategy) Analyze(metadata cover.DecisionMetadata, evaluations []co
 	result.EvaluationsAnalyzed = len(prepared.evaluations)
 
 	for conditionPosition, target := range indexes {
-		completions := maskingCompletionsForTarget(metadata.ExpressionTree, prepared.evaluations, target)
 		conditionResult := &result.Conditions[conditionPosition]
+		if !structurallyPivotal(metadata.ExpressionTree, target, count) {
+			conditionResult.Analysis = cover.AnalysisInfeasible
+			conditionResult.Reason = "the boolean expression cannot make this condition pivotal"
+			continue
+		}
+
+		search := newMaskingSearchBudget(strategy.Budget)
+		completions := make([]completionResult, len(prepared.evaluations))
+		completionReady := make([]bool, len(prepared.evaluations))
+		completionFor := func(index int) completionResult {
+			if !completionReady[index] {
+				completions[index] = enumeratePivotalCompletionsBounded(
+					metadata.ExpressionTree, prepared.evaluations[index], target, search,
+				)
+				completionReady[index] = true
+			}
+			return completions[index]
+		}
+		exhaustive := true
+	searchPairs:
 		for first := 0; first < len(prepared.evaluations); first++ {
 			for second := first + 1; second < len(prepared.evaluations); second++ {
 				left := prepared.evaluations[first]
@@ -178,9 +224,20 @@ func (MaskingStrategy) Analyze(metadata cover.DecisionMetadata, evaluations []co
 				if !candidatePair(left, right, target) {
 					continue
 				}
-				for _, firstCompletion := range completions[first] {
-					for _, secondCompletion := range completions[second] {
-						witness, covered := findMaskingWitness(metadata.ExpressionTree, left, right, target, firstCompletion.values, secondCompletion.values)
+				firstCompletions := completionFor(first)
+				secondCompletions := completionFor(second)
+				exhaustive = exhaustive && firstCompletions.Exhaustive && secondCompletions.Exhaustive
+				for _, firstCompletion := range firstCompletions.Values {
+					for _, secondCompletion := range secondCompletions.Values {
+						if !search.consumeWitnessPair() {
+							exhaustive = false
+							break searchPairs
+						}
+						witness, covered, complete := findMaskingWitnessBounded(metadata.ExpressionTree, left, right, target, firstCompletion.values, secondCompletion.values, search)
+						if !complete {
+							exhaustive = false
+							break searchPairs
+						}
 						if covered {
 							conditionResult.Outcome = cover.CoverageOutcomeCovered
 							conditionResult.Witness = witness
@@ -197,9 +254,10 @@ func (MaskingStrategy) Analyze(metadata cover.DecisionMetadata, evaluations []co
 			}
 		}
 		if conditionResult.Witness == nil {
-			if !structurallyPivotal(metadata.ExpressionTree, target, count) {
-				conditionResult.Analysis = cover.AnalysisInfeasible
-				conditionResult.Reason = "the boolean expression cannot make this condition pivotal"
+			if !exhaustive || search.exceededReason != "" {
+				conditionResult.Outcome = cover.CoverageOutcomeUnknown
+				conditionResult.Analysis = cover.AnalysisIncomplete
+				conditionResult.Reason = search.reason()
 			} else {
 				conditionResult.Reason = "no pair makes the evaluated target pivotal in both completed vectors"
 			}
@@ -381,26 +439,15 @@ func maskedAt(expression *cover.BooleanExpression, values []bool, condition uint
 	return evaluateFull(expression, values, -1, false) == evaluateFull(expression, values, int(condition), !values[condition])
 }
 
-func maskingCompletionsForTarget(
-	expression *cover.BooleanExpression,
-	evaluations []cover.DecisionEvaluation,
-	target uint16,
-) [][]maskingCompletion {
-	completions := make([][]maskingCompletion, len(evaluations))
-	for evaluationIndex, evaluation := range evaluations {
-		completions[evaluationIndex] = enumeratePivotalCompletions(expression, evaluation, target)
-	}
-	return completions
-}
-
-func findMaskingWitness(
+func findMaskingWitnessBounded(
 	expression *cover.BooleanExpression,
 	first cover.DecisionEvaluation,
 	second cover.DecisionEvaluation,
 	target uint16,
 	firstCompletion []bool,
 	secondCompletion []bool,
-) (*cover.MCDCWitness, bool) {
+	search *maskingSearchBudget,
+) (*cover.MCDCWitness, bool, bool) {
 	unobserved := make([]uint16, 0)
 	masked := make([]uint16, 0)
 	for index := range first.Conditions {
@@ -415,8 +462,11 @@ func findMaskingWitness(
 		if firstCompletion[index] == secondCompletion[index] {
 			continue
 		}
+		if !search.consumeBooleanChecks(2) {
+			return nil, false, false
+		}
 		if !maskedAt(expression, firstCompletion, conditionIndex) || !maskedAt(expression, secondCompletion, conditionIndex) {
-			return nil, false
+			return nil, false, true
 		}
 		masked = append(masked, conditionIndex)
 	}
@@ -428,7 +478,7 @@ func findMaskingWitness(
 		SecondCompletion:     statesFromBools(secondCompletion),
 		UnobservedConditions: unobserved,
 		MaskedConditions:     masked,
-	}, true
+	}, true, true
 }
 
 // uniqueCauseStructurallyFeasible is a conservative proof over the expression

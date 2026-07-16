@@ -3,6 +3,7 @@ package mcdc
 import (
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	cover "github.com/shrydev2020/gomcdc/internal/coverage"
@@ -467,8 +468,9 @@ func TestMaskingSearchesAllCompletionsAndValidatesD19(t *testing.T) {
 	metadata := decisionMetadata(and(condition(0), or(condition(1), condition(2))))
 	first := completed(1, []cover.ConditionState{conditionFalse, notEvaluated, notEvaluated}, false)
 	second := completed(2, []cover.ConditionState{conditionTrue, conditionTrue, notEvaluated}, true)
-	if got := len(enumeratePivotalCompletions(metadata.ExpressionTree, first, 0)); got < 2 {
-		t.Fatalf("first evaluation completions = %d, want multiple feasible completions", got)
+	search := newMaskingSearchBudget(AnalysisBudget{})
+	if got := enumeratePivotalCompletionsBounded(metadata.ExpressionTree, first, 0, search); !got.Exhaustive || len(got.Values) < 2 {
+		t.Fatalf("first evaluation completions = %d exhaustive=%t, want multiple feasible completions", len(got.Values), got.Exhaustive)
 	}
 	result := (MaskingStrategy{}).Analyze(metadata, []cover.DecisionEvaluation{first, second})
 	witness := result.Conditions[0].Witness
@@ -482,6 +484,73 @@ func TestMaskingSearchesAllCompletionsAndValidatesD19(t *testing.T) {
 		if !oracleMasked(metadata.ExpressionTree, conditionStatesToBools(witness.FirstCompletion), uint16(index)) || !oracleMasked(metadata.ExpressionTree, conditionStatesToBools(witness.SecondCompletion), uint16(index)) {
 			t.Fatalf("witness violates D19 masking at condition %d: %#v", index, witness)
 		}
+	}
+}
+
+func TestMaskingCompletionLimitIsAnalysisIncomplete(t *testing.T) {
+	t.Parallel()
+	metadata := decisionMetadata(and(condition(0), or(condition(1), condition(2))))
+	evaluations := []cover.DecisionEvaluation{
+		completed(1, []cover.ConditionState{conditionFalse, notEvaluated, notEvaluated}, false),
+		completed(2, []cover.ConditionState{conditionTrue, conditionTrue, notEvaluated}, true),
+	}
+	result := (MaskingStrategy{Budget: AnalysisBudget{MaxCompletions: 1}}).Analyze(metadata, evaluations)
+	condition := result.Conditions[0]
+	if status := mcdcConditionStatus(condition); status != string(cover.CoverageAnalysisIncomplete) {
+		t.Fatalf("target status = %q, want analysis-incomplete: %#v", status, condition)
+	}
+	if !strings.Contains(condition.Reason, "completion count") {
+		t.Fatalf("target reason = %q, want completion limit", condition.Reason)
+	}
+}
+
+func TestMaskingWitnessPairLimitDoesNotBecomeNotCovered(t *testing.T) {
+	t.Parallel()
+	metadata := decisionMetadata(and(condition(0), or(condition(1), condition(2))))
+	evaluations := []cover.DecisionEvaluation{
+		completed(1, []cover.ConditionState{conditionFalse, notEvaluated, notEvaluated}, false),
+		completed(2, []cover.ConditionState{conditionTrue, conditionFalse, conditionTrue}, true),
+	}
+	if full := (MaskingStrategy{}).Analyze(metadata, evaluations); full.Conditions[0].Witness == nil {
+		t.Fatal("default search did not find the expected later completion witness")
+	}
+	result := (MaskingStrategy{Budget: AnalysisBudget{MaxWitnessPairs: 1}}).Analyze(metadata, evaluations)
+	condition := result.Conditions[0]
+	if status := mcdcConditionStatus(condition); status != string(cover.CoverageAnalysisIncomplete) {
+		t.Fatalf("target status = %q, want analysis-incomplete: %#v", status, condition)
+	}
+	if !strings.Contains(condition.Reason, "witness-pair count") {
+		t.Fatalf("target reason = %q, want witness-pair limit", condition.Reason)
+	}
+}
+
+func TestMaskingBooleanCheckLimitIsAnalysisIncomplete(t *testing.T) {
+	t.Parallel()
+	metadata := decisionMetadata(condition(0))
+	result := (MaskingStrategy{Budget: AnalysisBudget{MaxBooleanChecks: 1}}).Analyze(metadata, []cover.DecisionEvaluation{
+		completed(1, []cover.ConditionState{conditionFalse}, false),
+		completed(2, []cover.ConditionState{conditionTrue}, true),
+	})
+	condition := result.Conditions[0]
+	if status := mcdcConditionStatus(condition); status != string(cover.CoverageAnalysisIncomplete) {
+		t.Fatalf("target status = %q, want analysis-incomplete: %#v", status, condition)
+	}
+	if !strings.Contains(condition.Reason, "Boolean-check count") {
+		t.Fatalf("target reason = %q, want Boolean-check limit", condition.Reason)
+	}
+}
+
+func TestMaskingBudgetAllowsWitnessAtExactLimits(t *testing.T) {
+	t.Parallel()
+	metadata := decisionMetadata(condition(0))
+	result := (MaskingStrategy{Budget: AnalysisBudget{
+		MaxCompletions: 2, MaxWitnessPairs: 1, MaxBooleanChecks: 6,
+	}}).Analyze(metadata, []cover.DecisionEvaluation{
+		completed(1, []cover.ConditionState{conditionFalse}, false),
+		completed(2, []cover.ConditionState{conditionTrue}, true),
+	})
+	if status := mcdcConditionStatus(result.Conditions[0]); status != string(cover.CoverageCovered) {
+		t.Fatalf("target status = %q, want covered at exact budget: %#v", status, result.Conditions[0])
 	}
 }
 

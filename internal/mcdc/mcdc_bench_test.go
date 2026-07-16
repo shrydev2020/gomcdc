@@ -115,7 +115,10 @@ func BenchmarkMaskingCompletions(b *testing.B) {
 	b.ReportAllocs()
 	for index := 0; index < b.N; index++ {
 		for target := uint16(0); target < conditionCount; target++ {
-			_ = maskingCompletionsForTarget(expression, evaluations, target)
+			search := newMaskingSearchBudget(AnalysisBudget{})
+			for _, evaluation := range evaluations {
+				_ = enumeratePivotalCompletionsBounded(expression, evaluation, target, search)
+			}
 		}
 	}
 }

@@ -678,7 +678,7 @@ func buildDecisionReport(
 	decisionMetric := metricForOutcomes(coverage.Enabled(config.MetricDecision), state, trueCovered, falseCovered)
 
 	uniqueResult := (mcdc.UniqueCauseStrategy{}).Analyze(metadata, evaluations)
-	maskingResult := (mcdc.MaskingStrategy{}).Analyze(metadata, evaluations)
+	maskingResult := (mcdc.MaskingStrategy{Budget: mcdc.DefaultMaskingAnalysisBudget()}).Analyze(metadata, evaluations)
 	unique := buildMCDCAnalysis(uniqueResult, metadata.Conditions, state, coverage.Enabled(config.MetricMCDCUnique))
 	masking := buildMCDCAnalysis(maskingResult, metadata.Conditions, state, coverage.Enabled(config.MetricMCDCMasking))
 
