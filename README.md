@@ -14,12 +14,12 @@ test run fails or is interrupted.
 
 ## Requirements
 
-- Go 1.26.5 exactly
+- Go 1.26.x (1.26.0 or later)
 - A target using Go Modules
 - Linux or macOS
 
-The compiler-aware instrumentation is tied to the Go 1.26.5 compiler source.
-Another Go patch version is not treated as supported.
+The compiler-aware instrumentation validates exact anchors in the selected Go
+1.26.x compiler source and fails explicitly if that source is incompatible.
 
 ## Install
 
@@ -99,7 +99,7 @@ Interpret non-ordinary states separately:
 | `infeasible` | The obligation cannot be satisfied under the selected MC/DC strategy and Go's evaluation rules |
 | `unsupported-by-backend` | No active measurement backend can establish the obligation |
 | `unknown` | Evidence authority or measurement completeness is insufficient to decide coverage |
-| `analysis-incomplete` | Static source analysis did not complete for the obligation |
+| `analysis-incomplete` | Exact analysis did not complete for the obligation, including when Masking MC/DC reaches its bounded search budget |
 
 `unknown`, `unsupported-by-backend`, `infeasible`, and `analysis-incomplete` are
 not silently counted as ordinary misses. Failed tests, panics, timeouts, and

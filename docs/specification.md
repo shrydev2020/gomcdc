@@ -12,7 +12,7 @@ For one logical `gomcdc test` measurement request, the tool aggregates eleven me
 
 `gomcdc version` performs no measurement, writes the build identity to standard output, and exits with code 0. A module-version build uses `gomcdc vMAJOR.MINOR.PATCH` (or the complete Go module version); a local build uses `gomcdc devel`, optionally followed by the abbreviated VCS revision and `dirty`. Additional arguments are invalid CLI usage. The identity comes from Go build information and requires no linker flag.
 
-The target environment is Go 1.26.5, Go Modules, Linux, and macOS. Because the compiler-aware backend applies an exact-anchor patch to Go compiler source, it does not treat another Go patch version as supported. Target sources are packages in the main module returned by `go list` for the supplied package patterns. The target set excludes the standard library, external modules, vendor, tool-generated sources, and sources with the standard Go generated-code comment. `_test.go` belongs to AST metrics only with `--include-tests`; that flag does not affect Statement or Function.
+The target environment is stable Go 1.26.x (1.26.0 or later), Go Modules, Linux, and macOS. The compiler-aware backend applies an exact-anchor patch to the selected Go compiler source and fails explicitly when those anchors are incompatible. Target sources are packages in the main module returned by `go list` for the supplied package patterns. The target set excludes the standard library, external modules, vendor, tool-generated sources, and sources with the standard Go generated-code comment. `_test.go` belongs to AST metrics only with `--include-tests`; that flag does not affect Statement or Function.
 
 ## 2. Basic domains
 
@@ -301,7 +301,7 @@ The acceptance suite includes AND, OR, NOT, nested expressions, side effects, ev
 
 Completion requires successful `go test -count=1 ./...`, `go test -race -count=1 ./...`, and `go vet ./...`, and integer equality between fixture-module aggregation and the sum of its package aggregations.
 
-Repository CI measures gomcdc itself on Go 1.26.5/Linux and checks the module and critical-package floors in `.github/self-mcdc-baseline.json`. This baseline is a maintenance contract that prevents regression from the verified test suite, not a coverage-conformance threshold defined by this specification. A change that lowers a floor must identify and justify the obligations being lost during review.
+Repository CI measures gomcdc itself on the latest stable Go 1.26.x/Linux toolchain and checks the module and critical-package floors in `.github/self-mcdc-baseline.json`. This baseline is a maintenance contract that prevents regression from the verified test suite, not a coverage-conformance threshold defined by this specification. A change that lowers a floor must identify and justify the obligations being lost during review.
 
 ## 11. References
 

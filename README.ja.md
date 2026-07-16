@@ -13,12 +13,12 @@ test失敗や中断時も検証可能なpartial resultを保持します。
 
 ## 動作要件
 
-- 正確にGo 1.26.5
+- Go 1.26.x（1.26.0以降）
 - Go Modulesを使用する計測対象
 - LinuxまたはmacOS
 
-compiler-aware計装はGo 1.26.5のcompiler sourceに対応します。異なるGo patch
-versionは対応版として扱いません。
+compiler-aware計装は選択されたGo 1.26.xのcompiler sourceにexact anchorが存在する
+ことを検証し、互換性がなければ明示的に失敗します。
 
 ## インストール
 
@@ -97,7 +97,7 @@ gomcdc test --format html --output coverage-html ./...
 | `infeasible` | 選択したMC/DC strategyとGoの評価規則ではobligationを成立させられない |
 | `unsupported-by-backend` | 有効なmeasurement backendがobligationを証明できない |
 | `unknown` | evidence authorityまたはmeasurement completenessが不足して判定できない |
-| `analysis-incomplete` | obligationの静的source analysisが完了しなかった |
+| `analysis-incomplete` | Masking MC/DCの有限な探索予算到達を含め、obligationの正確なanalysisが完了しなかった |
 
 `unknown`、`unsupported-by-backend`、`infeasible`、`analysis-incomplete`を通常の
 未達へ暗黙変換しません。test失敗、panic、timeout、runtime evidenceのtruncated

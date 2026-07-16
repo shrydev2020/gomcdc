@@ -12,7 +12,7 @@
 
 `gomcdc version` は計測を行わず、build identityを標準出力へ書き、終了code 0を返す。module versionからbuildした場合は `gomcdc vMAJOR.MINOR.PATCH`（または完全なGo module version）、local buildでは `gomcdc devel` に省略VCS revisionと `dirty` を必要に応じて付加する。追加argumentはinvalid CLI usageである。identityはGo build informationから取得し、linker flagを必要としない。
 
-対象は Go 1.26.5、Go Modules、Linux、macOS とする。compiler-aware backendはGo compiler sourceへexact-anchor patchを適用するため、異なるGo patch versionを対応版として扱わない。対象 source は package pattern を `go list` して得た main module 内の package である。標準 library、外部 module、vendor、本ツール生成source、Go標準形式のgenerated-code commentを持つsourceは対象集合に含めない。`_test.go` は `--include-tests` 指定時だけ AST 系指標へ含め、このflagはStatement/Functionへ影響しない。
+対象は安定版Go 1.26.x（1.26.0以降）、Go Modules、Linux、macOS とする。compiler-aware backendは選択されたGo compiler sourceへexact-anchor patchを適用し、anchorに互換性がなければ明示的に失敗する。対象 source は package pattern を `go list` して得た main module 内の package である。標準 library、外部 module、vendor、本ツール生成source、Go標準形式のgenerated-code commentを持つsourceは対象集合に含めない。`_test.go` は `--include-tests` 指定時だけ AST 系指標へ含め、このflagはStatement/Functionへ影響しない。
 
 ## 2. 基本領域
 
@@ -301,7 +301,7 @@ HTMLはmodule summaryからpackageを主navigationとし、package内をfile、f
 
 `go test -count=1 ./...`、`go test -race -count=1 ./...`、`go vet ./...` が成功し、fixture module の module 集計と package 集計の整数和が一致することを完成条件とする。
 
-repository CI は Go 1.26.5/Linux でgomcdc自身を計測し、`.github/self-mcdc-baseline.json` のmoduleおよびcritical package別floorを検証する。このbaselineは仕様上のcoverage適合閾値ではなく、検証済みtest suiteからの後退を防ぐ保守契約である。floorを下げる変更は、失われるobligationと理由を明示してreviewしなければならない。
+repository CI は最新の安定版Go 1.26.x/Linuxでgomcdc自身を計測し、`.github/self-mcdc-baseline.json` のmoduleおよびcritical package別floorを検証する。このbaselineは仕様上のcoverage適合閾値ではなく、検証済みtest suiteからの後退を防ぐ保守契約である。floorを下げる変更は、失われるobligationと理由を明示してreviewしなければならない。
 
 ## 11. 参考資料
 
