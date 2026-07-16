@@ -1,4 +1,4 @@
-// Package compileraware prepares the Go 1.26.5 compiler producer used for exact
+// Package compileraware prepares the Go 1.26 compiler producer used for exact
 // switch dispatch evidence. It patches only the switch-lowering pass in a
 // disposable overlay; the installed GOROOT is never modified.
 package compileraware
@@ -15,13 +15,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/shrydev2020/gomcdc/internal/processgroup"
 )
 
 const compilerEnvironment = "GOMCDC_COMPILER"
-const supportedGoVersion = "go1.26.5"
+const supportedGoSeries = "go1.26"
 
 // Toolchain is the measurement-owned toolexec configuration.
 type Toolchain struct {
@@ -39,8 +40,8 @@ func Prepare(ctx context.Context, root string) (Toolchain, error) {
 	if err != nil {
 		return Toolchain{}, err
 	}
-	if version != supportedGoVersion {
-		return Toolchain{}, fmt.Errorf("compiler-aware clause selection requires %s, got %s", supportedGoVersion, version)
+	if !isSupportedGoVersion(version) {
+		return Toolchain{}, fmt.Errorf("compiler-aware clause selection requires stable Go 1.26.x, got %s", version)
 	}
 
 	realSwitchPath := filepath.Join(goroot, "src", "cmd", "compile", "internal", "walk", "switch.go")
@@ -119,6 +120,19 @@ esac
 		Toolexec:    toolexecPath,
 		Environment: map[string]string{compilerEnvironment: compilerPath},
 	}, nil
+}
+
+func isSupportedGoVersion(version string) bool {
+	prefix := supportedGoSeries + "."
+	if !strings.HasPrefix(version, prefix) {
+		return false
+	}
+	patch := strings.TrimPrefix(version, prefix)
+	if patch == "" {
+		return false
+	}
+	_, err := strconv.ParseUint(patch, 10, 64)
+	return err == nil
 }
 
 func readFile(ctx context.Context, path string) ([]byte, error) {
@@ -211,7 +225,7 @@ func setEnvironment(environment []string, key, value string) []string {
 	return append(environment, prefix+value)
 }
 
-// PatchSwitchSource adds dispatch-only probe trampolines to Go 1.26.5's switch
+// PatchSwitchSource adds dispatch-only probe trampolines to Go 1.26's switch
 // lowering. Exact anchors intentionally fail closed when the compiler source
 // changes instead of silently advertising evidence the producer cannot make.
 func PatchSwitchSource(source []byte) ([]byte, error) {

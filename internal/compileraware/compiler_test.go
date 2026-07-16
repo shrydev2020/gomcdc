@@ -91,7 +91,7 @@ func TestReadFileHonorsCancellation(t *testing.T) {
 }
 
 func TestPrepareRejectsUnsupportedGoVersionBeforeReadingCompilerSources(t *testing.T) {
-	for _, version := range []string{"go1.25.9", "go1.26.4", "go1.26.6", "go1.27.0"} {
+	for _, version := range []string{"go1.25.9", "go1.26", "go1.26rc1", "go1.26.5-custom", "go1.27.0", "devel go1.27-abcdef"} {
 		t.Run(version, func(t *testing.T) {
 			fakeBin := t.TempDir()
 			fakeGo := filepath.Join(fakeBin, "go")
@@ -102,11 +102,20 @@ func TestPrepareRejectsUnsupportedGoVersionBeforeReadingCompilerSources(t *testi
 			t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 			_, err := Prepare(context.Background(), t.TempDir())
-			want := "requires " + supportedGoVersion + ", got " + version
+			want := "requires stable Go 1.26.x, got " + version
 			if err == nil || !strings.Contains(err.Error(), want) {
 				t.Fatalf("Prepare error = %v, want %q", err, want)
 			}
 		})
+	}
+}
+
+func TestSupportedGoVersionAcceptsStableGo126Patches(t *testing.T) {
+	t.Parallel()
+	for _, version := range []string{"go1.26.0", "go1.26.4", "go1.26.5", "go1.26.999"} {
+		if !isSupportedGoVersion(version) {
+			t.Errorf("isSupportedGoVersion(%q) = false", version)
+		}
 	}
 }
 
@@ -131,8 +140,8 @@ func TestPrepareFailsClosedForInvalidSetup(t *testing.T) {
 
 	t.Run("missing compiler source", func(t *testing.T) {
 		goroot := t.TempDir()
-		setFakeGoEnv(t, goroot, supportedGoVersion)
-		if _, err := Prepare(context.Background(), t.TempDir()); err == nil || !strings.Contains(err.Error(), "read Go "+supportedGoVersion+" switch lowering source") {
+		setFakeGoEnv(t, goroot, "go1.26.0")
+		if _, err := Prepare(context.Background(), t.TempDir()); err == nil || !strings.Contains(err.Error(), "read Go go1.26.0 switch lowering source") {
 			t.Fatalf("Prepare error = %v", err)
 		}
 	})
@@ -146,7 +155,7 @@ func TestPrepareFailsClosedForInvalidSetup(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(switchDir, "switch.go"), []byte("package walk\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		setFakeGoEnv(t, goroot, supportedGoVersion)
+		setFakeGoEnv(t, goroot, "go1.26.0")
 		if _, err := Prepare(context.Background(), t.TempDir()); err == nil || !strings.Contains(err.Error(), "compiler source is incompatible") {
 			t.Fatalf("Prepare error = %v", err)
 		}
@@ -174,7 +183,7 @@ func setFakeGoEnv(t *testing.T, goroot, version string) {
 	t.Setenv("PATH", fakeBin)
 }
 
-func TestPatchInstalledGo1265SwitchLowering(t *testing.T) {
+func TestPatchInstalledGo126SwitchLowering(t *testing.T) {
 	command := exec.Command("go", "env", "GOROOT", "GOVERSION")
 	command.Env = buildEnvironment(os.Environ())
 	output, err := command.Output()
@@ -182,8 +191,8 @@ func TestPatchInstalledGo1265SwitchLowering(t *testing.T) {
 		t.Fatalf("go env: %v", err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	if len(lines) != 2 || lines[1] != supportedGoVersion {
-		t.Skipf("installed toolchain is not %s: %q", supportedGoVersion, strings.TrimSpace(string(output)))
+	if len(lines) != 2 || !isSupportedGoVersion(lines[1]) {
+		t.Skipf("installed toolchain is not stable Go 1.26.x: %q", strings.TrimSpace(string(output)))
 	}
 	source, err := os.ReadFile(filepath.Join(lines[0], "src", "cmd", "compile", "internal", "walk", "switch.go"))
 	if err != nil {
