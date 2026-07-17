@@ -84,6 +84,48 @@ func TestBuildLeavesHTMLSourceProjectionToWriteHTML(t *testing.T) {
 	}
 }
 
+func TestWithRunResultsAndErrorsMatchesRebuildAndCopiesErrors(t *testing.T) {
+	t.Parallel()
+
+	input := weightedInput()
+	built := report.Build(input)
+	results := report.RunResults{
+		Test:        report.ResultPassed,
+		Measurement: report.ResultPassed,
+		Integrity:   report.ResultPassed,
+		Strict:      report.ResultFailed,
+		Threshold:   report.ResultPassed,
+	}
+	errors := []report.ReportError{{
+		Phase: "validation", Code: "strict-coverage-gap", Message: "requested coverage contains a gap",
+	}}
+
+	updated := report.WithRunResultsAndErrors(built, results, errors)
+	wantInput := input
+	wantInput.Results = results
+	wantInput.Errors = errors
+	want := report.Build(wantInput)
+	updatedJSON, err := report.RenderJSONReport(updated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantJSON, err := report.RenderJSONReport(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(updatedJSON, wantJSON) {
+		t.Fatalf("run-results update differs from rebuilding coverage:\nupdated:\n%s\nrebuilt:\n%s", updatedJSON, wantJSON)
+	}
+
+	errors[0].Message = "mutated by caller"
+	if updated.Errors[0].Message == errors[0].Message {
+		t.Fatal("updated report retained caller mutation authority over errors")
+	}
+	if !reflect.DeepEqual(built.Summary, updated.Summary) || !reflect.DeepEqual(built.Packages, updated.Packages) {
+		t.Fatal("run-results update changed the coverage hierarchy")
+	}
+}
+
 func TestJSONAlwaysCarriesTypedErrorsWithoutSourceSnapshot(t *testing.T) {
 	t.Parallel()
 	input := report.Input{

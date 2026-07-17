@@ -219,6 +219,8 @@ Instrumentation preserves Go evaluation order, short-circuiting, evaluation and 
 
 Each test process writes to a distinct file whose name contains a collision-free encoding of package import path, PID, run ID, and nonce. Every record in one file has the same `(runID, packagePath, PID)` provenance. The CLI retains provenance on raw Decision and Clause events until it verifies the requested run, source-inventory ownership, process identity, condition count, states, result, status, and short-circuit consistency. Only verified events are projected to provenance-free, idempotent coverage observations. It constructs a partial report after test failure, build failure, timeout, panic, a truncated tail, or abnormal termination.
 
+This partial recovery covers abnormal termination of the test or tool process. It does not guarantee durability after host power loss, a kernel crash, filesystem corruption, or storage-device failure.
+
 SIGINT and SIGTERM cancel the active request. Cancellation terminates every measurement-owned subprocess group, starts no later measurement phase, and then permits only bounded evidence recovery, report construction, and workspace cleanup. Caller cancellation is `failureKind=interrupted`, not timeout or command failure.
 
 ### D26. go test

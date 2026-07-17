@@ -217,6 +217,8 @@ runtime は EvaluationID を衝突させず、package-global な current evaluat
 
 各 test process は package import path の衝突不能なencoding、PID、run ID、nonceを含む固有 file へ evidence を書く。同一file内の全recordは同じ `(runID, packagePath, PID)` provenanceを持つ。CLIはraw Decision eventとClause eventのprovenanceを、要求run、source inventory上の所有package、process identity、condition count、state、result、status、短絡規則の整合性を検証するまで保持する。検証済みeventだけをprovenance-freeで冪等なcoverage observationへ射影する。test failure、build failure、timeout、panic、truncated tail、異常終了時も取得済み evidence と静的 inventory から partial report を構成する。
 
+このpartial recoveryはtest processまたはtool processの異常終了を対象とする。hostの電源断、kernel crash、filesystem corruption、storage device故障後のdurabilityは保証しない。
+
 SIGINTとSIGTERMはactive requestをcancelする。cancellationはmeasurement所有の全subprocess groupを終了し、後続measurement phaseを開始せず、時間制限付きevidence recovery、report構築、workspace cleanupだけを許可する。caller cancellationはtimeoutやcommand failureではなく `failureKind=interrupted` とする。
 
 ### D26. go test

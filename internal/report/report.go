@@ -344,6 +344,16 @@ func Build(input Input) Report {
 	return context.report
 }
 
+// WithRunResultsAndErrors returns an already-built coverage hierarchy with
+// only the CLI-owned policy results and report errors replaced. It preserves
+// coverage summaries and witnesses and copies errors so callers retain no
+// mutation authority over the report.
+func WithRunResultsAndErrors(value Report, results RunResults, errors []ReportError) Report {
+	value.Run.Results = normalizeRunResults(results)
+	value.Errors = cloneReportErrors(errors)
+	return value
+}
+
 // buildHierarchy turns indexed evidence and static metadata into the
 // package/file/function/decision/clause tree. It does not finalize package
 // ordering or module summaries.

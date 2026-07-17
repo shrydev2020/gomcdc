@@ -11,7 +11,8 @@ import (
 )
 
 func TestPrepareBuildsCompilerAwareToolchain(t *testing.T) {
-	toolchain, err := Prepare(context.Background(), t.TempDir())
+	root := t.TempDir()
+	toolchain, err := Prepare(context.Background(), root)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -33,6 +34,18 @@ func TestPrepareBuildsCompilerAwareToolchain(t *testing.T) {
 	if text := string(output); !strings.Contains(text, " gomcdc-") {
 		t.Fatalf("compiler ID does not isolate the build cache: %q", text)
 	}
+	goroot, _, moduleCache, err := queryToolchain(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, viewErr := os.Stat(filepath.Join(root, "compiler-aware", "goroot"))
+	if requiresGOROOTView(goroot, moduleCache) {
+		if viewErr != nil {
+			t.Fatalf("downloaded toolchain lacks required GOROOT view: %v", viewErr)
+		}
+	} else if !errors.Is(viewErr, os.ErrNotExist) {
+		t.Fatalf("independent GOROOT created an unnecessary disposable view: %v", viewErr)
+	}
 }
 
 func TestCreateGOROOTViewRejectsCanceledWork(t *testing.T) {
@@ -46,6 +59,27 @@ func TestCreateGOROOTViewRejectsCanceledWork(t *testing.T) {
 	}
 	if _, err := os.Stat(destination); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("canceled GOROOT view was created: %v", err)
+	}
+}
+
+func TestGOROOTViewIsRequiredOnlyInsideModuleCache(t *testing.T) {
+	t.Parallel()
+	moduleCache := filepath.Join(t.TempDir(), "module-cache")
+	for _, test := range []struct {
+		name   string
+		goroot string
+		want   bool
+	}{
+		{name: "downloaded toolchain", goroot: filepath.Join(moduleCache, "golang.org", "toolchain@v0.0.1"), want: true},
+		{name: "module cache itself", goroot: moduleCache, want: true},
+		{name: "sibling prefix", goroot: moduleCache + "-installed"},
+		{name: "independent installation", goroot: filepath.Join(t.TempDir(), "go")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := requiresGOROOTView(test.goroot, moduleCache); got != test.want {
+				t.Fatalf("requiresGOROOTView(%q, %q) = %t, want %t", test.goroot, moduleCache, got, test.want)
+			}
+		})
 	}
 }
 
@@ -95,7 +129,7 @@ func TestPrepareRejectsUnsupportedGoVersionBeforeReadingCompilerSources(t *testi
 		t.Run(version, func(t *testing.T) {
 			fakeBin := t.TempDir()
 			fakeGo := filepath.Join(fakeBin, "go")
-			script := "#!/bin/sh\nprintf '%s\\n' '/missing/goroot' '" + version + "'\n"
+			script := "#!/bin/sh\nprintf '%s\\n' '/missing/goroot' '" + version + "' '/module-cache'\n"
 			if err := os.WriteFile(fakeGo, []byte(script), 0o700); err != nil {
 				t.Fatalf("write fake go command: %v", err)
 			}
@@ -176,7 +210,8 @@ func setFakeGoEnv(t *testing.T, goroot, version string) {
 	t.Helper()
 	fakeBin := t.TempDir()
 	fakeGo := filepath.Join(fakeBin, "go")
-	script := "#!/bin/sh\nprintf '%s\\n' '" + goroot + "' '" + version + "'\n"
+	moduleCache := filepath.Join(filepath.Dir(goroot), "module-cache")
+	script := "#!/bin/sh\nprintf '%s\\n' '" + goroot + "' '" + version + "' '" + moduleCache + "'\n"
 	if err := os.WriteFile(fakeGo, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}

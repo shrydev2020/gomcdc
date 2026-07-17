@@ -289,7 +289,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 			Phase: "threshold", Code: "coverage-threshold-failed", Message: threshold,
 		})
 	}
-	built = report.Build(input)
+	built = report.WithRunResultsAndErrors(built, input.Results, input.Errors)
 	if opts.format == "html" {
 		built = report.WithSourceViews(built, input.SourceFiles)
 	}

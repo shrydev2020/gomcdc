@@ -36,7 +36,7 @@ func Prepare(ctx context.Context, root string) (Toolchain, error) {
 	if root == "" {
 		return Toolchain{}, errors.New("compiler-aware tool directory is empty")
 	}
-	goroot, version, err := queryToolchain(ctx)
+	goroot, version, moduleCache, err := queryToolchain(ctx)
 	if err != nil {
 		return Toolchain{}, err
 	}
@@ -58,15 +58,17 @@ func Prepare(ctx context.Context, root string) (Toolchain, error) {
 	if err := filesystemEffect(ctx, func() error { return os.MkdirAll(toolDir, 0o700) }); err != nil {
 		return Toolchain{}, fmt.Errorf("create compiler-aware tool directory: %w", err)
 	}
-	// Downloaded toolchains live below GOMODCACHE, where cmd/go deliberately
-	// rejects overlay replacements. A disposable lexical GOROOT view keeps all
-	// installed files read-only through symlinks while giving the overlay a
-	// target outside GOMODCACHE.
-	shadowGOROOT := filepath.Join(toolDir, "goroot")
-	if err := createGOROOTView(ctx, goroot, shadowGOROOT); err != nil {
-		return Toolchain{}, err
+	// cmd/go rejects overlay replacements below GOMODCACHE. Only downloaded
+	// toolchains need a disposable lexical GOROOT view; an independently
+	// installed GOROOT can be used directly because overlays never mutate it.
+	buildGOROOT := goroot
+	if requiresGOROOTView(goroot, moduleCache) {
+		buildGOROOT = filepath.Join(toolDir, "goroot")
+		if err := createGOROOTView(ctx, goroot, buildGOROOT); err != nil {
+			return Toolchain{}, err
+		}
 	}
-	switchPath := filepath.Join(shadowGOROOT, "src", "cmd", "compile", "internal", "walk", "switch.go")
+	switchPath := filepath.Join(buildGOROOT, "src", "cmd", "compile", "internal", "walk", "switch.go")
 	patchedPath := filepath.Join(toolDir, "switch.go")
 	if err := filesystemEffect(ctx, func() error { return os.WriteFile(patchedPath, patched, 0o600) }); err != nil {
 		return Toolchain{}, fmt.Errorf("write patched switch lowering source: %w", err)
@@ -88,7 +90,7 @@ func Prepare(ctx context.Context, root string) (Toolchain, error) {
 	processgroup.ConfigureCancellation(command)
 	command.Dir = toolDir
 	command.Env = buildEnvironment(os.Environ())
-	command.Env = setEnvironment(command.Env, "GOROOT", shadowGOROOT)
+	command.Env = setEnvironment(command.Env, "GOROOT", buildGOROOT)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return Toolchain{}, fmt.Errorf("build compiler-aware Go %s compiler: %w: %s", version, err, strings.TrimSpace(string(output)))
@@ -190,19 +192,30 @@ func createGOROOTView(ctx context.Context, source, destination string) error {
 	})
 }
 
-func queryToolchain(ctx context.Context) (string, string, error) {
-	command := exec.CommandContext(ctx, "go", "env", "GOROOT", "GOVERSION")
+func requiresGOROOTView(goroot, moduleCache string) bool {
+	if goroot == "" || moduleCache == "" {
+		return false
+	}
+	relative, err := filepath.Rel(filepath.Clean(moduleCache), filepath.Clean(goroot))
+	if err != nil || filepath.IsAbs(relative) {
+		return false
+	}
+	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
+}
+
+func queryToolchain(ctx context.Context) (string, string, string, error) {
+	command := exec.CommandContext(ctx, "go", "env", "GOROOT", "GOVERSION", "GOMODCACHE")
 	processgroup.ConfigureCancellation(command)
 	command.Env = buildEnvironment(os.Environ())
 	output, err := command.Output()
 	if err != nil {
-		return "", "", fmt.Errorf("query Go toolchain for compiler-aware measurement: %w", err)
+		return "", "", "", fmt.Errorf("query Go toolchain for compiler-aware measurement: %w", err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	if len(lines) != 2 || lines[0] == "" || lines[1] == "" {
-		return "", "", fmt.Errorf("query Go toolchain returned %q", strings.TrimSpace(string(output)))
+	if len(lines) != 3 || lines[0] == "" || lines[1] == "" || lines[2] == "" {
+		return "", "", "", fmt.Errorf("query Go toolchain returned %q", strings.TrimSpace(string(output)))
 	}
-	return filepath.Clean(lines[0]), strings.TrimSpace(lines[1]), nil
+	return filepath.Clean(lines[0]), strings.TrimSpace(lines[1]), filepath.Clean(lines[2]), nil
 }
 
 func buildEnvironment(environment []string) []string {

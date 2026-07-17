@@ -60,6 +60,50 @@ func TestCollectDetailedDiagnosesNonEventEntries(t *testing.T) {
 	}
 }
 
+func TestCollectDetailedRecoversCommittedJournalBesideInterruptedCompaction(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	writeEventFile(t, dataDir, "committed.jsonl", `{"type":"evaluation","runId":"run","packagePath":"example.test/p","processId":1,"evaluationId":1,"decisionId":7,"conditions":[2],"result":true,"status":0}`+"\n")
+	artifact := filepath.Join(dataDir, "."+eventFilePrefix+"committed.jsonl.compact-interrupted")
+	if err := os.WriteFile(artifact, []byte(`{"type":"evaluation"`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	collected, err := CollectDetailed(t.Context(), dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(collected.Evaluations), 1; got != want {
+		t.Fatalf("evaluations = %d, want %d: %#v", got, want, collected.Evaluations)
+	}
+	if got := collected.Diagnostics; len(got) != 1 || got[0].Severity != DiagnosticRecoverable || got[0].Truncated {
+		t.Fatalf("compaction diagnostics = %#v, want one recoverable interruption", got)
+	}
+	if got, want := len(collected.Files), 1; got != want {
+		t.Fatalf("process files = %d, want %d", got, want)
+	}
+}
+
+func TestCompactionArtifactNameIsNarrow(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name string
+		want bool
+	}{
+		{name: "." + eventFilePrefix + "process" + eventFileSuffix + ".compact-123", want: true},
+		{name: "." + eventFilePrefix + "process" + eventFileSuffix + ".compact-"},
+		{name: "." + diagnosticFilePrefix + "process" + eventFileSuffix + ".compact-123"},
+		{name: eventFilePrefix + "process" + eventFileSuffix + ".compact-123"},
+		{name: ".unexpected.compact-123"},
+	} {
+		if got := validCompactionArtifactName(test.name); got != test.want {
+			t.Errorf("validCompactionArtifactName(%q) = %t, want %t", test.name, got, test.want)
+		}
+	}
+}
+
 func TestInjectCreatesDistinctGeneratedInternalPackages(t *testing.T) {
 	moduleDir := t.TempDir()
 	canonicalModuleDir, err := filepath.EvalSymlinks(moduleDir)
@@ -550,10 +594,10 @@ func main() {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The compacted file contains one record per unique completed vector, any
-	// active begin, and at most one compaction interval of append-only tail.
-	if records := strings.Count(string(contents), "\n"); records > 301+1+256 {
-		t.Fatalf("compacted event records = %d; duplicate history was not bounded", records)
+	// The compacted file contains one unique snapshot and a byte-bounded
+	// append-only tail. Its size does not grow with all 10,000 loop iterations.
+	if size := len(contents); size > 2<<20 {
+		t.Fatalf("compacted event bytes = %d; duplicate history was not bounded", size)
 	}
 
 	collected, err := CollectDetailed(context.Background(), dataDir)
@@ -563,23 +607,7 @@ func main() {
 	if len(collected.Diagnostics) != 0 {
 		t.Fatalf("diagnostics = %#v", collected.Diagnostics)
 	}
-	if got, want := len(collected.Evaluations), 302; got != want {
-		t.Fatalf("unique evaluations = %d, want %d", got, want)
-	}
-	byDecision := make(map[cover.DecisionID]int)
-	aborted := 0
-	for _, evaluation := range collected.Evaluations {
-		byDecision[evaluation.DecisionID]++
-		if evaluation.Status == cover.EvaluationAborted {
-			aborted++
-		}
-	}
-	if byDecision[7] != 1 || byDecision[9] != 300 || byDecision[11] != 1 || aborted != 1 {
-		t.Fatalf("collected vectors = %#v, aborted=%d", byDecision, aborted)
-	}
-	if got := collected.NotEvaluatedDecisions; len(got) != 2 || got[0].DecisionID != 8 || got[1].DecisionID != 9 || got[0].CauseEvaluationID != got[1].CauseEvaluationID {
-		t.Fatalf("compacted skip evidence = %#v", got)
-	}
+	assertWriterProbeEvidence(t, collected)
 }
 
 func TestInjectedRuntimeSwallowsRecorderFailuresAndPreservesValues(t *testing.T) {
@@ -607,6 +635,14 @@ func main() {
 	notDirectory := filepath.Join(t.TempDir(), "file")
 	if err := os.WriteFile(notDirectory, []byte("not a directory"), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	withoutDataDir := exec.Command("go", "run", ".")
+	withoutDataDir.Dir = moduleDir
+	withoutDataDir.Env = environmentReplace(os.Environ(), DataDirEnv, "")
+	if output, err := withoutDataDir.CombinedOutput(); err != nil {
+		t.Fatalf("disabled recorder changed behavior: %v\n%s", err, output)
+	} else if len(output) != 0 {
+		t.Fatalf("disabled recorder produced output: %s", output)
 	}
 	command := exec.Command("go", "run", ".")
 	command.Dir = moduleDir
