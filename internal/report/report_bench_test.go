@@ -43,6 +43,39 @@ func BenchmarkReportPolicyFinalization(b *testing.B) {
 	})
 }
 
+func BenchmarkReportBuildMetricSelection(b *testing.B) {
+	input := reportBuildBenchmarkInput()
+	cases := []struct {
+		name     string
+		coverage config.CoverageSet
+	}{
+		{name: "all-metrics", coverage: config.AllCoverage()},
+		{name: "decision-condition-unique", coverage: config.CoverageSet{
+			config.MetricDecision:   true,
+			config.MetricCondition:  true,
+			config.MetricMCDCUnique: true,
+		}},
+		{name: "decision-condition-masking", coverage: config.CoverageSet{
+			config.MetricDecision:    true,
+			config.MetricCondition:   true,
+			config.MetricMCDCMasking: true,
+		}},
+		{name: "decision-condition-only", coverage: config.CoverageSet{
+			config.MetricDecision:  true,
+			config.MetricCondition: true,
+		}},
+	}
+	for _, test := range cases {
+		b.Run(test.name, func(b *testing.B) {
+			input.Coverage = test.coverage
+			b.ReportAllocs()
+			for range b.N {
+				benchmarkReportSink = report.Build(input)
+			}
+		})
+	}
+}
+
 func reportBuildBenchmarkInput() report.Input {
 	const (
 		decisionCount  = 24

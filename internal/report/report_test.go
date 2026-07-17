@@ -657,6 +657,47 @@ func TestZeroMetricsAndDisabledMetricsStayPresent(t *testing.T) {
 	}
 }
 
+func TestDisabledMCDCReportsStayPresentWithoutAnalysis(t *testing.T) {
+	t.Parallel()
+
+	decision := andDecision(10, "example.com/m/p", "p.go", "Allow")
+	built := report.Build(report.Input{
+		ModulePath: "example.com/m",
+		Coverage: config.CoverageSet{
+			config.MetricDecision:  true,
+			config.MetricCondition: true,
+		},
+		RunStatus: cover.RunPassed,
+		Complete:  true,
+		Decisions: []cover.DecisionMetadata{decision},
+		Evaluations: []cover.DecisionEvaluation{
+			completedEvaluation(10, 1, false, cover.ConditionFalse, cover.ConditionNotEvaluated),
+			completedEvaluation(10, 2, true, cover.ConditionTrue, cover.ConditionTrue),
+			completedEvaluation(10, 3, false, cover.ConditionTrue, cover.ConditionFalse),
+		},
+	})
+	got := built.Packages[0].Files[0].Functions[0].Decisions[0]
+	for name, analysis := range map[string]report.MCDCAnalysisReport{
+		"unique":  got.MCDCUnique,
+		"masking": got.MCDCMasking,
+	} {
+		if analysis.Enabled || analysis.Status != "disabled" {
+			t.Errorf("%s disabled state = enabled %t, status %q", name, analysis.Enabled, analysis.Status)
+		}
+		if analysis.EvaluationsAnalyzed != 0 || analysis.AbortedEvaluations != 0 || analysis.InvalidEvaluations != 0 {
+			t.Errorf("%s disabled analysis retained work counters: %#v", name, analysis)
+		}
+		if len(analysis.Conditions) != len(decision.Conditions) {
+			t.Errorf("%s condition slots = %d, want %d", name, len(analysis.Conditions), len(decision.Conditions))
+		}
+		for _, condition := range analysis.Conditions {
+			if condition.Status != "disabled" || condition.Witness != nil {
+				t.Errorf("%s disabled condition = %#v", name, condition)
+			}
+		}
+	}
+}
+
 func TestTextMetricUsesSpecificationCoverageForm(t *testing.T) {
 	t.Parallel()
 

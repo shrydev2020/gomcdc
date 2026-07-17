@@ -687,10 +687,18 @@ func buildDecisionReport(
 	}
 	decisionMetric := metricForOutcomes(coverage.Enabled(config.MetricDecision), state, trueCovered, falseCovered)
 
-	uniqueResult := (mcdc.UniqueCauseStrategy{}).Analyze(metadata, evaluations)
-	maskingResult := (mcdc.MaskingStrategy{Budget: mcdc.DefaultMaskingAnalysisBudget()}).Analyze(metadata, evaluations)
-	unique := buildMCDCAnalysis(uniqueResult, metadata.Conditions, state, coverage.Enabled(config.MetricMCDCUnique))
-	masking := buildMCDCAnalysis(maskingResult, metadata.Conditions, state, coverage.Enabled(config.MetricMCDCMasking))
+	uniqueEnabled := coverage.Enabled(config.MetricMCDCUnique)
+	maskingEnabled := coverage.Enabled(config.MetricMCDCMasking)
+	var uniqueResult cover.MCDCResult
+	if uniqueEnabled {
+		uniqueResult = (mcdc.UniqueCauseStrategy{}).Analyze(metadata, evaluations)
+	}
+	var maskingResult cover.MCDCResult
+	if maskingEnabled {
+		maskingResult = (mcdc.MaskingStrategy{Budget: mcdc.DefaultMaskingAnalysisBudget()}).Analyze(metadata, evaluations)
+	}
+	unique := buildMCDCAnalysis(uniqueResult, metadata.Conditions, state, uniqueEnabled)
+	masking := buildMCDCAnalysis(maskingResult, metadata.Conditions, state, maskingEnabled)
 
 	conditions := append([]cover.ConditionMetadata(nil), metadata.Conditions...)
 	sort.Slice(conditions, func(i, j int) bool { return conditions[i].Index < conditions[j].Index })

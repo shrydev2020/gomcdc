@@ -86,6 +86,30 @@ Homebrew等の独立installではreal GOROOTをread-only overlay targetとして
 - compiler patch IDでGo build cacheを分離する。
 - process-global/persistent cacheはcleanup、lock、invalidationのauthorityを新設するため導入しない。
 
+## FSM-005: 選択されていないMC/DC解析を実行しない
+
+`buildDecisionReport`は`CoverageSet`でUnique-Cause MC/DCとMasking MC/DCが無効でも、両方の
+strategyを呼び出してから、結果の表示だけを`disabled`にしていた。MC/DCを要求しない
+Decision/Condition計測でも、複雑なconditionのwitness探索とevaluation準備が走る。
+
+指標選択のauthorityは`CoverageSet`に置いたまま、選択されたstrategyだけを呼び出す。
+公開reportでは無効なMC/DCのfieldとcondition slotを従来どおり残し、`enabled=false`、
+`status=disabled`、解析counter 0、witnessなしとする。MC/DCが一つでも選択されている場合は、
+そのstrategyのcoverage意味、resource budget、witnessを変更しない。
+
+focused benchmarkは8 conditions、24 decisions、全truth vectorを使い、全指標、Uniqueだけ、
+Maskingだけ、MC/DCなしを別々に測る。既存の24〜64 conditionsのMasking重厚benchmarkも
+回帰gateにする。これはMC/DCを含まない選択の最適化であり、全11指標self measurementの
+61.99秒baselineが同じ変更で短縮されるとは主張しない。
+
+## FSM-006: integration test待ちを証拠単位で確認する
+
+`go test -json -count=1 ./internal/cli`でtest別wall timeを取得し、上位testが起動するnested
+commandを調べる。HTML、全指標JSON、C0独立照合、failure/partial evidenceのように異なる
+契約を検証するcommandは、同じfixtureを使うだけで重複とはみなさない。test共有cache、
+test集合削減、standard-coverとASTの並列実行は、証拠の独立性、test副作用、I/O競合を変える
+ため、この修正へ含めない。
+
 ## 完了条件
 
 - productionの`runCoverage`がcoverage hierarchyを一回だけbuildする。
@@ -93,6 +117,8 @@ Homebrew等の独立installではreal GOROOTをread-only overlay targetとして
 - 独立GOROOTでshadow viewを作らず、downloaded toolchain判定を境界testで固定する。
 - JSON/HTML summary、witness、diagnostic、run results、errors、exit codeが変わらない。
 - focused `internal/cli` AST commandを同一coverage選択で変更前後比較する。
+- MC/DCを選択しないreport buildがstrategyを呼ばず、無効な公開fieldを保持する。
+- Uniqueだけ、Maskingだけ、両方、どちらもなしの複雑条件benchmarkを保存する。
 - 通常test、race、vet、self measurementが通る。
 - full commandの改善率をpackage表示時間だけから算出しない。
 - 残るnested subprocess待ちはreport/compiler修正の未達とせず、別の根因がある場合だけ分離する。
@@ -108,7 +134,44 @@ Homebrew等の独立installではreal GOROOTをread-only overlay targetとして
 ## 実施status
 
 2026-07-17にFSM-001〜004を実装し、focused benchmark/profile、通常test、race、vet、全11指標
-HTML self measurementを完了した。測定値と制限は
+HTML self measurementを完了した。続いてFSM-005/006を追加し、integration test別wall timeと
+複雑条件の指標選択benchmarkを取得した。FSM-005/006も実装、通常test、race、vetまで完了
+した。FSM-001〜004の測定値と制限は
 `issues/runtime-journal-io-optimization-results.md`の「第2段階」へ保存した。残るcritical path
 は測定対象のintegration testが待つnested Go subprocessであり、test削減やdual-run統合を
 この計画の追加修正として行わない。
+
+## FSM-005/006 実施結果
+
+変更前は8 conditions、24 decisions、各decisionの全256 truth vectorを持つinputで、
+Decision/Conditionだけを選択しても両MC/DC strategyが走っていた。5回benchmarkの中央値は
+次のようになった。
+
+| report build | median ns/op | B/op | allocs/op |
+|---|---:|---:|---:|
+| MC/DCなし・変更前 | 5,681,414 | 6,865,597 | 33,923 |
+| 全指標・変更後 | 5,542,925 | 6,868,540前後 | 34,287 |
+| Uniqueだけ・変更後 | 3,861,942 | 5,606,174前後 | 27,964 |
+| Maskingだけ・変更後 | 4,031,824 | 5,922,900前後 | 32,318 |
+| MC/DCなし・変更後 | 2,324,711 | 4,660,529 | 25,995 |
+
+MC/DCなしはwall time 59.1%、allocation bytes 32.1%、allocation回数23.4%減となった。
+全指標では従来どおり両strategyを実行し、片方だけなら選択されたstrategyだけを実行する。
+disabled field、condition slot、JSON schemaは残し、解析していないcounterを0、witnessをnilに
+固定するtestを追加した。
+
+Maskingの既存重厚benchmarkも`-benchtime=3x -count=3`で通過した。32-condition全covered、
+24-condition no-witness、48-conditionの既定search-state limitとevaluation-pair limit、
+64-condition high-unobservedを含み、resource limit時の`analysis-incomplete`を維持した。
+
+`internal/cli`のtest別wall time上位は、全指標JSONとC0独立照合を行うtestが5.10秒、全指標
+HTMLが4.25秒、failure/interrupt evidenceが2.81秒、partial multi-package reportが2.45秒
+だった。先頭2件だけでもnested `go test`は、AST/standardの独立run、HTML、全指標JSON、
+C0照合という別の証拠を生成する。共有cacheやtest統合でこの時間を消すと、製品処理ではなく
+test契約を弱めるため採用しなかった。
+
+最終gateは`go test -count=1 ./...`（command 28.45秒）、`go test -race -count=1 ./...`、
+`go vet ./...`がすべて成功した。MC/DCを含む全11指標経路の計算分岐は変わらないため、既に
+61.99秒のbaselineを持つHTML self measurementをSSDへ再出力して改善率を装わなかった。
+したがって今回の59.1%は「MC/DCを選択しない複雑条件report build」の改善率であり、全11
+指標commandの追加高速化率ではない。
