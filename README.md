@@ -106,6 +106,12 @@ not silently counted as ordinary misses. Failed tests, panics, timeouts, and
 truncated runtime evidence produce a partial report when trustworthy evidence
 survives.
 
+Masking MC/DC uses exact search. Its built-in limit for each condition obligation
+is 1,000,000 candidate evaluation pairs, 4,000,000 search states, and 64 MiB of
+search workspace. A search that would exceed a limit yields
+`analysis-incomplete`; it is never reported as `not-covered` or `infeasible`.
+These limits currently have no CLI override.
+
 ## Common options
 
 ```sh

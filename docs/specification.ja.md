@@ -159,6 +159,15 @@ condition `i` は、completed evaluation pair `(p,q)` と completion `(x,y) ∈ 
 
 観測 pair、completion、masked condition index を witness として保存する。
 
+検証済みread-once AND/OR/NOT式modelに対し、Masking MC/DCはcompletionの直積を列挙せず、
+両completionをexact joint searchする。condition obligationごとのdefault上限は、candidate
+evaluation pair 1,000,000件、新しく展開するjoint search state 4,000,000件、主要solver
+backing array 64 MiBである。workspace単位にはflatten済み式、memo table、completion
+buffer、candidate evaluation indexを含め、検証済みinput data、result witness、goroutine
+stackは含めない。上限を超える探索が必要な場合は`analysis-incomplete`とし、上限ちょうどで
+witnessへ到達した場合は`covered`とする。`infeasible`は、targetがpivotalになり得ないことを
+別の構造検査で証明した場合だけ使用する。
+
 MC/DC percentageはcondition occurrenceの独立影響obligation達成率である。完全なMC/DC達成には対応するDecision CoverageとCondition Coverageも必要である。同じsource textのcondition occurrence間に値の同一性を仮定しない。witnessが未証明のoccurrence couplingを必要とする場合、または正確な探索がresource limitで完了しない場合はanalysis-incompleteとする。
 
 MC/DC 解析は strategy ごとの pure function とする。

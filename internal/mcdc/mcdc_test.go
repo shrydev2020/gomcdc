@@ -463,15 +463,11 @@ func TestMaskingWitnessRecordsVaryingMaskedConditions(t *testing.T) {
 	}
 }
 
-func TestMaskingSearchesAllCompletionsAndValidatesD19(t *testing.T) {
+func TestMaskingJointSolverValidatesD19(t *testing.T) {
 	t.Parallel()
 	metadata := decisionMetadata(and(condition(0), or(condition(1), condition(2))))
 	first := completed(1, []cover.ConditionState{conditionFalse, notEvaluated, notEvaluated}, false)
 	second := completed(2, []cover.ConditionState{conditionTrue, conditionTrue, notEvaluated}, true)
-	search := newMaskingSearchBudget(AnalysisBudget{})
-	if got := enumeratePivotalCompletionsBounded(metadata.ExpressionTree, first, 0, search); !got.Exhaustive || len(got.Values) < 2 {
-		t.Fatalf("first evaluation completions = %d exhaustive=%t, want multiple feasible completions", len(got.Values), got.Exhaustive)
-	}
 	result := (MaskingStrategy{}).Analyze(metadata, []cover.DecisionEvaluation{first, second})
 	witness := result.Conditions[0].Witness
 	if mcdcConditionStatus(result.Conditions[0]) != string(cover.CoverageCovered) || witness == nil {
@@ -487,70 +483,77 @@ func TestMaskingSearchesAllCompletionsAndValidatesD19(t *testing.T) {
 	}
 }
 
-func TestMaskingCompletionLimitIsAnalysisIncomplete(t *testing.T) {
+func TestMaskingEvaluationPairLimitIsAnalysisIncomplete(t *testing.T) {
 	t.Parallel()
-	metadata := decisionMetadata(and(condition(0), or(condition(1), condition(2))))
+	metadata := decisionMetadata(or(and(condition(0), condition(1)), condition(2)))
 	evaluations := []cover.DecisionEvaluation{
-		completed(1, []cover.ConditionState{conditionFalse, notEvaluated, notEvaluated}, false),
-		completed(2, []cover.ConditionState{conditionTrue, conditionTrue, notEvaluated}, true),
-	}
-	result := (MaskingStrategy{Budget: AnalysisBudget{MaxCompletions: 1}}).Analyze(metadata, evaluations)
-	condition := result.Conditions[0]
-	if status := mcdcConditionStatus(condition); status != string(cover.CoverageAnalysisIncomplete) {
-		t.Fatalf("target status = %q, want analysis-incomplete: %#v", status, condition)
-	}
-	if !strings.Contains(condition.Reason, "completion count") {
-		t.Fatalf("target reason = %q, want completion limit", condition.Reason)
-	}
-}
-
-func TestMaskingWitnessPairLimitDoesNotBecomeNotCovered(t *testing.T) {
-	t.Parallel()
-	metadata := decisionMetadata(and(condition(0), or(condition(1), condition(2))))
-	evaluations := []cover.DecisionEvaluation{
-		completed(1, []cover.ConditionState{conditionFalse, notEvaluated, notEvaluated}, false),
+		completed(1, []cover.ConditionState{conditionFalse, notEvaluated, conditionFalse}, false),
 		completed(2, []cover.ConditionState{conditionTrue, conditionFalse, conditionTrue}, true),
+		completed(3, []cover.ConditionState{conditionTrue, conditionTrue, notEvaluated}, true),
 	}
-	if full := (MaskingStrategy{}).Analyze(metadata, evaluations); full.Conditions[0].Witness == nil {
-		t.Fatal("default search did not find the expected later completion witness")
-	}
-	result := (MaskingStrategy{Budget: AnalysisBudget{MaxWitnessPairs: 1}}).Analyze(metadata, evaluations)
+	result := (MaskingStrategy{Budget: AnalysisBudget{MaxEvaluationPairs: 1}}).Analyze(metadata, evaluations)
 	condition := result.Conditions[0]
 	if status := mcdcConditionStatus(condition); status != string(cover.CoverageAnalysisIncomplete) {
 		t.Fatalf("target status = %q, want analysis-incomplete: %#v", status, condition)
 	}
-	if !strings.Contains(condition.Reason, "witness-pair count") {
-		t.Fatalf("target reason = %q, want witness-pair limit", condition.Reason)
+	if !strings.Contains(condition.Reason, "evaluation-pair count") {
+		t.Fatalf("target reason = %q, want evaluation-pair limit", condition.Reason)
+	}
+	exact := (MaskingStrategy{Budget: AnalysisBudget{MaxEvaluationPairs: 2}}).Analyze(metadata, evaluations)
+	if status := mcdcConditionStatus(exact.Conditions[0]); status != string(cover.CoverageCovered) {
+		t.Fatalf("target status = %q, want covered at exact pair limit: %#v", status, exact.Conditions[0])
 	}
 }
 
-func TestMaskingBooleanCheckLimitIsAnalysisIncomplete(t *testing.T) {
+func TestMaskingSearchStateLimitIsAnalysisIncomplete(t *testing.T) {
 	t.Parallel()
-	metadata := decisionMetadata(condition(0))
-	result := (MaskingStrategy{Budget: AnalysisBudget{MaxBooleanChecks: 1}}).Analyze(metadata, []cover.DecisionEvaluation{
-		completed(1, []cover.ConditionState{conditionFalse}, false),
-		completed(2, []cover.ConditionState{conditionTrue}, true),
+	metadata := decisionMetadata(and(condition(0), condition(1)))
+	evaluations := []cover.DecisionEvaluation{
+		completed(1, []cover.ConditionState{conditionFalse, notEvaluated}, false),
+		completed(2, []cover.ConditionState{conditionTrue, conditionTrue}, true),
+	}
+	var exactStates uint64
+	(MaskingStrategy{}).analyze(metadata, evaluations, func(target uint16, stats maskingSearchStats) {
+		if target == 0 {
+			exactStates = stats.SearchStates
+		}
 	})
+	if exactStates < 2 {
+		t.Fatalf("default search states = %d, want at least 2", exactStates)
+	}
+	result := (MaskingStrategy{Budget: AnalysisBudget{MaxSearchStates: exactStates - 1}}).Analyze(metadata, evaluations)
 	condition := result.Conditions[0]
 	if status := mcdcConditionStatus(condition); status != string(cover.CoverageAnalysisIncomplete) {
 		t.Fatalf("target status = %q, want analysis-incomplete: %#v", status, condition)
 	}
-	if !strings.Contains(condition.Reason, "Boolean-check count") {
-		t.Fatalf("target reason = %q, want Boolean-check limit", condition.Reason)
+	if !strings.Contains(condition.Reason, "search-state count") {
+		t.Fatalf("target reason = %q, want search-state limit", condition.Reason)
+	}
+	exact := (MaskingStrategy{Budget: AnalysisBudget{MaxSearchStates: exactStates}}).Analyze(metadata, evaluations)
+	if status := mcdcConditionStatus(exact.Conditions[0]); status != string(cover.CoverageCovered) {
+		t.Fatalf("target status = %q, want covered at exact state limit: %#v", status, exact.Conditions[0])
 	}
 }
 
-func TestMaskingBudgetAllowsWitnessAtExactLimits(t *testing.T) {
+func TestMaskingWorkspaceLimitIsAnalysisIncomplete(t *testing.T) {
 	t.Parallel()
-	metadata := decisionMetadata(condition(0))
-	result := (MaskingStrategy{Budget: AnalysisBudget{
-		MaxCompletions: 2, MaxWitnessPairs: 1, MaxBooleanChecks: 6,
-	}}).Analyze(metadata, []cover.DecisionEvaluation{
-		completed(1, []cover.ConditionState{conditionFalse}, false),
-		completed(2, []cover.ConditionState{conditionTrue}, true),
-	})
-	if status := mcdcConditionStatus(result.Conditions[0]); status != string(cover.CoverageCovered) {
-		t.Fatalf("target status = %q, want covered at exact budget: %#v", status, result.Conditions[0])
+	metadata := decisionMetadata(and(condition(0), condition(1)))
+	evaluations := []cover.DecisionEvaluation{
+		completed(1, []cover.ConditionState{conditionFalse, notEvaluated}, false),
+		completed(2, []cover.ConditionState{conditionTrue, conditionTrue}, true),
+	}
+	required := maskingWorkspaceBytes(expressionNodeCount(metadata.ExpressionTree), len(metadata.Conditions), 2)
+	result := (MaskingStrategy{Budget: AnalysisBudget{MaxWorkspaceBytes: required - 1}}).Analyze(metadata, evaluations)
+	condition := result.Conditions[0]
+	if status := mcdcConditionStatus(condition); status != string(cover.CoverageAnalysisIncomplete) {
+		t.Fatalf("target status = %q, want analysis-incomplete: %#v", status, condition)
+	}
+	if !strings.Contains(condition.Reason, "workspace byte") {
+		t.Fatalf("target reason = %q, want workspace byte limit", condition.Reason)
+	}
+	exact := (MaskingStrategy{Budget: AnalysisBudget{MaxWorkspaceBytes: required}}).Analyze(metadata, evaluations)
+	if status := mcdcConditionStatus(exact.Conditions[0]); status != string(cover.CoverageCovered) {
+		t.Fatalf("target status = %q, want covered at exact workspace limit: %#v", status, exact.Conditions[0])
 	}
 }
 
@@ -596,6 +599,11 @@ func TestStrategiesAggregateDuplicatesAndChooseDeterministicWitnesses(t *testing
 		completed(1, []cover.ConditionState{conditionFalse}, false),
 		completed(2, []cover.ConditionState{conditionTrue}, true),
 	}
+	original := make([]cover.DecisionEvaluation, len(evaluations))
+	for index, evaluation := range evaluations {
+		original[index] = evaluation
+		original[index].Conditions = append([]cover.ConditionState(nil), evaluation.Conditions...)
+	}
 	reversed := slices.Clone(evaluations)
 	slices.Reverse(reversed)
 
@@ -624,8 +632,8 @@ func TestStrategiesAggregateDuplicatesAndChooseDeterministicWitnesses(t *testing
 			t.Fatalf("%T did not normalize missing test IDs: %#v", strategy, witness)
 		}
 	}
-	if evaluations[0].TestID != "" {
-		t.Fatal("Analyze mutated its input")
+	if !reflect.DeepEqual(evaluations, original) {
+		t.Fatalf("Analyze mutated its input:\ngot:  %#v\nwant: %#v", evaluations, original)
 	}
 }
 

@@ -19,28 +19,30 @@ type MCDCStrategy interface {
 // identical in the witness pair. Not-evaluated is a distinct state.
 type UniqueCauseStrategy struct{}
 
-// AnalysisBudget bounds one Masking MC/DC condition-obligation search. Zero
-// values select the corresponding default so MaskingStrategy{} is safe for
-// callers that do not need custom limits.
+// AnalysisBudget bounds one Masking MC/DC condition-obligation search. It
+// counts candidate observed evaluation pairs, newly expanded joint-DP states,
+// and bytes in the solver's primary backing arrays. Zero values select the
+// corresponding default so MaskingStrategy{} is safe for callers that do not
+// need custom limits.
 type AnalysisBudget struct {
-	MaxCompletions   uint64
-	MaxWitnessPairs  uint64
-	MaxBooleanChecks uint64
+	MaxEvaluationPairs uint64
+	MaxSearchStates    uint64
+	MaxWorkspaceBytes  uint64
 }
 
 const (
-	defaultMaxCompletions   = uint64(65_536)
-	defaultMaxWitnessPairs  = uint64(1_000_000)
-	defaultMaxBooleanChecks = uint64(4_000_000)
+	defaultMaxEvaluationPairs = uint64(1_000_000)
+	defaultMaxSearchStates    = uint64(4_000_000)
+	defaultMaxWorkspaceBytes  = uint64(64 * 1024 * 1024)
 )
 
 // DefaultMaskingAnalysisBudget returns the deterministic resource limits used
 // by a zero-value MaskingStrategy.
 func DefaultMaskingAnalysisBudget() AnalysisBudget {
 	return AnalysisBudget{
-		MaxCompletions:   defaultMaxCompletions,
-		MaxWitnessPairs:  defaultMaxWitnessPairs,
-		MaxBooleanChecks: defaultMaxBooleanChecks,
+		MaxEvaluationPairs: defaultMaxEvaluationPairs,
+		MaxSearchStates:    defaultMaxSearchStates,
+		MaxWorkspaceBytes:  defaultMaxWorkspaceBytes,
 	}
 }
 
@@ -171,6 +173,20 @@ func (UniqueCauseStrategy) Analyze(metadata cover.DecisionMetadata, evaluations 
 // allowing arbitrary non-target differences is insufficient: the target must
 // be pivotal (its Boolean difference must be true) in both completed vectors.
 func (strategy MaskingStrategy) Analyze(metadata cover.DecisionMetadata, evaluations []cover.DecisionEvaluation) cover.MCDCResult {
+	return strategy.analyze(metadata, evaluations, nil)
+}
+
+type maskingSearchStats struct {
+	EvaluationPairs uint64
+	SearchStates    uint64
+	WorkspaceBytes  uint64
+}
+
+func (strategy MaskingStrategy) analyze(
+	metadata cover.DecisionMetadata,
+	evaluations []cover.DecisionEvaluation,
+	observe func(target uint16, stats maskingSearchStats),
+) cover.MCDCResult {
 	count, indexes, issue := conditionLayout(metadata, evaluations)
 	result := baseResult(metadata.ID, cover.CoverageMetricMCDCMasking, indexes)
 	if issue != nil {
@@ -194,73 +210,83 @@ func (strategy MaskingStrategy) Analyze(metadata cover.DecisionMetadata, evaluat
 		result.InvalidEvaluations,
 	)
 	result.EvaluationsAnalyzed = len(prepared.evaluations)
+	nodeCount := expressionNodeCount(metadata.ExpressionTree)
+	var workspace *jointWorkspace
 
 	for conditionPosition, target := range indexes {
 		conditionResult := &result.Conditions[conditionPosition]
 		if !structurallyPivotal(metadata.ExpressionTree, target, count) {
 			conditionResult.Analysis = cover.AnalysisInfeasible
 			conditionResult.Reason = "the boolean expression cannot make this condition pivotal"
+			if observe != nil {
+				observe(target, maskingSearchStats{})
+			}
 			continue
 		}
 
 		search := newMaskingSearchBudget(strategy.Budget)
-		completions := make([]completionResult, len(prepared.evaluations))
-		completionReady := make([]bool, len(prepared.evaluations))
-		completionFor := func(index int) completionResult {
-			if !completionReady[index] {
-				completions[index] = enumeratePivotalCompletionsBounded(
-					metadata.ExpressionTree, prepared.evaluations[index], target, search,
-				)
-				completionReady[index] = true
+		bucketCounts, candidateIndexes, hasCandidatePair := maskingCandidateBucketCounts(
+			prepared.evaluations, target,
+		)
+		if !hasCandidatePair {
+			conditionResult.Reason = "no pair makes the evaluated target pivotal in both completed vectors"
+			if observe != nil {
+				observe(target, search.stats())
 			}
-			return completions[index]
+			continue
 		}
-		exhaustive := true
-	searchPairs:
-		for first := 0; first < len(prepared.evaluations); first++ {
-			for second := first + 1; second < len(prepared.evaluations); second++ {
-				left := prepared.evaluations[first]
-				right := prepared.evaluations[second]
-				if !candidatePair(left, right, target) {
-					continue
-				}
-				firstCompletions := completionFor(first)
-				secondCompletions := completionFor(second)
-				exhaustive = exhaustive && firstCompletions.Exhaustive && secondCompletions.Exhaustive
-				for _, firstCompletion := range firstCompletions.Values {
-					for _, secondCompletion := range secondCompletions.Values {
-						if !search.consumeWitnessPair() {
-							exhaustive = false
-							break searchPairs
-						}
-						witness, covered, complete := findMaskingWitnessBounded(metadata.ExpressionTree, left, right, target, firstCompletion.values, secondCompletion.values, search)
-						if !complete {
-							exhaustive = false
-							break searchPairs
-						}
-						if covered {
-							conditionResult.Outcome = cover.CoverageOutcomeCovered
-							conditionResult.Witness = witness
-							break
-						}
-					}
-					if conditionResult.Witness != nil {
-						break
-					}
-				}
+		workspaceBytes := maskingWorkspaceBytes(nodeCount, count, candidateIndexes)
+		if search.requireWorkspace(workspaceBytes) {
+			if workspace == nil {
+				workspace = newJointWorkspace(metadata.ExpressionTree, nodeCount, count)
 			}
-			if conditionResult.Witness != nil {
-				break
+		} else {
+			conditionResult.Outcome = cover.CoverageOutcomeUnknown
+			conditionResult.Analysis = cover.AnalysisIncomplete
+			conditionResult.Reason = search.reason()
+			if observe != nil {
+				observe(target, search.stats())
+			}
+			continue
+		}
+		buckets := maskingCandidateBuckets(prepared.evaluations, target, bucketCounts)
+	searchPairs:
+		for first, left := range prepared.evaluations {
+			bucket, candidate := maskingCandidateBucket(left, target)
+			if !candidate {
+				continue
+			}
+			seconds := buckets[bucket^maskingCandidateOppositeBits]
+			for position := sort.SearchInts(seconds, first+1); position < len(seconds); position++ {
+				second := seconds[position]
+				if !search.consumeEvaluationPair() {
+					break searchPairs
+				}
+				right := prepared.evaluations[second]
+				firstCompletion, secondCompletion, covered := workspace.solvePair(left, right, target, search)
+				if search.exceededReason != "" {
+					break searchPairs
+				}
+				if covered {
+					conditionResult.Outcome = cover.CoverageOutcomeCovered
+					conditionResult.Witness = maskingWitness(
+						left, right, target, firstCompletion, secondCompletion,
+					)
+					break searchPairs
+				}
 			}
 		}
 		if conditionResult.Witness == nil {
-			if !exhaustive || search.exceededReason != "" {
+			if search.exceededReason != "" {
 				conditionResult.Outcome = cover.CoverageOutcomeUnknown
 				conditionResult.Analysis = cover.AnalysisIncomplete
 				conditionResult.Reason = search.reason()
 			} else {
 				conditionResult.Reason = "no pair makes the evaluated target pivotal in both completed vectors"
 			}
+		}
+		if observe != nil {
+			observe(target, search.stats())
 		}
 	}
 
@@ -375,110 +401,6 @@ func nonTargetVectorKey(states []cover.ConditionState, target uint16) string {
 		key = append(key, byte(state))
 	}
 	return string(key)
-}
-
-func candidatePair(first, second cover.DecisionEvaluation, target uint16) bool {
-	if first.Result == second.Result {
-		return false
-	}
-	firstTarget := first.Conditions[target]
-	secondTarget := second.Conditions[target]
-	return firstTarget.IsEvaluated() &&
-		secondTarget.IsEvaluated() &&
-		firstTarget != secondTarget
-}
-
-type maskingCompletion struct {
-	values []bool
-}
-
-func evaluateCompletion(expression *cover.BooleanExpression, values []bool, states []cover.ConditionState) bool {
-	switch expression.Kind {
-	case cover.BooleanExpressionCondition:
-		value := values[expression.ConditionIndex]
-		if value {
-			states[expression.ConditionIndex] = cover.ConditionTrue
-		} else {
-			states[expression.ConditionIndex] = cover.ConditionFalse
-		}
-		return value
-	case cover.BooleanExpressionConstant:
-		return expression.Constant
-	case cover.BooleanExpressionNot:
-		return !evaluateCompletion(expression.Left, values, states)
-	case cover.BooleanExpressionAnd:
-		left := evaluateCompletion(expression.Left, values, states)
-		if !left {
-			return false
-		}
-		return evaluateCompletion(expression.Right, values, states)
-	case cover.BooleanExpressionOr:
-		left := evaluateCompletion(expression.Left, values, states)
-		if left {
-			return true
-		}
-		return evaluateCompletion(expression.Right, values, states)
-	default:
-		panic("mcdc: validated expression contains an unsupported node")
-	}
-}
-
-func sameConditionStates(left, right []cover.ConditionState) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
-}
-
-func maskedAt(expression *cover.BooleanExpression, values []bool, condition uint16) bool {
-	return evaluateFull(expression, values, -1, false) == evaluateFull(expression, values, int(condition), !values[condition])
-}
-
-func findMaskingWitnessBounded(
-	expression *cover.BooleanExpression,
-	first cover.DecisionEvaluation,
-	second cover.DecisionEvaluation,
-	target uint16,
-	firstCompletion []bool,
-	secondCompletion []bool,
-	search *maskingSearchBudget,
-) (*cover.MCDCWitness, bool, bool) {
-	unobserved := make([]uint16, 0)
-	masked := make([]uint16, 0)
-	for index := range first.Conditions {
-		conditionIndex := uint16(index)
-		if conditionIndex == target {
-			continue
-		}
-		if first.Conditions[index] == cover.ConditionNotEvaluated ||
-			second.Conditions[index] == cover.ConditionNotEvaluated {
-			unobserved = append(unobserved, conditionIndex)
-		}
-		if firstCompletion[index] == secondCompletion[index] {
-			continue
-		}
-		if !search.consumeBooleanChecks(2) {
-			return nil, false, false
-		}
-		if !maskedAt(expression, firstCompletion, conditionIndex) || !maskedAt(expression, secondCompletion, conditionIndex) {
-			return nil, false, true
-		}
-		masked = append(masked, conditionIndex)
-	}
-
-	return &cover.MCDCWitness{
-		First:                cloneEvaluation(first),
-		Second:               cloneEvaluation(second),
-		FirstCompletion:      statesFromBools(firstCompletion),
-		SecondCompletion:     statesFromBools(secondCompletion),
-		UnobservedConditions: unobserved,
-		MaskedConditions:     masked,
-	}, true, true
 }
 
 // uniqueCauseStructurallyFeasible is a conservative proof over the expression
@@ -1011,7 +933,7 @@ func prepareEvaluations(
 	conditionCount int,
 	evaluations []cover.DecisionEvaluation,
 ) preparedEvaluations {
-	byVector := make(map[string]cover.DecisionEvaluation)
+	prepared := make([]cover.DecisionEvaluation, 0, len(evaluations))
 	aborted := 0
 	invalid := 0
 	for _, evaluation := range evaluations {
@@ -1031,19 +953,24 @@ func prepareEvaluations(
 			invalid++
 			continue
 		}
-		evaluation = cloneEvaluation(evaluation)
-		key := evaluationKey(evaluation)
-		if existing, exists := byVector[key]; !exists || lessEvaluationIdentity(evaluation, existing) {
-			byVector[key] = evaluation
-		}
+		// The analysis never mutates condition slices. Copy the value so TestID
+		// can be normalized without cloning every vector; selected witnesses are
+		// deep-cloned at the result boundary.
+		evaluation.TestID = normalizedTestID(evaluation.TestID)
+		prepared = append(prepared, evaluation)
 	}
 
-	result := make([]cover.DecisionEvaluation, 0, len(byVector))
-	for _, evaluation := range byVector {
-		result = append(result, evaluation)
+	sort.Slice(prepared, func(i, j int) bool { return lessEvaluation(prepared[i], prepared[j]) })
+	unique := 0
+	for index := range prepared {
+		if unique > 0 && sameEvaluationVector(prepared[unique-1], prepared[index]) {
+			continue
+		}
+		prepared[unique] = prepared[index]
+		unique++
 	}
-	sort.Slice(result, func(i, j int) bool { return lessEvaluation(result[i], result[j]) })
-	return preparedEvaluations{evaluations: result, aborted: aborted, invalid: invalid}
+	clear(prepared[unique:])
+	return preparedEvaluations{evaluations: prepared[:unique], aborted: aborted, invalid: invalid}
 }
 
 func validStates(states []cover.ConditionState) bool {
@@ -1057,15 +984,16 @@ func validStates(states []cover.ConditionState) bool {
 	return true
 }
 
-func evaluationKey(evaluation cover.DecisionEvaluation) string {
-	key := make([]byte, len(evaluation.Conditions)+1)
-	for index, state := range evaluation.Conditions {
-		key[index] = byte(state)
+func sameEvaluationVector(left, right cover.DecisionEvaluation) bool {
+	if left.Result != right.Result || len(left.Conditions) != len(right.Conditions) {
+		return false
 	}
-	if evaluation.Result {
-		key[len(key)-1] = 1
+	for index := range left.Conditions {
+		if left.Conditions[index] != right.Conditions[index] {
+			return false
+		}
 	}
-	return string(key)
+	return true
 }
 
 func lessEvaluation(left, right cover.DecisionEvaluation) bool {

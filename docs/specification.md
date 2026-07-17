@@ -159,6 +159,17 @@ Condition `i` is covered when completed evaluations `(p,q)` and completions `(x,
 
 The observed pair, completions, and masked condition indices are retained as a witness.
 
+For the validated read-once AND/OR/NOT expression model, Masking MC/DC performs
+an exact joint search for both completions without enumerating their Cartesian
+product. Each condition obligation has default limits of 1,000,000 candidate
+evaluation pairs, 4,000,000 newly expanded joint-search states, and 64 MiB for
+the primary solver backing arrays (the flattened expression, memo table,
+completion buffers, and candidate evaluation indexes). Validated input data,
+result witnesses, and goroutine stack space are outside the workspace unit. A
+search that would exceed a limit is `analysis-incomplete`; reaching a witness
+at the exact limit is `covered`. `infeasible` is used only when a separate
+structure-only check proves that the target can never be pivotal.
+
 An MC/DC percentage covers independent-effect obligations for condition occurrences. Complete MC/DC achievement also requires the corresponding Decision and Condition Coverage. Equal values are not assumed for occurrences sharing source text. A witness requiring unproved occurrence coupling, or an exact search stopped by a resource limit, is analysis-incomplete.
 
 Each MC/DC analysis is a strategy-specific pure function.

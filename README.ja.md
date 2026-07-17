@@ -103,6 +103,12 @@ gomcdc test --format html --output coverage-html ./...
 未達へ暗黙変換しません。test失敗、panic、timeout、runtime evidenceのtruncated
 tailが発生しても、信頼できるevidenceが残ればpartial reportを生成します。
 
+Masking MC/DCはexact searchします。組み込みのcondition obligationごとの上限は、
+candidate evaluation pair 1,000,000件、search state 4,000,000件、search workspace
+64 MiBです。いずれかを超える探索が必要な場合は`analysis-incomplete`とし、
+`not-covered`や`infeasible`へ変換しません。現時点では、これらの上限を変更する
+CLI optionはありません。
+
 ## 主なoption
 
 ```sh
