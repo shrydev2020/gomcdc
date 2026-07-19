@@ -46,25 +46,42 @@ jobs:
         env:
           GOMCDC_REPORT: ${{ runner.temp }}/gomcdc-self-mcdc.json
         run: |
-          jq -e --slurpfile baseline .github/self-mcdc-baseline.json '
+          jq -er --slurpfile baseline .github/self-mcdc-baseline.json '
             def percentage($summary; $metric): $summary[$metric].percentage // 0;
+            def display_percentage($actual):
+              if $actual == null then "missing" else ($actual | tostring) + "%" end;
+            def failure_message:
+              "MC/DC baseline failed: \(.scope) \(.metric): actual \(display_percentage(.actual)), required \(.minimum)%";
             . as $report
             | $baseline[0] as $expected
-            | ([
-                $expected.module
-                | to_entries[]
-                | percentage($report.summary; .key) >= .value
-              ] | all)
-              and
-              ([
-                $expected.packages
-                | to_entries[] as $package
-                | ($report.packages | map(select(.path == $package.key)) | first) as $actual
-                | $actual != null
-                  and ([
-                    $package.value
-                    | to_entries[]
-                    | percentage($actual.summary; .key) >= .value
-                  ] | all)
-              ] | all)
+            | [
+                ($expected.module
+                  | to_entries[]
+                  | {
+                      scope: "module",
+                      metric: .key,
+                      actual: percentage($report.summary; .key),
+                      minimum: .value
+                    }),
+                ($expected.packages
+                  | to_entries[] as $package
+                  | ($report.packages | map(select(.path == $package.key)) | first) as $actual_package
+                  | $package.value
+                  | to_entries[]
+                  | {
+                      scope: $package.key,
+                      metric: .key,
+                      actual: (if $actual_package == null then null else percentage($actual_package.summary; .key) end),
+                      minimum: .value
+                    })
+              ]
+            | map(select(.actual == null or .actual < .minimum)) as $failures
+            | if ($failures | length) == 0 then
+                "All critical-package MC/DC baselines passed."
+              else
+                $failures
+                | map(failure_message)
+                | join("\n")
+                | error
+              end
           ' "$GOMCDC_REPORT"

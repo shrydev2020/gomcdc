@@ -62,22 +62,56 @@ func TestCreateGOROOTViewRejectsCanceledWork(t *testing.T) {
 	}
 }
 
+func TestCreateGOROOTViewMirrorsDirectoriesAndLinksFiles(t *testing.T) {
+	t.Parallel()
+
+	source := filepath.Join(t.TempDir(), "source")
+	sourceDir := filepath.Join(source, "src", "example")
+	if err := os.MkdirAll(sourceDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sourceFile := filepath.Join(sourceDir, "value.go")
+	if err := os.WriteFile(sourceFile, []byte("package example\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	destination := filepath.Join(t.TempDir(), "goroot")
+	if err := createGOROOTView(t.Context(), source, destination); err != nil {
+		t.Fatalf("createGOROOTView: %v", err)
+	}
+	destinationDir := filepath.Join(destination, "src", "example")
+	if info, err := os.Lstat(destinationDir); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("mirrored directory = (%v, %v), want real directory", info, err)
+	}
+	destinationFile := filepath.Join(destinationDir, "value.go")
+	if info, err := os.Lstat(destinationFile); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("mirrored file = (%v, %v), want symlink", info, err)
+	}
+	contents, err := os.ReadFile(destinationFile)
+	if err != nil || string(contents) != "package example\n" {
+		t.Fatalf("mirrored file contents = %q, %v", contents, err)
+	}
+}
+
 func TestGOROOTViewIsRequiredOnlyInsideModuleCache(t *testing.T) {
 	t.Parallel()
 	moduleCache := filepath.Join(t.TempDir(), "module-cache")
 	for _, test := range []struct {
-		name   string
-		goroot string
-		want   bool
+		name        string
+		goroot      string
+		moduleCache string
+		want        bool
 	}{
-		{name: "downloaded toolchain", goroot: filepath.Join(moduleCache, "golang.org", "toolchain@v0.0.1"), want: true},
-		{name: "module cache itself", goroot: moduleCache, want: true},
-		{name: "sibling prefix", goroot: moduleCache + "-installed"},
-		{name: "independent installation", goroot: filepath.Join(t.TempDir(), "go")},
+		{name: "downloaded toolchain", goroot: filepath.Join(moduleCache, "golang.org", "toolchain@v0.0.1"), moduleCache: moduleCache, want: true},
+		{name: "module cache itself", goroot: moduleCache, moduleCache: moduleCache, want: true},
+		{name: "sibling prefix", goroot: moduleCache + "-installed", moduleCache: moduleCache},
+		{name: "independent installation", goroot: filepath.Join(t.TempDir(), "go"), moduleCache: moduleCache},
+		{name: "empty GOROOT", moduleCache: moduleCache},
+		{name: "empty module cache", goroot: filepath.Join(t.TempDir(), "go")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := requiresGOROOTView(test.goroot, moduleCache); got != test.want {
-				t.Fatalf("requiresGOROOTView(%q, %q) = %t, want %t", test.goroot, moduleCache, got, test.want)
+			if got := requiresGOROOTView(test.goroot, test.moduleCache); got != test.want {
+				t.Fatalf("requiresGOROOTView(%q, %q) = %t, want %t", test.goroot, test.moduleCache, got, test.want)
 			}
 		})
 	}
@@ -125,7 +159,7 @@ func TestReadFileHonorsCancellation(t *testing.T) {
 }
 
 func TestPrepareRejectsUnsupportedGoVersionBeforeReadingCompilerSources(t *testing.T) {
-	for _, version := range []string{"go1.25.9", "go1.26", "go1.26rc1", "go1.26.5-custom", "go1.27.0", "devel go1.27-abcdef"} {
+	for _, version := range []string{"go1.25.9", "go1.26", "go1.26.", "go1.26rc1", "go1.26.5-custom", "go1.27.0", "devel go1.27-abcdef"} {
 		t.Run(version, func(t *testing.T) {
 			fakeBin := t.TempDir()
 			fakeGo := filepath.Join(fakeBin, "go")
