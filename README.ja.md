@@ -1,5 +1,7 @@
 # gomcdc
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/shrydev2020/gomcdc)
+
 [English](README.md)
 
 `gomcdc` はGoのtestを実行し、Statement、Function、Decision、Condition、

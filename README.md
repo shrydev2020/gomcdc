@@ -1,5 +1,7 @@
 # gomcdc
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/shrydev2020/gomcdc)
+
 [日本語](README.ja.md)
 
 `gomcdc` runs Go tests and produces one coverage report containing statement,
