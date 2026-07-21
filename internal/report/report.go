@@ -14,16 +14,15 @@ import (
 )
 
 // SchemaVersion identifies the current stable JSON and text report schema.
-const SchemaVersion = "1.1"
+const SchemaVersion = "2.0"
 
 const statusDisabled = "disabled"
 
 type MeasurementMode string
 
 const (
-	MeasurementSingleRun            MeasurementMode = "single-run"
-	MeasurementStandardCover        MeasurementMode = "standard-cover"
-	MeasurementDualRunStandardCover MeasurementMode = "dual-run-standard-cover"
+	MeasurementSingleRun     MeasurementMode = "single-run"
+	MeasurementStandardCover MeasurementMode = "standard-cover"
 )
 
 // Input contains all static metadata, runtime evidence, and run state needed
@@ -45,13 +44,9 @@ type Input struct {
 	Results               RunResults
 	MeasurementMode       MeasurementMode
 	Measurements          []MeasurementRun
+	ProducerOutcomes      []ProducerOutcome
 	Backend               backend.InstrumentationBackend
 	BackendProducers      []backend.ProducerCapabilities
-	// ProducerIntegrityUnknown forces entities from a damaged evidence stream
-	// to unknown even when some records survived validation. Partial evidence
-	// must never be reported as ordinary not-covered data.
-	ASTEvidenceIntegrityUnknown bool
-	C0EvidenceIntegrityUnknown  bool
 	// InstrumentationUnknown counts requested source units whose static
 	// analysis did not complete, so their entity denominator is unknowable.
 	InstrumentationUnknown int
@@ -63,18 +58,19 @@ type Input struct {
 
 // Report is the deterministic module report.
 type Report struct {
-	SchemaVersion   string                         `json:"schemaVersion"`
-	ToolVersion     string                         `json:"toolVersion"`
-	Module          string                         `json:"module"`
-	Run             Run                            `json:"run"`
-	MeasurementMode MeasurementMode                `json:"measurementMode"`
-	Measurements    []MeasurementRun               `json:"measurements"`
-	Capabilities    backend.CapabilitySet          `json:"capabilities"`
-	Backends        []backend.ProducerCapabilities `json:"backendCapabilities"`
-	Instrumentation backend.InstrumentationReport  `json:"instrumentationCoverage"`
-	Summary         Summary                        `json:"summary"`
-	Packages        []PackageReport                `json:"packages"`
-	Errors          []ReportError                  `json:"errors"`
+	SchemaVersion    string                         `json:"schemaVersion"`
+	ToolVersion      string                         `json:"toolVersion"`
+	Module           string                         `json:"module"`
+	Run              Run                            `json:"run"`
+	MeasurementMode  MeasurementMode                `json:"measurementMode"`
+	Measurements     []MeasurementRun               `json:"measurements"`
+	ProducerOutcomes []ProducerOutcome              `json:"producerOutcomes"`
+	Capabilities     backend.CapabilitySet          `json:"capabilities"`
+	Backends         []backend.ProducerCapabilities `json:"backendCapabilities"`
+	Instrumentation  backend.InstrumentationReport  `json:"instrumentationCoverage"`
+	Summary          Summary                        `json:"summary"`
+	Packages         []PackageReport                `json:"packages"`
+	Errors           []ReportError                  `json:"errors"`
 }
 
 // ReportError is one deterministic, machine-readable failure attached to a
@@ -87,8 +83,8 @@ type ReportError struct {
 	Path    string `json:"path,omitempty"`
 }
 
-// MeasurementRun prevents dual-run standard C0 and AST evidence from being
-// presented as though they came from one test execution.
+// MeasurementRun records the physical test execution independently from the
+// evidence producers which observed it.
 type MeasurementRun struct {
 	Name     string            `json:"name"`
 	Run      TestRun           `json:"run"`
@@ -365,14 +361,17 @@ func buildHierarchy(context *buildContext, input Input) {
 	observationCounts := context.observationCounts
 	noMatchObservations := context.noMatchObservations
 	astPackageEvidence := context.astPackageEvidence
+	compilerPackageEvidence := context.compilerPackageEvidence
 	builders := context.builders
+	astEvidenceUnusable := producerRejectsEvidence(input.ProducerOutcomes, ProducerASTRuntime)
+	compilerEvidenceUnusable := producerRejectsEvidence(input.ProducerOutcomes, ProducerCompilerSelection)
 
 	for _, decision := range decisions {
 		builder := ensurePackageBuilder(builders, decision.Package, input)
 		function := ensureFunctionBuilder(builder, decision.Location.File, displayFunctionName(decision.Function), optionalLocation(decision.FunctionLocation), input.Coverage)
 		state := stateForEvaluations(
 			evaluationsByDecision[decision.ID],
-			input.ASTEvidenceIntegrityUnknown || packageUnknown(astPackageStatus(input, decision.Package, builder.status), astPackageEvidence[decision.Package]),
+			astEvidenceUnusable || packageUnknown(astPackageStatus(input, decision.Package, builder.status), astPackageEvidence[decision.Package]),
 		)
 		if state == entityNormal && !supportedDecision(decision.Kind) {
 			state = entityUnsupported
@@ -385,12 +384,14 @@ func buildHierarchy(context *buildContext, input Input) {
 	for _, clause := range clauses {
 		builder := ensurePackageBuilder(builders, clause.Package, input)
 		function := ensureFunctionBuilder(builder, clause.Location.File, displayFunctionName(clause.Function), optionalLocation(clause.FunctionLocation), input.Coverage)
-		unknown := input.ASTEvidenceIntegrityUnknown || packageUnknown(astPackageStatus(input, clause.Package, builder.status), astPackageEvidence[clause.Package])
+		bodyPackageUnknown := packageUnknown(astPackageStatus(input, clause.Package, builder.status), astPackageEvidence[clause.Package])
+		selectionPackageUnknown := packageUnknown(astPackageStatus(input, clause.Package, builder.status), compilerPackageEvidence[clause.Package])
 		clauseReport := buildClauseReport(
 			clause,
 			observationCounts[clause.ID],
 			context.selectedAlternatives[clause.ID],
-			unknown,
+			astEvidenceUnusable || bodyPackageUnknown,
+			compilerEvidenceUnusable || selectionPackageUnknown,
 			context.report.Capabilities,
 			input.Coverage,
 		)
@@ -400,7 +401,7 @@ func buildHierarchy(context *buildContext, input Input) {
 	for _, noMatch := range input.NoMatches {
 		builder := ensurePackageBuilder(builders, noMatch.Package, input)
 		function := ensureFunctionBuilder(builder, noMatch.Location.File, displayFunctionName(noMatch.Function), optionalLocation(noMatch.FunctionLocation), input.Coverage)
-		unknown := input.ASTEvidenceIntegrityUnknown || packageUnknown(astPackageStatus(input, noMatch.Package, builder.status), astPackageEvidence[noMatch.Package])
+		unknown := compilerEvidenceUnusable || packageUnknown(astPackageStatus(input, noMatch.Package, builder.status), compilerPackageEvidence[noMatch.Package])
 		noMatchReport := buildNoMatchReport(noMatch, noMatchObservations[noMatch.SwitchID] > 0, unknown, context.report.Capabilities, input.Coverage)
 		function.report.NoMatches = append(function.report.NoMatches, noMatchReport)
 		addNoMatchMetric(&function.report.Summary, noMatch.Kind, noMatchReport.SelectionCoverage)
@@ -873,7 +874,8 @@ func buildClauseReport(
 	metadata cover.ClauseMetadata,
 	observations map[cover.ClauseEventKind]int,
 	selectedAlternatives []uint16,
-	unknown bool,
+	bodyUnknown bool,
+	selectionUnknown bool,
 	capabilities backend.CapabilitySet,
 	coverage config.CoverageSet,
 ) ClauseReport {
@@ -883,7 +885,7 @@ func buildClauseReport(
 	bodyCoverage := newMetric(bodyEnabled)
 	if bodyCoverage.Enabled {
 		switch {
-		case unknown:
+		case bodyUnknown:
 			bodyCoverage.Unknown = 1
 		case !supportedClause(metadata):
 			bodyCoverage.Unsupported = 1
@@ -900,7 +902,7 @@ func buildClauseReport(
 	if selectionCoverage.Enabled {
 		status := clauseSelectionInstrumentationStatus(capabilities, metadata)
 		switch {
-		case unknown:
+		case selectionUnknown:
 			selectionCoverage.Unknown = 1
 		case status == backend.CapabilityUnsupportedByBackend:
 			selectionCoverage.Unsupported = 1

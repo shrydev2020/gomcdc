@@ -16,14 +16,15 @@ type buildContext struct {
 	decisions []cover.DecisionMetadata
 	clauses   []cover.ClauseMetadata
 
-	evaluationsByDecision  map[cover.DecisionID][]cover.DecisionEvaluation
-	notEvaluatedByDecision map[cover.DecisionID]int
-	observationCounts      map[cover.ClauseID]map[cover.ClauseEventKind]int
-	selectedAlternatives   map[cover.ClauseID][]uint16
-	noMatchObservations    map[cover.SwitchID]int
-	packageEvidence        map[string]bool
-	astPackageEvidence     map[string]bool
-	builders               map[string]*packageBuilder
+	evaluationsByDecision   map[cover.DecisionID][]cover.DecisionEvaluation
+	notEvaluatedByDecision  map[cover.DecisionID]int
+	observationCounts       map[cover.ClauseID]map[cover.ClauseEventKind]int
+	selectedAlternatives    map[cover.ClauseID][]uint16
+	noMatchObservations     map[cover.SwitchID]int
+	packageEvidence         map[string]bool
+	astPackageEvidence      map[string]bool
+	compilerPackageEvidence map[string]bool
+	builders                map[string]*packageBuilder
 }
 
 func newBuildContext(input Input) *buildContext {
@@ -35,25 +36,29 @@ func newBuildContext(input Input) *buildContext {
 	producerCapabilities := cloneProducerCapabilities(input.BackendProducers)
 	if len(producerCapabilities) == 0 {
 		if input.Backend == nil {
-			producerCapabilities = cloneProducerCapabilities(backend.V1Producers())
+			producerCapabilities = cloneProducerCapabilities(backend.OrchestratedProducers())
 		} else {
 			producerCapabilities = []backend.ProducerCapabilities{{Backend: "configured", Capabilities: capabilities.Clone()}}
 		}
 	}
 	report := Report{
-		SchemaVersion:   SchemaVersion,
-		ToolVersion:     normalizedToolVersion(input.ToolVersion),
-		Module:          input.ModulePath,
-		Run:             Run{Status: input.RunStatus, FailureKind: input.FailureKind, Complete: input.Complete, Results: normalizeRunResults(input.Results)},
-		MeasurementMode: input.MeasurementMode,
-		Measurements:    cloneMeasurementRuns(input.Measurements),
-		Capabilities:    capabilities,
-		Backends:        producerCapabilities,
-		Instrumentation: buildInstrumentationReport(input, capabilities),
-		Summary:         newSummary(input.Coverage),
-		Packages:        make([]PackageReport, 0),
-		Errors:          cloneReportErrors(input.Errors),
+		SchemaVersion:    SchemaVersion,
+		ToolVersion:      normalizedToolVersion(input.ToolVersion),
+		Module:           input.ModulePath,
+		Run:              Run{Status: input.RunStatus, FailureKind: input.FailureKind, Complete: input.Complete, Results: normalizeRunResults(input.Results)},
+		MeasurementMode:  input.MeasurementMode,
+		Measurements:     cloneMeasurementRuns(input.Measurements),
+		ProducerOutcomes: cloneProducerOutcomes(input.ProducerOutcomes),
+		Capabilities:     capabilities,
+		Backends:         producerCapabilities,
+		Instrumentation:  buildInstrumentationReport(input, capabilities),
+		Summary:          newSummary(input.Coverage),
+		Packages:         make([]PackageReport, 0),
+		Errors:           cloneReportErrors(input.Errors),
 	}
+	astEvidenceUnusable := producerRejectsEvidence(input.ProducerOutcomes, ProducerASTRuntime)
+	compilerEvidenceUnusable := producerRejectsEvidence(input.ProducerOutcomes, ProducerCompilerSelection)
+	c0EvidenceUnusable := producerRejectsEvidence(input.ProducerOutcomes, ProducerGoCover)
 
 	decisions := append([]cover.DecisionMetadata(nil), input.Decisions...)
 	sort.Slice(decisions, func(i, j int) bool { return lessDecision(decisions[i], decisions[j]) })
@@ -73,13 +78,14 @@ func newBuildContext(input Input) *buildContext {
 	notEvaluatedByDecision := make(map[cover.DecisionID]int)
 	packageEvidence := make(map[string]bool)
 	astPackageEvidence := make(map[string]bool)
+	compilerPackageEvidence := make(map[string]bool)
 	for _, evaluation := range input.Evaluations {
 		evaluationsByDecision[evaluation.DecisionID] = append(evaluationsByDecision[evaluation.DecisionID], evaluation)
 		packagePath := evaluation.PackagePath
 		if packagePath == "" {
 			packagePath = decisionByID[evaluation.DecisionID].Package
 		}
-		if packagePath != "" && !input.ASTEvidenceIntegrityUnknown {
+		if packagePath != "" && !astEvidenceUnusable {
 			packageEvidence[packagePath] = true
 			astPackageEvidence[packagePath] = true
 		}
@@ -91,7 +97,7 @@ func newBuildContext(input Input) *buildContext {
 	}
 	for _, observation := range input.NotEvaluatedDecisions {
 		notEvaluatedByDecision[observation.DecisionID]++
-		if metadata, found := decisionByID[observation.DecisionID]; found && !input.ASTEvidenceIntegrityUnknown {
+		if metadata, found := decisionByID[observation.DecisionID]; found && !astEvidenceUnusable {
 			packageEvidence[metadata.Package] = true
 			astPackageEvidence[metadata.Package] = true
 		}
@@ -100,9 +106,17 @@ func newBuildContext(input Input) *buildContext {
 	observationCounts := make(map[cover.ClauseID]map[cover.ClauseEventKind]int)
 	selectedAlternativeSets := make(map[cover.ClauseID]map[uint16]struct{})
 	noMatchObservations := make(map[cover.SwitchID]int)
+	noMatchByID := make(map[cover.SwitchID]cover.NoMatchMetadata, len(input.NoMatches))
+	for _, noMatch := range input.NoMatches {
+		noMatchByID[noMatch.SwitchID] = noMatch
+	}
 	for _, observation := range input.ClauseObservations {
 		if observation.Event == cover.ClauseNoMatchSelection {
 			noMatchObservations[observation.SwitchID]++
+			if metadata, found := noMatchByID[observation.SwitchID]; found && !compilerEvidenceUnusable {
+				packageEvidence[metadata.Package] = true
+				compilerPackageEvidence[metadata.Package] = true
+			}
 			continue
 		}
 		if observationCounts[observation.ClauseID] == nil {
@@ -115,9 +129,19 @@ func newBuildContext(input Input) *buildContext {
 			}
 			selectedAlternativeSets[observation.ClauseID][observation.AlternativeIndex] = struct{}{}
 		}
-		if clause, found := clauseByID[observation.ClauseID]; found && !input.ASTEvidenceIntegrityUnknown {
-			packageEvidence[clause.Package] = true
-			astPackageEvidence[clause.Package] = true
+		if clause, found := clauseByID[observation.ClauseID]; found {
+			switch observation.Event {
+			case cover.ClauseDirectSelection:
+				if !compilerEvidenceUnusable {
+					packageEvidence[clause.Package] = true
+					compilerPackageEvidence[clause.Package] = true
+				}
+			case cover.ClauseBodyExecution:
+				if !astEvidenceUnusable {
+					packageEvidence[clause.Package] = true
+					astPackageEvidence[clause.Package] = true
+				}
+			}
 		}
 	}
 	selectedAlternatives := make(map[cover.ClauseID][]uint16, len(selectedAlternativeSets))
@@ -142,7 +166,7 @@ func newBuildContext(input Input) *buildContext {
 	}
 	if input.C0 != nil {
 		for _, packageReport := range input.C0.Packages {
-			if packageReport.Evidence && !input.C0EvidenceIntegrityUnknown {
+			if packageReport.Evidence && !c0EvidenceUnusable {
 				packageEvidence[packageReport.Path] = true
 			}
 			builder := ensurePackageBuilder(builders, packageReport.Path, input)
@@ -150,7 +174,7 @@ func newBuildContext(input Input) *buildContext {
 				for _, functionReport := range fileReport.Functions {
 					location := c0SourceLocation(fileReport.Path, functionReport.Position)
 					function := ensureFunctionBuilder(builder, fileReport.Path, functionReport.Name, &location, input.Coverage)
-					addC0Function(function, fileReport.Path, functionReport, input.C0EvidenceIntegrityUnknown, input.Coverage)
+					addC0Function(function, fileReport.Path, functionReport, c0EvidenceUnusable, input.Coverage)
 				}
 			}
 		}
@@ -160,7 +184,8 @@ func newBuildContext(input Input) *buildContext {
 		report: report, decisions: decisions, clauses: clauses,
 		evaluationsByDecision: evaluationsByDecision, notEvaluatedByDecision: notEvaluatedByDecision,
 		observationCounts: observationCounts, selectedAlternatives: selectedAlternatives, noMatchObservations: noMatchObservations,
-		packageEvidence: packageEvidence, astPackageEvidence: astPackageEvidence, builders: builders,
+		packageEvidence: packageEvidence, astPackageEvidence: astPackageEvidence,
+		compilerPackageEvidence: compilerPackageEvidence, builders: builders,
 	}
 }
 

@@ -13,8 +13,10 @@ import (
 	"github.com/shrydev2020/gomcdc/internal/c0"
 	"github.com/shrydev2020/gomcdc/internal/c0map"
 	cover "github.com/shrydev2020/gomcdc/internal/coverage"
+	"github.com/shrydev2020/gomcdc/internal/gotest"
 	"github.com/shrydev2020/gomcdc/internal/instrument"
 	"github.com/shrydev2020/gomcdc/internal/loader"
+	"github.com/shrydev2020/gomcdc/internal/report"
 	"github.com/shrydev2020/gomcdc/internal/runtimecov"
 )
 
@@ -173,5 +175,166 @@ func TestSourceCoveragePlansUseInventoryAuthority(t *testing.T) {
 	cancel()
 	if _, err := sourceCoveragePlans(canceled, []sourceInstrumentation{source}, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled coverage planning error = %v", err)
+	}
+}
+
+func TestRuntimeProducerOutcomeKeepsAxesIndependent(t *testing.T) {
+	t.Parallel()
+
+	passed := &gotest.Result{Status: cover.RunPassed}
+	failed := &gotest.Result{Status: cover.RunFailed}
+	tests := []struct {
+		name          string
+		run           *gotest.Result
+		collectionErr error
+		mappingErr    error
+		diagnosticErr error
+		diagnostics   []runtimecov.Diagnostic
+		want          report.ProducerOutcome
+	}{
+		{
+			name: "complete", run: passed,
+			want: report.ProducerOutcome{
+				Integrity: report.ProducerIntegrityValid, Completeness: report.ProducerCompletenessComplete,
+				Mapping: report.ProducerMappingComplete, Usability: report.ProducerUsabilityAccepted,
+			},
+		},
+		{
+			name: "partial execution", run: failed,
+			want: report.ProducerOutcome{
+				Integrity: report.ProducerIntegrityValid, Completeness: report.ProducerCompletenessPartial,
+				Mapping: report.ProducerMappingComplete, Usability: report.ProducerUsabilityAcceptedPartial,
+			},
+		},
+		{
+			name: "valid prefix after failed run", run: failed,
+			diagnostics: []runtimecov.Diagnostic{{Severity: runtimecov.DiagnosticRecoverable}},
+			want: report.ProducerOutcome{
+				Integrity: report.ProducerIntegrityValidPrefix, Completeness: report.ProducerCompletenessPartial,
+				Mapping: report.ProducerMappingComplete, Usability: report.ProducerUsabilityAcceptedPartial,
+			},
+		},
+		{
+			name: "valid prefix contradicts complete run", run: passed,
+			diagnostics: []runtimecov.Diagnostic{{Severity: runtimecov.DiagnosticRecoverable}},
+			want: report.ProducerOutcome{
+				Integrity: report.ProducerIntegrityValidPrefix, Completeness: report.ProducerCompletenessPartial,
+				Mapping: report.ProducerMappingComplete, Usability: report.ProducerUsabilityRejected,
+			},
+		},
+		{
+			name: "mapping rejected independently", run: passed, mappingErr: errors.New("unknown ID"),
+			want: report.ProducerOutcome{
+				Integrity: report.ProducerIntegrityValid, Completeness: report.ProducerCompletenessComplete,
+				Mapping: report.ProducerMappingInvalid, Usability: report.ProducerUsabilityRejected,
+			},
+		},
+		{
+			name: "corrupt transport", run: failed,
+			diagnostics: []runtimecov.Diagnostic{{Severity: runtimecov.DiagnosticIntegrity}},
+			want: report.ProducerOutcome{
+				Integrity: report.ProducerIntegrityInvalid, Completeness: report.ProducerCompletenessPartial,
+				Mapping: report.ProducerMappingComplete, Usability: report.ProducerUsabilityRejected,
+			},
+		},
+		{
+			name: "collection unavailable", run: passed, collectionErr: errors.New("read"),
+			want: report.ProducerOutcome{
+				Integrity: report.ProducerIntegrityUnavailable, Completeness: report.ProducerCompletenessUnavailable,
+				Mapping: report.ProducerMappingUnavailable, Usability: report.ProducerUsabilityRejected,
+			},
+		},
+		{
+			name: "run unavailable",
+			want: report.ProducerOutcome{
+				Integrity: report.ProducerIntegrityUnavailable, Completeness: report.ProducerCompletenessUnavailable,
+				Mapping: report.ProducerMappingUnavailable, Usability: report.ProducerUsabilityRejected,
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := runtimeProducerOutcome(
+				report.ProducerASTRuntime,
+				test.run,
+				test.collectionErr,
+				test.mappingErr,
+				test.diagnosticErr,
+				test.diagnostics,
+			)
+			test.want.Producer = report.ProducerASTRuntime
+			if got != test.want {
+				t.Fatalf("outcome = %#v, want %#v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestRuntimeAcceptancePreservesProducerOwnership(t *testing.T) {
+	t.Parallel()
+
+	decisions := []cover.DecisionMetadata{{ID: 1, Package: "example.test/p"}}
+	clauses := []cover.ClauseMetadata{{
+		ID: 10, SwitchID: 100, Package: "example.test/p",
+		Kind: cover.ClauseExpressionSwitch,
+	}}
+	tests := []struct {
+		name         string
+		recorded     runtimecov.RecordedEvidence
+		wantAST      bool
+		wantCompiler bool
+	}{
+		{
+			name: "invalid decision belongs only to AST runtime",
+			recorded: runtimecov.RecordedEvidence{Evaluations: []cover.DecisionEvaluation{{
+				DecisionID: 99,
+			}}},
+			wantAST: true,
+		},
+		{
+			name: "invalid direct selection belongs only to compiler selection",
+			recorded: runtimecov.RecordedEvidence{ClauseEvents: []runtimecov.RecordedClauseEvent{{
+				RunID: "run", PackagePath: "example.test/p", ProcessID: 1,
+				ClauseID: 99, Event: cover.ClauseDirectSelection,
+			}}},
+			wantCompiler: true,
+		},
+		{
+			name: "invalid process file is shared transport evidence",
+			recorded: runtimecov.RecordedEvidence{Files: []runtimecov.ProcessFile{{
+				Path: "events.jsonl", RunID: "other", PackagePath: "example.test/p", ProcessID: 1,
+			}}},
+			wantAST: true, wantCompiler: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, issues := acceptRuntimeEvidenceByProducer(
+				context.Background(), decisions, clauses, test.recorded, "run", nil,
+			)
+			if got := issues.astErr() != nil; got != test.wantAST {
+				t.Fatalf("AST mapping error = %t, want %t (%v)", got, test.wantAST, issues.astErr())
+			}
+			if got := issues.compilerErr() != nil; got != test.wantCompiler {
+				t.Fatalf("compiler mapping error = %t, want %t (%v)", got, test.wantCompiler, issues.compilerErr())
+			}
+		})
+	}
+}
+
+func TestGoCoverProducerOutcomeSeparatesMappingFromIntegrity(t *testing.T) {
+	t.Parallel()
+
+	passed := &gotest.Result{Status: cover.RunPassed}
+	if got := goCoverProducerOutcome(passed, nil, errors.New("unknown region")); got != (report.ProducerOutcome{
+		Producer: report.ProducerGoCover, Integrity: report.ProducerIntegrityValid,
+		Completeness: report.ProducerCompletenessComplete, Mapping: report.ProducerMappingInvalid,
+		Usability: report.ProducerUsabilityRejected,
+	}) {
+		t.Fatalf("mapping failure outcome = %#v", got)
+	}
+	if got := goCoverProducerOutcome(passed, os.ErrNotExist, nil); got.Integrity != report.ProducerIntegrityUnavailable ||
+		got.Mapping != report.ProducerMappingUnavailable || got.Usability != report.ProducerUsabilityRejected {
+		t.Fatalf("missing profile outcome = %#v", got)
 	}
 }

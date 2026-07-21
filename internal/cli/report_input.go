@@ -27,8 +27,7 @@ type reportAssembly struct {
 	astResult              *gotest.Result
 	standardCoverRequested bool
 	astRequested           bool
-	astEvidenceUnknown     bool
-	c0EvidenceUnknown      bool
+	producerOutcomes       []report.ProducerOutcome
 	instrumentationUnknown int
 	integrityFailure       bool
 	interrupted            bool
@@ -89,15 +88,14 @@ func assembleReportInput(assembly reportAssembly) report.Input {
 			assembly.astResult,
 			assembly.standardCoverRequested && assembly.astRequested,
 		),
-		Backend:                     backend.OrchestratedBackend{},
-		BackendProducers:            backend.V1Producers(),
-		ASTEvidenceIntegrityUnknown: assembly.astEvidenceUnknown,
-		C0EvidenceIntegrityUnknown:  assembly.c0EvidenceUnknown,
-		InstrumentationUnknown:      assembly.instrumentationUnknown,
-		Errors:                      errors,
-		Complete:                    overallStatus == cover.RunPassed && !assembly.integrityFailure && !assembly.analysisIncomplete,
-		PackageStatuses:             packageStatuses,
-		ASTPackageStatuses:          astPackageStatuses,
+		ProducerOutcomes:       assembly.producerOutcomes,
+		Backend:                backend.OrchestratedBackend{},
+		BackendProducers:       backend.OrchestratedProducers(),
+		InstrumentationUnknown: assembly.instrumentationUnknown,
+		Errors:                 errors,
+		Complete:               overallStatus == cover.RunPassed && !assembly.integrityFailure && !assembly.analysisIncomplete,
+		PackageStatuses:        packageStatuses,
+		ASTPackageStatuses:     astPackageStatuses,
 	}
 }
 

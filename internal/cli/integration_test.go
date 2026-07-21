@@ -71,7 +71,6 @@ func TestGoFilesInDirectoryFiltersDirectoriesAndNonGoFiles(t *testing.T) {
 
 func TestIntegratedFixtureWritesPackageCenteredHTML(t *testing.T) {
 	configureIntegrationEnvironment(t)
-	t.Setenv("GOMCDC_ISOLATION_FIXTURE", "1")
 	root := fixturePath(t, "integration")
 	output := filepath.Join(t.TempDir(), "coverage-html")
 	var stdout, stderr bytes.Buffer
@@ -100,7 +99,8 @@ func TestIntegratedFixtureWritesPackageCenteredHTML(t *testing.T) {
 
 func TestIntegratedFixtureReportsAllMetricsAcrossPackages(t *testing.T) {
 	configureIntegrationEnvironment(t)
-	t.Setenv("GOMCDC_ISOLATION_FIXTURE", "1")
+	markerDir := t.TempDir()
+	t.Setenv("GOMCDC_EXECUTION_MARKER_DIR", markerDir)
 	root := fixturePath(t, "integration")
 
 	all, allStderr, code := runFixture(t, root, "--format=json", "./...")
@@ -125,6 +125,28 @@ func TestIntegratedFixtureReportsAllMetricsAcrossPackages(t *testing.T) {
 	if all.MeasurementMode != report.MeasurementSingleRun || len(all.Measurements) != 1 || all.Measurements[0].Name != "combined" {
 		t.Fatalf("single measurement provenance = mode %q runs %#v", all.MeasurementMode, all.Measurements)
 	}
+	if len(all.ProducerOutcomes) != 3 {
+		t.Fatalf("producer outcomes = %#v, want three combined producers", all.ProducerOutcomes)
+	}
+	for _, producer := range []report.ProducerName{
+		report.ProducerGoCover,
+		report.ProducerASTRuntime,
+		report.ProducerCompilerSelection,
+	} {
+		outcome := findProducerOutcome(t, all, producer)
+		if outcome.Integrity != report.ProducerIntegrityValid ||
+			outcome.Completeness != report.ProducerCompletenessComplete ||
+			outcome.Mapping != report.ProducerMappingComplete ||
+			outcome.Usability != report.ProducerUsabilityAccepted {
+			t.Fatalf("complete producer %q outcome = %#v", producer, outcome)
+		}
+	}
+	for _, packageName := range []string{"allow", "consumer", "routing"} {
+		if _, err := os.Stat(filepath.Join(markerDir, packageName)); err != nil {
+			t.Fatalf("package %q did not record its single test-binary execution: %v", packageName, err)
+		}
+	}
+	t.Setenv("GOMCDC_EXECUTION_MARKER_DIR", "")
 	for _, measurement := range all.Measurements {
 		if len(measurement.Packages) != 4 {
 			t.Fatalf("measurement %q package statuses = %#v, want 4 packages", measurement.Name, measurement.Packages)
@@ -350,6 +372,19 @@ func TestBuildFailureStillProducesPartialMultiPackageReport(t *testing.T) {
 	}
 	if built.Run.Status != cover.RunFailed || built.Run.FailureKind != cover.RunFailureBuild || built.Run.Complete {
 		t.Fatalf("partial run = %#v", built.Run)
+	}
+	for _, producer := range []report.ProducerName{
+		report.ProducerGoCover,
+		report.ProducerASTRuntime,
+		report.ProducerCompilerSelection,
+	} {
+		outcome := findProducerOutcome(t, built, producer)
+		if outcome.Integrity != report.ProducerIntegrityValid ||
+			outcome.Completeness != report.ProducerCompletenessPartial ||
+			outcome.Mapping != report.ProducerMappingComplete ||
+			outcome.Usability != report.ProducerUsabilityAcceptedPartial {
+			t.Fatalf("partial producer %q outcome = %#v", producer, outcome)
+		}
 	}
 	hasAnalysisError := false
 	for _, reportError := range built.Errors {
@@ -1086,4 +1121,15 @@ func findPackage(t *testing.T, built report.Report, path string) report.PackageR
 	}
 	t.Fatalf("package %q not found", path)
 	return report.PackageReport{}
+}
+
+func findProducerOutcome(t *testing.T, built report.Report, producer report.ProducerName) report.ProducerOutcome {
+	t.Helper()
+	for _, outcome := range built.ProducerOutcomes {
+		if outcome.Producer == producer {
+			return outcome
+		}
+	}
+	t.Fatalf("producer outcome %q not found in %#v", producer, built.ProducerOutcomes)
+	return report.ProducerOutcome{}
 }

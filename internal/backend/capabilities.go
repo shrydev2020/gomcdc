@@ -231,8 +231,8 @@ func (CompilerAwareBackend) Capabilities() CapabilitySet {
 	}
 }
 
-// OrchestratedBackend is the v1 tool-level union of the standard-cover, AST,
-// and compiler-aware producers. A capability is supported when at least one
+// OrchestratedBackend is the tool-level union of the standard-cover, AST, and
+// compiler-aware producers. A capability is supported when at least one
 // concrete producer supports it; an explicit unsupported status is retained
 // otherwise.
 type OrchestratedBackend struct{}
@@ -247,8 +247,9 @@ func (OrchestratedBackend) Capabilities() CapabilitySet {
 	)
 }
 
-// V1Producers returns a fresh, deterministic producer breakdown for reports.
-func V1Producers() []ProducerCapabilities {
+// OrchestratedProducers returns a fresh, deterministic producer breakdown for
+// reports.
+func OrchestratedProducers() []ProducerCapabilities {
 	return []ProducerCapabilities{
 		{Backend: "ast", Capabilities: (ASTBackend{}).Capabilities()},
 		{Backend: "compiler-aware", Capabilities: (CompilerAwareBackend{}).Capabilities()},

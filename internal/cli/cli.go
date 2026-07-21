@@ -284,7 +284,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		clauses: clauses, noMatches: noMatches,
 		evidence: measurement.evidence, c0: measurement.c0, standardResult: measurement.standardResult, astResult: measurement.astResult,
 		standardCoverRequested: needsC0, astRequested: needsASTRun,
-		astEvidenceUnknown: measurement.astEvidenceIntegrityUnknown, c0EvidenceUnknown: measurement.c0EvidenceIntegrityUnknown,
+		producerOutcomes:       measurement.producerOutcomes,
 		instrumentationUnknown: analysisUnknown, integrityFailure: measurement.integrityFailure, analysisIncomplete: analysisIncomplete,
 		interrupted: measurement.interrupted,
 		errors:      reportErrors, measurementDiagnostics: measurement.diagnostics,
@@ -725,6 +725,57 @@ type acceptedRuntimeEvidence struct {
 	Files                 []runtimecov.ProcessFile
 }
 
+// runtimeAcceptanceIssues preserves producer ownership for rejected runtime
+// records. Shared transport failures invalidate both runtime producers, while
+// AST and compiler mapping failures invalidate only the projection that owns
+// the rejected record.
+type runtimeAcceptanceIssues struct {
+	shared   []error
+	ast      []error
+	compiler []error
+}
+
+func (issues *runtimeAcceptanceIssues) addShared(err error) {
+	if err != nil {
+		issues.shared = append(issues.shared, err)
+	}
+}
+
+func (issues *runtimeAcceptanceIssues) addAST(err error) {
+	if err != nil {
+		issues.ast = append(issues.ast, err)
+	}
+}
+
+func (issues *runtimeAcceptanceIssues) addCompiler(err error) {
+	if err != nil {
+		issues.compiler = append(issues.compiler, err)
+	}
+}
+
+func (issues runtimeAcceptanceIssues) err() error {
+	return errors.Join(errors.Join(issues.shared...), errors.Join(issues.ast...), errors.Join(issues.compiler...))
+}
+
+func (issues runtimeAcceptanceIssues) astErr() error {
+	return errors.Join(errors.Join(issues.shared...), errors.Join(issues.ast...))
+}
+
+func (issues runtimeAcceptanceIssues) compilerErr() error {
+	return errors.Join(errors.Join(issues.shared...), errors.Join(issues.compiler...))
+}
+
+func (issues *runtimeAcceptanceIssues) addClause(event cover.ClauseEventKind, err error) {
+	switch event {
+	case cover.ClauseBodyExecution:
+		issues.addAST(err)
+	case cover.ClauseDirectSelection, cover.ClauseNoMatchSelection:
+		issues.addCompiler(err)
+	default:
+		issues.addShared(err)
+	}
+}
+
 func acceptRuntimeEvidence(
 	ctx context.Context,
 	decisions []cover.DecisionMetadata,
@@ -733,14 +784,29 @@ func acceptRuntimeEvidence(
 	runID string,
 	noMatches []cover.NoMatchMetadata,
 ) (acceptedRuntimeEvidence, error) {
+	accepted, issues := acceptRuntimeEvidenceByProducer(ctx, decisions, clauses, recorded, runID, noMatches)
+	return accepted, issues.err()
+}
+
+func acceptRuntimeEvidenceByProducer(
+	ctx context.Context,
+	decisions []cover.DecisionMetadata,
+	clauses []cover.ClauseMetadata,
+	recorded runtimecov.RecordedEvidence,
+	runID string,
+	noMatches []cover.NoMatchMetadata,
+) (acceptedRuntimeEvidence, runtimeAcceptanceIssues) {
+	var issues runtimeAcceptanceIssues
 	if err := ctx.Err(); err != nil {
-		return acceptedRuntimeEvidence{}, err
+		issues.addShared(err)
+		return acceptedRuntimeEvidence{}, issues
 	}
 	knownDecisions := make(map[cover.DecisionID]cover.DecisionMetadata, len(decisions))
 	knownPackages := make(map[string]struct{})
 	for _, decision := range decisions {
 		if err := ctx.Err(); err != nil {
-			return acceptedRuntimeEvidence{}, err
+			issues.addShared(err)
+			return acceptedRuntimeEvidence{}, issues
 		}
 		knownDecisions[decision.ID] = decision
 		knownPackages[decision.Package] = struct{}{}
@@ -748,7 +814,8 @@ func acceptRuntimeEvidence(
 	knownClauses := make(map[cover.ClauseID]cover.ClauseMetadata, len(clauses))
 	for _, clause := range clauses {
 		if err := ctx.Err(); err != nil {
-			return acceptedRuntimeEvidence{}, err
+			issues.addShared(err)
+			return acceptedRuntimeEvidence{}, issues
 		}
 		knownClauses[clause.ID] = clause
 		knownPackages[clause.Package] = struct{}{}
@@ -756,30 +823,32 @@ func acceptRuntimeEvidence(
 	knownNoMatches := make(map[cover.SwitchID]cover.NoMatchMetadata)
 	for _, noMatch := range noMatches {
 		if err := ctx.Err(); err != nil {
-			return acceptedRuntimeEvidence{}, err
+			issues.addShared(err)
+			return acceptedRuntimeEvidence{}, issues
 		}
 		knownNoMatches[noMatch.SwitchID] = noMatch
 		knownPackages[noMatch.Package] = struct{}{}
 	}
 	switchDecisions, orderErr := conditionlessSwitchDecisionOrder(ctx, clauses)
 	if orderErr != nil {
-		return acceptedRuntimeEvidence{}, orderErr
+		issues.addShared(orderErr)
+		return acceptedRuntimeEvidence{}, issues
 	}
 	accepted := acceptedRuntimeEvidence{
 		Diagnostics: append([]runtimecov.Diagnostic(nil), recorded.Diagnostics...),
 		Files:       append([]runtimecov.ProcessFile(nil), recorded.Files...),
 	}
-	var validationErrors []error
 	for _, file := range recorded.Files {
 		if err := ctx.Err(); err != nil {
-			return accepted, errors.Join(append(validationErrors, err)...)
+			issues.addShared(err)
+			return accepted, issues
 		}
 		if file.RunID == "" && file.PackagePath == "" && file.ProcessID == 0 {
 			continue
 		}
 		_, knownPackage := knownPackages[file.PackagePath]
 		if file.RunID != runID || !knownPackage || file.ProcessID <= 0 {
-			validationErrors = append(validationErrors, fmt.Errorf(
+			issues.addShared(fmt.Errorf(
 				"process event file %q has invalid provenance run=%q package=%q process=%d",
 				filepath.Base(file.Path), file.RunID, file.PackagePath, file.ProcessID,
 			))
@@ -795,41 +864,42 @@ func acceptRuntimeEvidence(
 	candidateSkips := make(map[skipCauseKey][]cover.DecisionNotEvaluatedObservation)
 	for _, evaluation := range recorded.Evaluations {
 		if err := ctx.Err(); err != nil {
-			return accepted, errors.Join(append(validationErrors, err)...)
+			issues.addShared(err)
+			return accepted, issues
 		}
 		metadata, exists := knownDecisions[evaluation.DecisionID]
 		if !exists {
-			validationErrors = append(validationErrors, fmt.Errorf("event contains unknown decision ID 0x%016x", uint64(evaluation.DecisionID)))
+			issues.addAST(fmt.Errorf("event contains unknown decision ID 0x%016x", uint64(evaluation.DecisionID)))
 			continue
 		}
 		if evaluation.EvaluationID == 0 {
-			validationErrors = append(validationErrors, fmt.Errorf("decision 0x%016x has reserved evaluation ID zero", uint64(evaluation.DecisionID)))
+			issues.addAST(fmt.Errorf("decision 0x%016x has reserved evaluation ID zero", uint64(evaluation.DecisionID)))
 			continue
 		}
 		if evaluation.ProcessID <= 0 {
-			validationErrors = append(validationErrors, fmt.Errorf("decision 0x%016x has invalid process provenance %d", uint64(evaluation.DecisionID), evaluation.ProcessID))
+			issues.addAST(fmt.Errorf("decision 0x%016x has invalid process provenance %d", uint64(evaluation.DecisionID), evaluation.ProcessID))
 			continue
 		}
 		if evaluation.RunID != runID {
-			validationErrors = append(validationErrors, fmt.Errorf("decision 0x%016x belongs to unexpected run %q", uint64(evaluation.DecisionID), evaluation.RunID))
+			issues.addAST(fmt.Errorf("decision 0x%016x belongs to unexpected run %q", uint64(evaluation.DecisionID), evaluation.RunID))
 			continue
 		}
 		if evaluation.PackagePath != metadata.Package {
-			validationErrors = append(validationErrors, fmt.Errorf(
+			issues.addAST(fmt.Errorf(
 				"decision 0x%016x belongs to package %q, want %q",
 				uint64(evaluation.DecisionID), evaluation.PackagePath, metadata.Package,
 			))
 			continue
 		}
 		if len(evaluation.Conditions) != len(metadata.Conditions) {
-			validationErrors = append(validationErrors, fmt.Errorf(
+			issues.addAST(fmt.Errorf(
 				"decision 0x%016x has %d condition states, want %d",
 				uint64(evaluation.DecisionID), len(evaluation.Conditions), len(metadata.Conditions),
 			))
 			continue
 		}
 		if semanticErr := mcdc.ValidateCompletedEvaluation(metadata, evaluation); semanticErr != nil {
-			validationErrors = append(validationErrors, fmt.Errorf(
+			issues.addAST(fmt.Errorf(
 				"decision 0x%016x contains impossible completed evidence: %w",
 				uint64(evaluation.DecisionID), semanticErr,
 			))
@@ -840,7 +910,8 @@ func acceptRuntimeEvidence(
 	}
 	for _, observation := range recorded.NotEvaluatedDecisions {
 		if err := ctx.Err(); err != nil {
-			return accepted, errors.Join(append(validationErrors, err)...)
+			issues.addShared(err)
+			return accepted, issues
 		}
 		target, targetExists := knownDecisions[observation.DecisionID]
 		cause, causeExists := knownDecisions[observation.CauseDecisionID]
@@ -853,25 +924,25 @@ func acceptRuntimeEvidence(
 		causeEvaluation, evidenceExists := validEvaluations[identity]
 		switch {
 		case !targetExists:
-			validationErrors = append(validationErrors, fmt.Errorf("event contains unknown skipped decision ID 0x%016x", uint64(observation.DecisionID)))
+			issues.addAST(fmt.Errorf("event contains unknown skipped decision ID 0x%016x", uint64(observation.DecisionID)))
 			continue
 		case !causeExists:
-			validationErrors = append(validationErrors, fmt.Errorf("event contains unknown skip-cause decision ID 0x%016x", uint64(observation.CauseDecisionID)))
+			issues.addAST(fmt.Errorf("event contains unknown skip-cause decision ID 0x%016x", uint64(observation.CauseDecisionID)))
 			continue
 		case observation.RunID != runID || observation.PackagePath != target.Package || cause.Package != target.Package || observation.ProcessID <= 0:
-			validationErrors = append(validationErrors, fmt.Errorf("skipped decision 0x%016x has inconsistent run or package provenance", uint64(observation.DecisionID)))
+			issues.addAST(fmt.Errorf("skipped decision 0x%016x has inconsistent run or package provenance", uint64(observation.DecisionID)))
 			continue
 		case target.Kind != cover.DecisionSwitchCase || cause.Kind != cover.DecisionSwitchCase:
-			validationErrors = append(validationErrors, fmt.Errorf("skipped decision 0x%016x is not a conditionless-switch decision", uint64(observation.DecisionID)))
+			issues.addAST(fmt.Errorf("skipped decision 0x%016x is not a conditionless-switch decision", uint64(observation.DecisionID)))
 			continue
 		case !evidenceExists || causeEvaluation.DecisionID != observation.CauseDecisionID || causeEvaluation.Status != cover.EvaluationCompleted || !causeEvaluation.Result:
-			validationErrors = append(validationErrors, fmt.Errorf("skipped decision 0x%016x has no completed true cause evaluation", uint64(observation.DecisionID)))
+			issues.addAST(fmt.Errorf("skipped decision 0x%016x has no completed true cause evaluation", uint64(observation.DecisionID)))
 			continue
 		}
 		causeOrder, causeOrdered := switchDecisions[observation.CauseDecisionID]
 		targetOrder, targetOrdered := switchDecisions[observation.DecisionID]
 		if !causeOrdered || !targetOrdered || causeOrder.groupID != targetOrder.groupID || targetOrder.position <= causeOrder.position {
-			validationErrors = append(validationErrors, fmt.Errorf("skipped decision 0x%016x is not later in the same conditionless switch", uint64(observation.DecisionID)))
+			issues.addAST(fmt.Errorf("skipped decision 0x%016x is not later in the same conditionless switch", uint64(observation.DecisionID)))
 			continue
 		}
 		key := skipCauseKey{Identity: identity, DecisionID: observation.CauseDecisionID}
@@ -883,7 +954,8 @@ func acceptRuntimeEvidence(
 	}
 	for _, evaluation := range validEvaluationCandidates {
 		if err := ctx.Err(); err != nil {
-			return accepted, errors.Join(append(validationErrors, err)...)
+			issues.addShared(err)
+			return accepted, issues
 		}
 		identity := evaluation.Identity()
 		order, exists := switchDecisions[evaluation.DecisionID]
@@ -893,11 +965,11 @@ func acceptRuntimeEvidence(
 		observed := observedSkips[skipCauseKey{Identity: identity, DecisionID: evaluation.DecisionID}]
 		key := skipCauseKey{Identity: identity, DecisionID: evaluation.DecisionID}
 		if len(candidateSkips[key]) != len(observed) {
-			validationErrors = append(validationErrors, fmt.Errorf("conditionless-switch decision 0x%016x has duplicate skipped-decision evidence", uint64(evaluation.DecisionID)))
+			issues.addAST(fmt.Errorf("conditionless-switch decision 0x%016x has duplicate skipped-decision evidence", uint64(evaluation.DecisionID)))
 			continue
 		}
 		if len(observed) != len(order.suffix) {
-			validationErrors = append(validationErrors, fmt.Errorf(
+			issues.addAST(fmt.Errorf(
 				"conditionless-switch decision 0x%016x skipped %d decisions, want complete suffix of %d",
 				uint64(evaluation.DecisionID), len(observed), len(order.suffix),
 			))
@@ -906,11 +978,12 @@ func acceptRuntimeEvidence(
 		complete := true
 		for _, expected := range order.suffix {
 			if err := ctx.Err(); err != nil {
-				return accepted, errors.Join(append(validationErrors, err)...)
+				issues.addShared(err)
+				return accepted, issues
 			}
 			if _, found := observed[expected]; !found {
 				complete = false
-				validationErrors = append(validationErrors, fmt.Errorf(
+				issues.addAST(fmt.Errorf(
 					"conditionless-switch decision 0x%016x omitted skipped decision 0x%016x",
 					uint64(evaluation.DecisionID), uint64(expected),
 				))
@@ -923,12 +996,14 @@ func acceptRuntimeEvidence(
 	var deduplicateErr error
 	accepted.Evaluations, deduplicateErr = deduplicateAcceptedEvaluations(ctx, validEvaluationCandidates)
 	if deduplicateErr != nil {
-		return accepted, errors.Join(append(validationErrors, deduplicateErr)...)
+		issues.addAST(deduplicateErr)
+		return accepted, issues
 	}
 	verifiedClauses := make(map[cover.ClauseObservation]struct{})
 	for _, event := range recorded.ClauseEvents {
 		if err := ctx.Err(); err != nil {
-			return accepted, errors.Join(append(validationErrors, err)...)
+			issues.addShared(err)
+			return accepted, issues
 		}
 		observation := cover.ClauseObservation{
 			SwitchID:         event.SwitchID,
@@ -938,7 +1013,7 @@ func acceptRuntimeEvidence(
 			AlternativeKnown: event.AlternativeKnown,
 		}
 		if event.RunID != runID || event.PackagePath == "" || event.ProcessID <= 0 {
-			validationErrors = append(validationErrors, fmt.Errorf(
+			issues.addClause(observation.Event, fmt.Errorf(
 				"clause event 0x%016x has invalid provenance run=%q package=%q process=%d",
 				uint64(observation.ClauseID), event.RunID, event.PackagePath, event.ProcessID,
 			))
@@ -947,11 +1022,11 @@ func acceptRuntimeEvidence(
 		if observation.Event == cover.ClauseNoMatchSelection {
 			metadata, exists := knownNoMatches[observation.SwitchID]
 			if !exists || observation.AlternativeKnown {
-				validationErrors = append(validationErrors, fmt.Errorf("event contains unknown no-match switch ID 0x%016x", uint64(observation.SwitchID)))
+				issues.addCompiler(fmt.Errorf("event contains unknown no-match switch ID 0x%016x", uint64(observation.SwitchID)))
 				continue
 			}
 			if event.PackagePath != metadata.Package {
-				validationErrors = append(validationErrors, fmt.Errorf(
+				issues.addCompiler(fmt.Errorf(
 					"no-match switch 0x%016x belongs to package %q, want %q",
 					uint64(observation.SwitchID), event.PackagePath, metadata.Package,
 				))
@@ -965,33 +1040,33 @@ func acceptRuntimeEvidence(
 		}
 		metadata, exists := knownClauses[observation.ClauseID]
 		if !exists {
-			validationErrors = append(validationErrors, fmt.Errorf("event contains unknown clause ID 0x%016x", uint64(observation.ClauseID)))
+			issues.addClause(observation.Event, fmt.Errorf("event contains unknown clause ID 0x%016x", uint64(observation.ClauseID)))
 			continue
 		}
 		if event.PackagePath != metadata.Package {
-			validationErrors = append(validationErrors, fmt.Errorf(
+			issues.addClause(observation.Event, fmt.Errorf(
 				"clause 0x%016x belongs to package %q, want %q",
 				uint64(observation.ClauseID), event.PackagePath, metadata.Package,
 			))
 			continue
 		}
 		if observation.SwitchID != 0 && observation.SwitchID != metadata.SwitchID {
-			validationErrors = append(validationErrors, fmt.Errorf("clause 0x%016x has inconsistent switch ID", uint64(observation.ClauseID)))
+			issues.addClause(observation.Event, fmt.Errorf("clause 0x%016x has inconsistent switch ID", uint64(observation.ClauseID)))
 			continue
 		}
 		switch observation.Event {
 		case cover.ClauseBodyExecution:
 			if observation.AlternativeKnown {
-				validationErrors = append(validationErrors, fmt.Errorf("clause 0x%016x body event carries a case alternative", uint64(observation.ClauseID)))
+				issues.addAST(fmt.Errorf("clause 0x%016x body event carries a case alternative", uint64(observation.ClauseID)))
 				continue
 			}
 		case cover.ClauseDirectSelection:
 			if metadata.Kind != cover.ClauseExpressionSwitch && metadata.Kind != cover.ClauseTypeSwitch {
-				validationErrors = append(validationErrors, fmt.Errorf("clause 0x%016x kind %q cannot carry direct-selection evidence", uint64(observation.ClauseID), metadata.Kind))
+				issues.addCompiler(fmt.Errorf("clause 0x%016x kind %q cannot carry direct-selection evidence", uint64(observation.ClauseID), metadata.Kind))
 				continue
 			}
 			if observation.SwitchID == 0 || observation.SwitchID != metadata.SwitchID {
-				validationErrors = append(validationErrors, fmt.Errorf("clause 0x%016x direct selection has inconsistent switch ID", uint64(observation.ClauseID)))
+				issues.addCompiler(fmt.Errorf("clause 0x%016x direct selection has inconsistent switch ID", uint64(observation.ClauseID)))
 				continue
 			}
 			alternatives := len(metadata.Expressions)
@@ -1000,15 +1075,15 @@ func acceptRuntimeEvidence(
 			}
 			if metadata.Role == cover.ClauseDefault {
 				if observation.AlternativeKnown {
-					validationErrors = append(validationErrors, fmt.Errorf("default clause 0x%016x carries a case alternative", uint64(observation.ClauseID)))
+					issues.addCompiler(fmt.Errorf("default clause 0x%016x carries a case alternative", uint64(observation.ClauseID)))
 					continue
 				}
 			} else if !observation.AlternativeKnown || int(observation.AlternativeIndex) >= alternatives {
-				validationErrors = append(validationErrors, fmt.Errorf("clause 0x%016x carries an invalid case alternative", uint64(observation.ClauseID)))
+				issues.addCompiler(fmt.Errorf("clause 0x%016x carries an invalid case alternative", uint64(observation.ClauseID)))
 				continue
 			}
 		default:
-			validationErrors = append(validationErrors, fmt.Errorf("clause 0x%016x has unsupported event %q", uint64(observation.ClauseID), observation.Event))
+			issues.addShared(fmt.Errorf("clause 0x%016x has unsupported event %q", uint64(observation.ClauseID), observation.Event))
 			continue
 		}
 		if _, duplicate := verifiedClauses[observation]; !duplicate {
@@ -1016,7 +1091,7 @@ func acceptRuntimeEvidence(
 			accepted.ClauseObservations = append(accepted.ClauseObservations, observation)
 		}
 	}
-	return accepted, errors.Join(validationErrors...)
+	return accepted, issues
 }
 
 type acceptedEvaluationKey struct {

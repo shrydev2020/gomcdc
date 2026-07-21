@@ -54,7 +54,7 @@ func TestOrchestratedBackendKeepsProducerResponsibilitiesVisible(t *testing.T) {
 	if aggregate.Status(backend.CapabilityStatementCoverage) != backend.CapabilitySupported || aggregate.Status(backend.CapabilityIfDecision) != backend.CapabilitySupported || aggregate.Status(backend.CapabilityDirectCaseSelection) != backend.CapabilitySupported {
 		t.Fatalf("orchestrated capabilities = %#v", aggregate)
 	}
-	producers := backend.V1Producers()
+	producers := backend.OrchestratedProducers()
 	if len(producers) != 3 || producers[0].Backend != "ast" || producers[1].Backend != "compiler-aware" || producers[2].Backend != "standard-cover" {
 		t.Fatalf("producer breakdown = %#v", producers)
 	}

@@ -3,6 +3,7 @@ package allow
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 )
@@ -39,19 +40,21 @@ func TestBooleanDecisions(t *testing.T) {
 	}
 }
 
-func TestMeasurementWorkspacesAreIsolated(t *testing.T) {
-	if os.Getenv("GOMCDC_ISOLATION_FIXTURE") != "1" {
+func TestSingleMeasurementExecution(t *testing.T) {
+	markerDir := os.Getenv("GOMCDC_EXECUTION_MARKER_DIR")
+	if markerDir == "" {
 		return
 	}
-	const marker = ".standard-run-marker"
-	if os.Getenv("GOMCDC_DATA_DIR") == "" {
-		if err := os.WriteFile(marker, []byte("standard-cover"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		return
+	marker := filepath.Join(markerDir, "allow")
+	file, err := os.OpenFile(marker, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, os.ErrExist) {
+		t.Fatal("allow package test binary executed more than once in one measurement session")
 	}
-	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("AST measurement observed standard-cover workspace state: %v", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 
