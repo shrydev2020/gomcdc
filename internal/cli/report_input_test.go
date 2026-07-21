@@ -10,18 +10,17 @@ import (
 	"github.com/shrydev2020/gomcdc/internal/report"
 )
 
-func TestAssembleReportInputPreservesMeasurementBoundaries(t *testing.T) {
+func TestAssembleReportInputUsesOneCombinedMeasurement(t *testing.T) {
 	input := assembleReportInput(reportAssembly{
 		loaded:                 loader.Result{ModulePath: "example.test/m", PackageImportSet: []string{"example.test/m/p"}},
 		coverage:               config.AllCoverage(),
-		standardResult:         &gotest.Result{Status: cover.RunPassed, FailureKind: cover.RunFailureNone, Packages: map[string]gotest.PackageStatus{"example.test/m/p": gotest.PackagePassed}},
 		astResult:              &gotest.Result{Status: cover.RunFailed, FailureKind: cover.RunFailureTest, Packages: map[string]gotest.PackageStatus{"example.test/m/p": gotest.PackageFailed}},
 		standardCoverRequested: true,
 		astRequested:           true,
-		evidence:               verifiedRuntimeEvidence{},
+		evidence:               acceptedRuntimeEvidence{},
 	})
 
-	if input.MeasurementMode != "dual-run-standard-cover" {
+	if input.MeasurementMode != report.MeasurementSingleRun {
 		t.Fatalf("measurement mode = %q", input.MeasurementMode)
 	}
 	if input.RunStatus != cover.RunFailed || input.FailureKind != cover.RunFailureTest || input.Complete {
@@ -36,8 +35,11 @@ func TestAssembleReportInputPreservesMeasurementBoundaries(t *testing.T) {
 	if got := input.PackageStatuses["example.test/m/p"]; got != string(gotest.PackageFailed) {
 		t.Fatalf("package status = %q", got)
 	}
-	if len(input.Measurements) != 2 || input.Measurements[0].Name != "standard-cover" || input.Measurements[1].Name != "ast" {
+	if len(input.Measurements) != 1 || input.Measurements[0].Name != "combined" {
 		t.Fatalf("measurements = %#v", input.Measurements)
+	}
+	if len(input.Errors) != 1 || input.Errors[0].Message != "combined go test failed" {
+		t.Fatalf("combined measurement errors = %#v", input.Errors)
 	}
 }
 

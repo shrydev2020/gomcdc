@@ -21,7 +21,7 @@ type reportAssembly struct {
 	decisions              []cover.DecisionMetadata
 	clauses                []cover.ClauseMetadata
 	noMatches              []cover.NoMatchMetadata
-	evidence               verifiedRuntimeEvidence
+	evidence               acceptedRuntimeEvidence
 	c0                     *c0.Report
 	standardResult         *gotest.Result
 	astResult              *gotest.Result
@@ -56,7 +56,11 @@ func assembleReportInput(assembly reportAssembly) report.Input {
 		})
 	}
 	errors = append(errors, measurementRunErrors("standard-cover", assembly.standardResult)...)
-	errors = append(errors, measurementRunErrors("ast", assembly.astResult)...)
+	astMeasurementName := "ast"
+	if assembly.standardCoverRequested && assembly.astRequested {
+		astMeasurementName = "combined"
+	}
+	errors = append(errors, measurementRunErrors(astMeasurementName, assembly.astResult)...)
 
 	return report.Input{
 		ToolVersion:           assembly.toolVersion,
@@ -79,8 +83,12 @@ func assembleReportInput(assembly reportAssembly) report.Input {
 			Strict:      report.ResultNotRequested,
 			Threshold:   report.ResultNotRequested,
 		},
-		MeasurementMode:             measurementMode(assembly.standardCoverRequested, assembly.astRequested),
-		Measurements:                measurementRuns(assembly.standardResult, assembly.astResult),
+		MeasurementMode: measurementMode(assembly.standardCoverRequested, assembly.astRequested),
+		Measurements: measurementRuns(
+			assembly.standardResult,
+			assembly.astResult,
+			assembly.standardCoverRequested && assembly.astRequested,
+		),
 		Backend:                     backend.OrchestratedBackend{},
 		BackendProducers:            backend.V1Producers(),
 		ASTEvidenceIntegrityUnknown: assembly.astEvidenceUnknown,
@@ -129,9 +137,10 @@ func measurementRunErrors(name string, result *gotest.Result) []report.ReportErr
 
 func measurementMode(standardCoverRequested, astRequested bool) report.MeasurementMode {
 	switch {
-	case standardCoverRequested && astRequested:
-		return report.MeasurementDualRunStandardCover
 	case standardCoverRequested:
+		if astRequested {
+			return report.MeasurementSingleRun
+		}
 		return report.MeasurementStandardCover
 	default:
 		return report.MeasurementSingleRun

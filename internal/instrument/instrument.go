@@ -46,8 +46,10 @@ type noMatchLocation struct {
 
 // FileMapping maps analysis of an original file to its unchanged copied path.
 type FileMapping struct {
-	CopyPath string
-	Analysis analyzer.File
+	CopyPath                string
+	Analysis                analyzer.File
+	OriginalInventory       *c0.FileInventory
+	ExcludeFromCoveragePlan bool
 }
 
 // PackageOptions describes one copied package to instrument. ActiveFiles must
@@ -92,6 +94,7 @@ type SourceMap struct {
 // coordinate translation. Correspondence is planned before Go cover executes.
 type FileCoveragePlan struct {
 	WorkspaceFile  string
+	OriginalPath   string
 	Correspondence c0.CoverageCorrespondence
 }
 
@@ -151,15 +154,20 @@ func InstrumentPackage(options PackageOptions) (PackageResult, error) {
 		if err := ctx.Err(); err != nil {
 			return PackageResult{}, err
 		}
+		planCoverage := options.PlanCoverageCorrespondence && !mapping.ExcludeFromCoveragePlan
 		var originalInventory c0.FileInventory
-		if options.PlanCoverageCorrespondence {
-			originalInventory, err = c0.BuildInventory(mapping.Analysis.RelativePath, mapping.Analysis.Source)
-			if err != nil {
-				return PackageResult{}, fmt.Errorf("plan coverage for copied file %q: build original inventory: %w", mapping.CopyPath, err)
+		if planCoverage {
+			if mapping.OriginalInventory != nil {
+				originalInventory = *mapping.OriginalInventory
+			} else {
+				originalInventory, err = c0.BuildInventory(mapping.Analysis.RelativePath, mapping.Analysis.Source)
+				if err != nil {
+					return PackageResult{}, fmt.Errorf("plan coverage for copied file %q: build original inventory: %w", mapping.CopyPath, err)
+				}
 			}
 		}
 		if len(mapping.Analysis.Decisions) == 0 && len(mapping.Analysis.Clauses) == 0 {
-			if options.PlanCoverageCorrespondence {
+			if planCoverage {
 				contents, err := os.ReadFile(mapping.CopyPath)
 				if err != nil {
 					return PackageResult{}, fmt.Errorf("plan coverage for copied file %q: read: %w", mapping.CopyPath, err)
@@ -173,7 +181,9 @@ func InstrumentPackage(options PackageOptions) (PackageResult, error) {
 				if err != nil {
 					return PackageResult{}, fmt.Errorf("plan coverage for copied file %q: %w", mapping.CopyPath, err)
 				}
-				coveragePlans = append(coveragePlans, FileCoveragePlan{WorkspaceFile: mapping.CopyPath, Correspondence: correspondence})
+				coveragePlans = append(coveragePlans, FileCoveragePlan{
+					WorkspaceFile: mapping.CopyPath, OriginalPath: mapping.Analysis.RelativePath, Correspondence: correspondence,
+				})
 			}
 			continue
 		}
@@ -181,7 +191,7 @@ func InstrumentPackage(options PackageOptions) (PackageResult, error) {
 		if err != nil {
 			return PackageResult{}, err
 		}
-		if options.PlanCoverageCorrespondence {
+		if planCoverage {
 			generatedProfileFiles := []string{
 				filepath.ToSlash(filepath.Join(filepath.Dir(mapping.Analysis.RelativePath), sourceMap.GeneratedFile)),
 				filepath.ToSlash(filepath.Join(filepath.Dir(mapping.Analysis.RelativePath), sourceMap.CompilerFile)),
@@ -192,7 +202,9 @@ func InstrumentPackage(options PackageOptions) (PackageResult, error) {
 			if err != nil {
 				return PackageResult{}, fmt.Errorf("instrument copied file %q: %w", mapping.CopyPath, err)
 			}
-			coveragePlans = append(coveragePlans, FileCoveragePlan{WorkspaceFile: mapping.CopyPath, Correspondence: correspondence})
+			coveragePlans = append(coveragePlans, FileCoveragePlan{
+				WorkspaceFile: mapping.CopyPath, OriginalPath: mapping.Analysis.RelativePath, Correspondence: correspondence,
+			})
 		}
 		if err := ctx.Err(); err != nil {
 			return PackageResult{}, err

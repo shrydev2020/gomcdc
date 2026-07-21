@@ -191,6 +191,7 @@ const (
 	ExcludeGeneratedBlock      ExclusionReason = "generated_block"
 	ExcludeUnmappedFile        ExclusionReason = "unmapped_file"
 	ExcludeNoOriginalStatement ExclusionReason = "no_original_statement"
+	ExcludeReportScope         ExclusionReason = "report_scope"
 )
 
 // ExcludedBlock is profile data deliberately kept out of every denominator.

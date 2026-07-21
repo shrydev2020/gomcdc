@@ -26,19 +26,19 @@ func TestCancellationBoundariesStopHelperWork(t *testing.T) {
 	if _, err := goFilesInDirectory(ctx, t.TempDir()); !errors.Is(err, context.Canceled) {
 		t.Fatalf("goFilesInDirectory error = %v, want context.Canceled", err)
 	}
-	if _, err := verifyRuntimeEvidence(ctx, nil, nil, runtimecov.RecordedEvidence{}, "run", nil); !errors.Is(err, context.Canceled) {
-		t.Fatalf("verifyRuntimeEvidence error = %v, want context.Canceled", err)
+	if _, err := acceptRuntimeEvidence(ctx, nil, nil, runtimecov.RecordedEvidence{}, "run", nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("acceptRuntimeEvidence error = %v, want context.Canceled", err)
 	}
 	if _, err := conditionlessSwitchDecisionOrder(ctx, []cover.ClauseMetadata{{GroupID: 1}}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("conditionlessSwitchDecisionOrder error = %v, want context.Canceled", err)
 	}
-	if _, err := deduplicateVerifiedEvaluations(ctx, []cover.DecisionEvaluation{{}}); !errors.Is(err, context.Canceled) {
-		t.Fatalf("deduplicateVerifiedEvaluations error = %v, want context.Canceled", err)
+	if _, err := deduplicateAcceptedEvaluations(ctx, []cover.DecisionEvaluation{{}}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("deduplicateAcceptedEvaluations error = %v, want context.Canceled", err)
 	}
 	if _, err := runtimeDiagnosticsInvalidate(ctx, []runtimecov.Diagnostic{{Severity: runtimecov.DiagnosticRecoverable}}, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("runtimeDiagnosticsInvalidate error = %v, want context.Canceled", err)
 	}
-	if _, err := instrumentPackages(ctx, t.TempDir(), nil, "example.test/runtime", false); !errors.Is(err, context.Canceled) {
+	if _, err := instrumentPackages(ctx, t.TempDir(), nil, "example.test/runtime", false, false); !errors.Is(err, context.Canceled) {
 		t.Fatalf("instrumentPackages error = %v, want context.Canceled", err)
 	}
 }
@@ -122,8 +122,8 @@ func TestIntegratedFixtureReportsAllMetricsAcrossPackages(t *testing.T) {
 	if len(all.Errors) != 0 {
 		t.Fatalf("successful report errors = %#v", all.Errors)
 	}
-	if all.MeasurementMode != report.MeasurementDualRunStandardCover || len(all.Measurements) != 2 {
-		t.Fatalf("dual measurement provenance = mode %q runs %#v", all.MeasurementMode, all.Measurements)
+	if all.MeasurementMode != report.MeasurementSingleRun || len(all.Measurements) != 1 || all.Measurements[0].Name != "combined" {
+		t.Fatalf("single measurement provenance = mode %q runs %#v", all.MeasurementMode, all.Measurements)
 	}
 	for _, measurement := range all.Measurements {
 		if len(measurement.Packages) != 4 {
@@ -509,7 +509,7 @@ func TestEvidenceVerificationDropsImpossibleCompletedEvidence(t *testing.T) {
 		Conditions: []cover.ConditionState{cover.ConditionFalse, cover.ConditionTrue},
 		Result:     false, Status: cover.EvaluationCompleted,
 	}}}
-	validated, err := verifyRuntimeEvidence(context.Background(), []cover.DecisionMetadata{decision}, nil, recorded, "run", nil)
+	validated, err := acceptRuntimeEvidence(context.Background(), []cover.DecisionMetadata{decision}, nil, recorded, "run", nil)
 	if err == nil || len(validated.Evaluations) != 0 {
 		t.Fatalf("validated=%#v err=%v; impossible vector became coverage evidence", validated, err)
 	}
@@ -537,7 +537,7 @@ func TestEvidenceVerificationKeepsConditionlessSwitchNotEvaluatedEvidence(t *tes
 		{ID: 10, Package: "example.test/p", GroupID: 100, Kind: cover.ClauseConditionlessSwitch, Role: cover.ClauseCase, Index: 0, DecisionIDs: []cover.DecisionID{1}},
 		{ID: 11, Package: "example.test/p", GroupID: 100, Kind: cover.ClauseConditionlessSwitch, Role: cover.ClauseCase, Index: 1, DecisionIDs: []cover.DecisionID{2}},
 	}
-	validated, err := verifyRuntimeEvidence(context.Background(),
+	validated, err := acceptRuntimeEvidence(context.Background(),
 		[]cover.DecisionMetadata{first, second},
 		clauses,
 		runtimecov.RecordedEvidence{Evaluations: []cover.DecisionEvaluation{evaluation}, NotEvaluatedDecisions: []cover.DecisionNotEvaluatedObservation{observation}},
@@ -547,7 +547,7 @@ func TestEvidenceVerificationKeepsConditionlessSwitchNotEvaluatedEvidence(t *tes
 	if err != nil || len(validated.NotEvaluatedDecisions) != 1 {
 		t.Fatalf("validated=%#v err=%v", validated, err)
 	}
-	withoutSuffix, err := verifyRuntimeEvidence(context.Background(),
+	withoutSuffix, err := acceptRuntimeEvidence(context.Background(),
 		[]cover.DecisionMetadata{first, second},
 		clauses,
 		runtimecov.RecordedEvidence{Evaluations: []cover.DecisionEvaluation{evaluation}},
@@ -592,7 +592,7 @@ func TestEvidenceVerificationRejectsInvalidEvaluationIdentityAndShape(t *testing
 			if test.mutate != nil {
 				test.mutate(&evaluation)
 			}
-			validated, err := verifyRuntimeEvidence(context.Background(),
+			validated, err := acceptRuntimeEvidence(context.Background(),
 				[]cover.DecisionMetadata{metadata}, nil,
 				runtimecov.RecordedEvidence{Evaluations: []cover.DecisionEvaluation{evaluation}}, "run", nil,
 			)
@@ -628,16 +628,16 @@ func TestEvaluationEvidenceIsVerifiedBeforeSemanticDeduplication(t *testing.T) {
 	validDuplicate.ProcessID = 10
 	validDuplicate.TestID = "TestNamed"
 
-	verified, err := verifyRuntimeEvidence(context.Background(),
+	accepted, err := acceptRuntimeEvidence(context.Background(),
 		[]cover.DecisionMetadata{metadata}, nil,
 		runtimecov.RecordedEvidence{Evaluations: []cover.DecisionEvaluation{valid, invalidDuplicate, validDuplicate}},
 		"run", nil,
 	)
 	if err == nil || !strings.Contains(err.Error(), "invalid process provenance") {
-		t.Fatalf("invalid duplicate provenance was hidden: verified=%#v err=%v", verified, err)
+		t.Fatalf("invalid duplicate provenance was hidden: accepted=%#v err=%v", accepted, err)
 	}
-	if len(verified.Evaluations) != 1 || verified.Evaluations[0].TestID != "TestNamed" {
-		t.Fatalf("valid duplicates were not projected idempotently: %#v", verified.Evaluations)
+	if len(accepted.Evaluations) != 1 || accepted.Evaluations[0].TestID != "TestNamed" {
+		t.Fatalf("valid duplicates were not projected idempotently: %#v", accepted.Evaluations)
 	}
 }
 
@@ -708,7 +708,7 @@ func TestEvidenceVerificationRejectsInvalidConditionlessSwitchSkipEvidence(t *te
 			if test.mutate != nil {
 				test.mutate(decisions, clauses, &collection)
 			}
-			validated, err := verifyRuntimeEvidence(context.Background(), decisions, clauses, collection, "run", nil)
+			validated, err := acceptRuntimeEvidence(context.Background(), decisions, clauses, collection, "run", nil)
 			if test.wantErr == "" {
 				if err != nil || len(validated.NotEvaluatedDecisions) != 2 {
 					t.Fatalf("valid skip suffix rejected: validated=%#v err=%v", validated, err)
@@ -750,7 +750,7 @@ func TestEvidenceVerificationRejectsInvalidClauseEvidence(t *testing.T) {
 		{name: "unsupported event", observation: cover.ClauseObservation{ClauseID: 10, Event: cover.ClauseEventKind("invented")}, wantErr: "unsupported event"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			validated, err := verifyRuntimeEvidence(context.Background(),
+			validated, err := acceptRuntimeEvidence(context.Background(),
 				nil, clauses, runtimecov.RecordedEvidence{ClauseEvents: []runtimecov.RecordedClauseEvent{recordedClauseEvent(test.observation)}}, "run", noMatches,
 			)
 			if test.wantErr == "" {
@@ -802,18 +802,18 @@ func TestClauseEvidenceRequiresValidProvenanceBeforeDeduplication(t *testing.T) 
 		t.Run(test.name, func(t *testing.T) {
 			event := valid
 			test.mutate(&event)
-			verified, err := verifyRuntimeEvidence(context.Background(), nil, metadata, runtimecov.RecordedEvidence{ClauseEvents: []runtimecov.RecordedClauseEvent{event}}, "run", nil)
-			if err == nil || !strings.Contains(err.Error(), test.wantErr) || len(verified.ClauseObservations) != 0 {
-				t.Fatalf("verified=%#v err=%v, want rejection containing %q", verified, err, test.wantErr)
+			accepted, err := acceptRuntimeEvidence(context.Background(), nil, metadata, runtimecov.RecordedEvidence{ClauseEvents: []runtimecov.RecordedClauseEvent{event}}, "run", nil)
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) || len(accepted.ClauseObservations) != 0 {
+				t.Fatalf("accepted=%#v err=%v, want rejection containing %q", accepted, err, test.wantErr)
 			}
 		})
 	}
 
 	secondProcess := valid
 	secondProcess.ProcessID++
-	verified, err := verifyRuntimeEvidence(context.Background(), nil, metadata, runtimecov.RecordedEvidence{ClauseEvents: []runtimecov.RecordedClauseEvent{valid, secondProcess}}, "run", nil)
-	if err != nil || len(verified.ClauseObservations) != 1 {
-		t.Fatalf("valid cross-process duplicate was not projected idempotently: verified=%#v err=%v", verified, err)
+	accepted, err := acceptRuntimeEvidence(context.Background(), nil, metadata, runtimecov.RecordedEvidence{ClauseEvents: []runtimecov.RecordedClauseEvent{valid, secondProcess}}, "run", nil)
+	if err != nil || len(accepted.ClauseObservations) != 1 {
+		t.Fatalf("valid cross-process duplicate was not projected idempotently: accepted=%#v err=%v", accepted, err)
 	}
 }
 
@@ -825,14 +825,14 @@ func TestProcessFileProvenanceIsVerified(t *testing.T) {
 		{Path: "/tmp/zero-process", RunID: "run", PackagePath: "example.test/p"},
 		{Path: "/tmp/unknown-package", RunID: "run", PackagePath: "example.test/other", ProcessID: 1},
 	} {
-		verified, err := verifyRuntimeEvidence(context.Background(), nil, nil, runtimecov.RecordedEvidence{Files: []runtimecov.ProcessFile{file}}, "run", nil)
-		if err == nil || !strings.Contains(err.Error(), "invalid provenance") || len(verified.Files) != 1 {
-			t.Fatalf("file=%#v verified=%#v err=%v", file, verified, err)
+		accepted, err := acceptRuntimeEvidence(context.Background(), nil, nil, runtimecov.RecordedEvidence{Files: []runtimecov.ProcessFile{file}}, "run", nil)
+		if err == nil || !strings.Contains(err.Error(), "invalid provenance") || len(accepted.Files) != 1 {
+			t.Fatalf("file=%#v accepted=%#v err=%v", file, accepted, err)
 		}
 	}
 	metadata := []cover.DecisionMetadata{{ID: 1, Package: "example.test/p"}}
 	valid := runtimecov.ProcessFile{Path: "/tmp/valid", RunID: "run", PackagePath: "example.test/p", ProcessID: 1}
-	if _, err := verifyRuntimeEvidence(context.Background(), metadata, nil, runtimecov.RecordedEvidence{Files: []runtimecov.ProcessFile{valid}}, "run", nil); err != nil {
+	if _, err := acceptRuntimeEvidence(context.Background(), metadata, nil, runtimecov.RecordedEvidence{Files: []runtimecov.ProcessFile{valid}}, "run", nil); err != nil {
 		t.Fatalf("valid process file provenance was rejected: %v", err)
 	}
 }
@@ -863,18 +863,14 @@ func TestRejectsMeasurementOwnedFlagsFromExplicitFlagsAndGOFLAGS(t *testing.T) {
 	}
 }
 
-func TestDualRunPackageStatusesRetainDivergentMeasurements(t *testing.T) {
+func TestCombinedRunRetainsPackageStatuses(t *testing.T) {
 	t.Parallel()
-	standard := &gotest.Result{
-		Status: cover.RunFailed, FailureKind: cover.RunFailureBuild,
-		Packages: map[string]gotest.PackageStatus{"example.test/p": gotest.PackageBuildFailed},
-	}
-	ast := &gotest.Result{
+	combined := &gotest.Result{
 		Status: cover.RunPassed, FailureKind: cover.RunFailureNone,
 		Packages: map[string]gotest.PackageStatus{"example.test/p": gotest.PackagePassed},
 	}
-	measurements := measurementRuns(standard, ast)
-	if len(measurements) != 2 || measurements[0].Packages["example.test/p"] != "build-failed" || measurements[1].Packages["example.test/p"] != "passed" {
+	measurements := measurementRuns(nil, combined, true)
+	if len(measurements) != 1 || measurements[0].Name != "combined" || measurements[0].Packages["example.test/p"] != "passed" {
 		t.Fatalf("measurement package provenance = %#v", measurements)
 	}
 	if got := mergePackageStatus("build-failed", "passed"); got != "build-failed" {
