@@ -19,11 +19,19 @@
     },
     "measurements": {
       "type": "array",
+      "maxItems": 1,
       "items": { "$ref": "#/$defs/measurementRun" }
     },
     "producerOutcomes": {
       "type": "array",
-      "items": { "$ref": "#/$defs/producerOutcome" }
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/producerOutcome" },
+      "allOf": [
+        { "contains": { "properties": { "producer": { "const": "go-cover" } } }, "minContains": 0, "maxContains": 1 },
+        { "contains": { "properties": { "producer": { "const": "ast-runtime" } } }, "minContains": 0, "maxContains": 1 },
+        { "contains": { "properties": { "producer": { "const": "compiler-selection" } } }, "minContains": 0, "maxContains": 1 }
+      ]
     },
     "capabilities": { "$ref": "#/$defs/capabilitySet" },
     "backendCapabilities": {
@@ -41,6 +49,43 @@
       "items": { "$ref": "#/$defs/reportError" }
     }
   },
+  "allOf": [
+    {
+      "if": { "properties": { "measurementMode": { "const": "standard-cover" } } },
+      "then": {
+        "properties": {
+          "measurements": {
+            "items": {
+              "allOf": [
+                { "$ref": "#/$defs/measurementRun" },
+                { "properties": { "name": { "const": "standard-cover" } } }
+              ]
+            }
+          },
+          "producerOutcomes": {
+            "items": {
+              "allOf": [
+                { "$ref": "#/$defs/producerOutcome" },
+                { "properties": { "producer": { "const": "go-cover" } } }
+              ]
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "measurements": {
+            "items": {
+              "allOf": [
+                { "$ref": "#/$defs/measurementRun" },
+                { "properties": { "name": { "enum": ["ast", "combined"] } } }
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "nonNegativeInteger": { "type": "integer", "minimum": 0 },
     "uint16": { "type": "integer", "minimum": 0, "maximum": 65535 },
@@ -510,4 +555,3 @@
     }
   }
 }
-

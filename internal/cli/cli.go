@@ -255,16 +255,16 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	}
 
 	jsonMode := goTestJSONEnabled(opts.goTestArgs)
-	measurement, workspaces, measurementErr := measure(measurementRequest{
+	measurement, measurementWork, measurementErr := measure(measurementRequest{
 		context: ctx, timeout: opts.timeout, goTestArgs: opts.goTestArgs, json: jsonMode,
 		workDirParent: opts.workDirParent, keepWorkDir: opts.keepWorkDir,
 		loaded: loaded, sources: sources, generated: generatedFiles, ignoredCoverageFiles: ignoredCoverageFiles,
 		decisions: decisions, clauses: clauses, noMatches: noMatches,
 		needsC0: needsC0, needsAST: needsASTRun, compilerClauseSelection: needsCompilerSelection,
 	}, stderr)
-	if workspaces != nil {
+	if measurementWork != nil {
 		defer func() {
-			if cleanupErr := workspaces.cleanup(stderr); cleanupErr != nil {
+			if cleanupErr := measurementWork.cleanup(stderr); cleanupErr != nil {
 				exitCode = ExitMeasurementFailed
 			}
 		}()
@@ -282,7 +282,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		toolVersion: buildinfo.Version(),
 		loaded:      loaded, sources: sources, coverage: opts.metrics, decisions: decisions,
 		clauses: clauses, noMatches: noMatches,
-		evidence: measurement.evidence, c0: measurement.c0, standardResult: measurement.standardResult, astResult: measurement.astResult,
+		evidence: measurement.evidence, c0: measurement.c0, testResult: measurement.testResult, measurementName: measurement.measurementName,
 		standardCoverRequested: needsC0, astRequested: needsASTRun,
 		producerOutcomes:       measurement.producerOutcomes,
 		instrumentationUnknown: analysisUnknown, integrityFailure: measurement.integrityFailure, analysisIncomplete: analysisIncomplete,
@@ -290,7 +290,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		errors:      reportErrors, measurementDiagnostics: measurement.diagnostics,
 	})
 	built := report.Build(input)
-	strictFailure := opts.strict && (built.Instrumentation.HasGaps() || summaryAnalysisIncomplete(built.Summary) > 0)
+	strictFailure := opts.strict && (built.Instrumentation.HasGaps() || summaryUnknown(built.Summary) > 0 || summaryAnalysisIncomplete(built.Summary) > 0)
 	thresholds := thresholdFailures(opts, built.Summary)
 	input.Results.Strict = requestedResult(opts.strict, !strictFailure)
 	input.Results.Threshold = requestedResult(thresholdRequested(opts), len(thresholds) == 0)
@@ -322,12 +322,13 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		coverage := built.Instrumentation.Total
 		fmt.Fprintf(
 			stderr,
-			"gomcdc: strict coverage failed: discovered=%d supported=%d instrumented=%d unsupported=%d unknown=%d analysis-incomplete=%d\n",
+			"gomcdc: strict coverage failed: discovered=%d supported=%d instrumented=%d unsupported=%d unknown=%d evidence-unknown=%d analysis-incomplete=%d\n",
 			coverage.Discovered,
 			coverage.Supported,
 			coverage.Instrumented,
 			coverage.Unsupported,
 			coverage.Unknown,
+			summaryUnknown(built.Summary),
 			summaryAnalysisIncomplete(built.Summary),
 		)
 		return classifyExit(false, true, false, false)
@@ -335,13 +336,8 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	if analysisIncomplete {
 		return classifyExit(false, true, false, false)
 	}
-	if testRunsFailed(measurement.standardResult, measurement.astResult) {
-		if measurement.standardResult != nil && measurement.standardResult.Err != nil {
-			fmt.Fprintf(stderr, "gomcdc: standard-cover measurement: %v\n", measurement.standardResult.Err)
-		}
-		if measurement.astResult != nil && measurement.astResult.Err != nil {
-			fmt.Fprintf(stderr, "gomcdc: ast measurement: %v\n", measurement.astResult.Err)
-		}
+	if testRunFailed(measurement.testResult) {
+		fmt.Fprintf(stderr, "gomcdc: %s measurement: %v\n", measurement.measurementName, measurement.testResult.Err)
 		return classifyExit(false, false, true, false)
 	}
 	if len(thresholds) > 0 {
@@ -375,6 +371,14 @@ func thresholdRequested(opts options) bool {
 }
 
 func summaryAnalysisIncomplete(summary report.Summary) int {
+	return sumEnabledSummaryField(summary, func(metric report.MetricSummary) int { return metric.AnalysisIncomplete })
+}
+
+func summaryUnknown(summary report.Summary) int {
+	return sumEnabledSummaryField(summary, func(metric report.MetricSummary) int { return metric.Unknown })
+}
+
+func sumEnabledSummaryField(summary report.Summary, value func(report.MetricSummary) int) int {
 	metrics := []report.MetricSummary{
 		summary.Statement, summary.Function, summary.Decision,
 		summary.SwitchClauseBody, summary.TypeSwitchClauseBody, summary.SelectClauseBody,
@@ -384,7 +388,7 @@ func summaryAnalysisIncomplete(summary report.Summary) int {
 	total := 0
 	for _, metric := range metrics {
 		if metric.Enabled {
-			total += metric.AnalysisIncomplete
+			total += value(metric)
 		}
 	}
 	return total
@@ -530,92 +534,27 @@ func runGoTest(ctx context.Context, timeout time.Duration, options gotest.Option
 	return gotest.Run(testContext, options)
 }
 
-func combineTestResults(results ...*gotest.Result) (cover.RunStatus, cover.RunFailureKind) {
-	status := cover.RunPassed
-	kind := cover.RunFailureNone
-	for _, result := range results {
-		if result == nil {
-			continue
-		}
-		if result.Status == cover.RunTimeout {
-			status = cover.RunTimeout
-		} else if result.Status == cover.RunFailed && status != cover.RunTimeout {
-			status = cover.RunFailed
-		}
-		if result.FailureKind == cover.RunFailureNone {
-			continue
-		}
-		if kind == cover.RunFailureNone {
-			kind = result.FailureKind
-		} else if kind != result.FailureKind {
-			kind = cover.RunFailureMixed
-		}
+func measurementRuns(name string, result *gotest.Result) []report.MeasurementRun {
+	if result == nil {
+		return nil
 	}
-	if status == cover.RunTimeout {
-		kind = cover.RunFailureTimeout
+	packages := make(map[string]string, len(result.Packages))
+	for packagePath, status := range result.Packages {
+		packages[packagePath] = string(status)
 	}
-	return status, kind
+	return []report.MeasurementRun{{
+		Name: name,
+		Run: report.TestRun{
+			Status:      result.Status,
+			FailureKind: result.FailureKind,
+			Complete:    result.Status == cover.RunPassed,
+		},
+		Packages: packages,
+	}}
 }
 
-func measurementRuns(standard, ast *gotest.Result, combined bool) []report.MeasurementRun {
-	measurements := make([]report.MeasurementRun, 0, 1)
-	appendResult := func(name string, result *gotest.Result) {
-		if result == nil {
-			return
-		}
-		packages := make(map[string]string, len(result.Packages))
-		for packagePath, status := range result.Packages {
-			packages[packagePath] = string(status)
-		}
-		measurements = append(measurements, report.MeasurementRun{
-			Name: name,
-			Run: report.TestRun{
-				Status:      result.Status,
-				FailureKind: result.FailureKind,
-				Complete:    result.Status == cover.RunPassed,
-			},
-			Packages: packages,
-		})
-	}
-	if combined {
-		appendResult("combined", ast)
-		return measurements
-	}
-	appendResult("standard-cover", standard)
-	appendResult("ast", ast)
-	return measurements
-}
-
-func mergePackageStatus(current, next string) string {
-	rank := func(status string) int {
-		switch status {
-		case string(gotest.PackageBuildFailed):
-			return 5
-		case string(gotest.PackageFailed):
-			return 4
-		case string(gotest.PackageStarted):
-			return 3
-		case string(gotest.PackagePassed):
-			return 2
-		case string(gotest.PackageSkipped):
-			return 1
-		default:
-			return 0
-		}
-	}
-	if rank(next) > rank(current) {
-		return next
-	}
-	return current
-}
-
-func testRunsFailed(results ...*gotest.Result) bool {
-	for _, result := range results {
-		if result != nil && result.Err != nil {
-			return true
-		}
-	}
-	return false
+func testRunFailed(result *gotest.Result) bool {
+	return result != nil && result.Err != nil
 }
 
 var measurementFlags = map[string]struct{}{
@@ -1203,8 +1142,8 @@ func runtimeDiagnosticReportMessage(severity runtimecov.DiagnosticSeverity) stri
 	}
 }
 
-func runtimeDiagnosticsInvalidate(ctx context.Context, diagnostics []runtimecov.Diagnostic, astResult *gotest.Result) (bool, error) {
-	if astResult != nil && len(astResult.RuntimeDiagnostics) > 0 {
+func runtimeDiagnosticsInvalidate(ctx context.Context, diagnostics []runtimecov.Diagnostic, testResult *gotest.Result) (bool, error) {
+	if testResult != nil && len(testResult.RuntimeDiagnostics) > 0 {
 		return true, nil
 	}
 	for _, diagnostic := range diagnostics {
@@ -1215,7 +1154,7 @@ func runtimeDiagnosticsInvalidate(ctx context.Context, diagnostics []runtimecov.
 			return true, nil
 		}
 	}
-	return len(diagnostics) > 0 && (astResult == nil || astResult.Status == cover.RunPassed), nil
+	return len(diagnostics) > 0 && (testResult == nil || testResult.Status == cover.RunPassed), nil
 }
 
 func thresholdFailures(opts options, summary report.Summary) []string {

@@ -220,14 +220,15 @@ func PlanCoverageCorrespondence(ctx context.Context, input CorrespondencePlanInp
 	return correspondence, nil
 }
 
-// planRewrittenStatementCandidates first uses exact logical positions. A Go
-// line directive without a column reports column zero; for those statements we
-// accept an ordinal correspondence only when the rewritten and still-unclaimed
-// original statements on that exact logical file and line have equal
-// cardinality. AST rewriting preserves the inventory traversal order of
-// original statements, so this is a structural proof rather than range or
-// basename inference. Cardinality mismatches remain multi-candidate and later
-// fail closed as ambiguous or competing regions.
+// planRewrittenStatementCandidates first uses exact logical positions. When
+// printer.SourcePos relocates a statement that is governed by a //line column,
+// its logical column can change even though its exact logical file, line, and
+// inventory order remain stable. We accept ordinal correspondence only when
+// rewritten and still-unclaimed original statements on that exact logical file
+// and line have equal cardinality. AST rewriting preserves inventory traversal
+// order, so this is a structural proof rather than range or basename inference.
+// Cardinality mismatches remain multi-candidate and later fail closed as
+// ambiguous or competing regions.
 func planRewrittenStatementCandidates(
 	rewritten [][]InventoryStatement,
 	generatedFiles map[string]struct{},
@@ -236,7 +237,7 @@ func planRewrittenStatementCandidates(
 ) (map[rewrittenStatementRef][]StatementObligation, error) {
 	assignments := make(map[rewrittenStatementRef][]StatementObligation)
 	claimed := make(map[StatementObligation]struct{})
-	zeroColumnGroups := make(map[inventoryStatementLineKey][]rewrittenStatementRef)
+	lineGroups := make(map[inventoryStatementLineKey][]rewrittenStatementRef)
 
 	for blockIndex, units := range rewritten {
 		for statementIndex, unit := range units {
@@ -253,23 +254,13 @@ func planRewrittenStatementCandidates(
 				}
 				continue
 			}
-			if unit.ProfilePosition.Column != 0 {
-				return nil, fmt.Errorf(
-					"plan coverage correspondence: rewritten block %d statement %d at logical %q %s physical %s has no original obligation",
-					blockIndex,
-					statementIndex,
-					profileFile,
-					formatPosition(unit.ProfilePosition),
-					formatPosition(unit.PhysicalPosition),
-				)
-			}
 			lineKey := inventoryStatementLineKey{profileFile: profileFile, line: unit.ProfilePosition.Line}
-			zeroColumnGroups[lineKey] = append(zeroColumnGroups[lineKey], ref)
+			lineGroups[lineKey] = append(lineGroups[lineKey], ref)
 		}
 	}
 
-	lineKeys := make([]inventoryStatementLineKey, 0, len(zeroColumnGroups))
-	for lineKey := range zeroColumnGroups {
+	lineKeys := make([]inventoryStatementLineKey, 0, len(lineGroups))
+	for lineKey := range lineGroups {
 		lineKeys = append(lineKeys, lineKey)
 	}
 	sort.Slice(lineKeys, func(left, right int) bool {
@@ -279,7 +270,7 @@ func planRewrittenStatementCandidates(
 		return lineKeys[left].line < lineKeys[right].line
 	})
 	for _, lineKey := range lineKeys {
-		refs := zeroColumnGroups[lineKey]
+		refs := lineGroups[lineKey]
 		candidates := lineCandidates[lineKey]
 		available := make([]StatementObligation, 0, len(candidates))
 		for _, candidate := range candidates {

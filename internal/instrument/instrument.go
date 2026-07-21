@@ -464,7 +464,9 @@ func transformCopiedFile(copyPath string, analysis analyzer.File, helperName str
 		GeneratedRegions: append([]GeneratedRegion(nil), transformer.generatedRegions...),
 		LineMappings:     append([]analyzer.LineMapping(nil), analysis.LineMappings...),
 	}
-	formatted, err := mapGeneratedStatements(output.Bytes(), helperName, sourceMap.OriginalFile, sourceMap.GeneratedFile, sourceMap.CompilerFile)
+	formatted, err := mapGeneratedStatements(
+		output.Bytes(), helperName, sourceMap.OriginalFile, sourceMap.GeneratedFile, sourceMap.CompilerFile, analysis.Source,
+	)
 	if err != nil {
 		return nil, 0, SourceMap{}, fmt.Errorf("instrument copied file %q: map generated coverage lines: %w", copyPath, err)
 	}
@@ -475,8 +477,9 @@ func transformCopiedFile(copyPath string, analysis analyzer.File, helperName str
 }
 
 type logicalLine struct {
-	file string
-	line int
+	file   string
+	line   int
+	column int
 }
 
 // mapGeneratedStatements requests a virtual filename for every inserted
@@ -484,17 +487,23 @@ type logicalLine struct {
 // original line. Some Go cover versions retain the physical filename anyway;
 // SourceMap.GeneratedRegions is the authoritative exclusion mechanism when the
 // compiler profile retains physical filenames.
-func mapGeneratedStatements(source []byte, helperName, originalFile, generatedFile, compilerFile string) ([]byte, error) {
+func mapGeneratedStatements(source []byte, helperName, originalFile, generatedFile, compilerFile string, originalSource []byte) ([]byte, error) {
 	lines := strings.Split(string(source), "\n")
+	originalPositions := originalLogicalLines(originalSource, originalFile)
 	for index, line := range lines {
+		line = restoreUserLogicalDirective(line, originalFile, originalPositions)
 		lines[index] = normalizeOriginalLineDirective(line, originalFile)
+	}
+	generatedLines, err := generatedStatementLineKinds([]byte(strings.Join(lines, "\n")), helperName)
+	if err != nil {
+		return nil, fmt.Errorf("locate generated statements: %w", err)
 	}
 	positions := make([]logicalLine, len(lines))
 	current := logicalLine{file: originalFile, line: 1}
 	for index, line := range lines {
 		positions[index] = current
-		if file, number, ok := parseLineDirective(line); ok {
-			current = logicalLine{file: file, line: number}
+		if file, number, column, ok := parseLineDirective(line); ok {
+			current = logicalLine{file: file, line: number, column: column}
 			continue
 		}
 		current.line++
@@ -506,33 +515,37 @@ func mapGeneratedStatements(source []byte, helperName, originalFile, generatedFi
 	}
 	var output strings.Builder
 	resetNeeded := false
-	generatedBoundaryClosePending := false
+	activeGeneratedKind := generatedLineNone
 	for index, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		generatedBoundaryClose := generatedBoundaryClosePending && trimmed == "}"
-		if generatedStatementLine(line, helperName) || generatedBoundaryClose {
+		kind := generatedLines[index+1]
+		if kind != generatedLineNone {
 			virtualFile := generatedFile
-			if compilerMarkerStatementLine(line, helperName) {
+			if kind == generatedLineCompiler {
 				virtualFile = compilerFile
 			}
-			fmt.Fprintf(&output, "//line %s:%d\n", virtualFile, virtualLine)
-			output.WriteString(line)
-			output.WriteByte('\n')
-			virtualLine++
-			resetNeeded = true
-			if generatedBoundaryClose {
-				generatedBoundaryClosePending = false
-			} else if generatedBoundaryStartLine(line, helperName) {
-				generatedBoundaryClosePending = true
+			if kind != activeGeneratedKind {
+				fmt.Fprintf(&output, "//line %s:%d\n", virtualFile, virtualLine+index)
 			}
+			// printer.SourcePos may place an original //line directive or comment
+			// between the receiver and method name of a positionless generated
+			// selector. Keep ordinary comments, but suppress directives inside the
+			// generated statement so they cannot remap part of that statement back
+			// onto an original coverage obligation.
+			if _, _, _, directive := parseLineDirective(line); !directive {
+				output.WriteString(line)
+			}
+			if index != len(lines)-1 {
+				output.WriteByte('\n')
+			}
+			resetNeeded = true
+			activeGeneratedKind = kind
 			continue
 		}
-		if generatedBoundaryClosePending && trimmed != "" && !strings.HasPrefix(trimmed, "//line ") {
-			generatedBoundaryClosePending = false
-		}
+		activeGeneratedKind = generatedLineNone
 		if resetNeeded && trimmed != "" && !strings.HasPrefix(trimmed, "//line ") {
 			position := positions[index]
-			fmt.Fprintf(&output, "//line %s:%d\n", position.file, position.line)
+			writeLineDirective(&output, position)
 			resetNeeded = false
 		}
 		output.WriteString(line)
@@ -541,6 +554,213 @@ func mapGeneratedStatements(source []byte, helperName, originalFile, generatedFi
 		}
 	}
 	return []byte(output.String()), nil
+}
+
+type generatedLineKind uint8
+
+const (
+	generatedLineNone generatedLineKind = iota
+	generatedLineRuntime
+	generatedLineCompiler
+)
+
+// generatedStatementLineKinds identifies generated statement ranges from the
+// parsed syntax rather than from rendered line prefixes. printer.SourcePos can
+// legally split a positionless selector across comments and line directives,
+// so textual prefix matching is not a sound generated/original boundary.
+func generatedStatementLineKinds(source []byte, helperName string) (map[int]generatedLineKind, error) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "generated.go", source, parser.ParseComments|parser.AllErrors)
+	if err != nil {
+		return nil, err
+	}
+	lines := make(map[int]generatedLineKind)
+	var classificationErr error
+	ast.Inspect(file, func(node ast.Node) bool {
+		if classificationErr != nil {
+			return false
+		}
+		statement, ok := node.(ast.Stmt)
+		if !ok {
+			return true
+		}
+		kind := classifyGeneratedStatement(statement, helperName)
+		if kind == generatedLineNone {
+			return true
+		}
+		start := fset.PositionFor(statement.Pos(), false).Line
+		end := fset.PositionFor(statement.End(), false).Line
+		if start <= 0 || end < start {
+			classificationErr = fmt.Errorf("invalid generated statement physical range %d-%d", start, end)
+			return false
+		}
+		for line := start; line <= end; line++ {
+			if existing := lines[line]; existing != generatedLineNone && existing != kind {
+				classificationErr = fmt.Errorf("generated statement line %d has conflicting producer classes", line)
+				return false
+			}
+			lines[line] = kind
+		}
+		return false
+	})
+	if classificationErr != nil {
+		return nil, classificationErr
+	}
+	return lines, nil
+}
+
+func classifyGeneratedStatement(statement ast.Stmt, helperName string) generatedLineKind {
+	switch current := statement.(type) {
+	case *ast.DeclStmt:
+		declaration, ok := current.Decl.(*ast.GenDecl)
+		if !ok || declaration.Tok != token.VAR {
+			return generatedLineNone
+		}
+		for _, raw := range declaration.Specs {
+			specification, ok := raw.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for _, name := range specification.Names {
+				if name.Name == helperName+"Slots" || name.Name == helperName+"Switches" {
+					return generatedLineRuntime
+				}
+			}
+		}
+	case *ast.DeferStmt:
+		if method, ok := generatedHelperMethod(current.Call, helperName); ok && method == "AbortSlots" {
+			return generatedLineRuntime
+		}
+	case *ast.ExprStmt:
+		call, ok := current.X.(*ast.CallExpr)
+		if !ok {
+			return generatedLineNone
+		}
+		method, ok := generatedHelperMethod(call, helperName)
+		if !ok {
+			return generatedLineNone
+		}
+		switch method {
+		case "SelectClause":
+			return generatedLineRuntime
+		case "CompilerDirectClause", "CompilerNoMatch":
+			return generatedLineCompiler
+		}
+	case *ast.IfStmt:
+		assignment, ok := current.Init.(*ast.AssignStmt)
+		if !ok || assignment.Tok != token.DEFINE || len(assignment.Lhs) != 1 {
+			return generatedLineNone
+		}
+		name, ok := assignment.Lhs[0].(*ast.Ident)
+		if ok && strings.HasPrefix(name.Name, helperName+"Boundary") {
+			return generatedLineRuntime
+		}
+	}
+	return generatedLineNone
+}
+
+func generatedHelperMethod(call *ast.CallExpr, helperName string) (string, bool) {
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return "", false
+	}
+	receiver, ok := selector.X.(*ast.Ident)
+	if !ok || receiver.Name != helperName {
+		return "", false
+	}
+	return selector.Sel.Name, true
+}
+
+type logicalLineKey struct {
+	file string
+	line int
+}
+
+type originalLogicalPositions struct {
+	physical        map[int]logicalLine
+	columnByLogical map[logicalLineKey]logicalLine
+	ambiguousColumn map[logicalLineKey]bool
+}
+
+func originalLogicalLines(source []byte, originalFile string) originalLogicalPositions {
+	lines := strings.Split(string(source), "\n")
+	positions := originalLogicalPositions{
+		physical:        make(map[int]logicalLine, len(lines)),
+		columnByLogical: make(map[logicalLineKey]logicalLine),
+		ambiguousColumn: make(map[logicalLineKey]bool),
+	}
+	current := logicalLine{file: originalFile, line: 1}
+	for index, line := range lines {
+		physicalLine := index + 1
+		positions.physical[physicalLine] = current
+		if current.column > 0 {
+			key := logicalLineKey{file: normalizeLogicalFilename(current.file), line: current.line}
+			if existing, found := positions.columnByLogical[key]; found && existing.column != current.column {
+				positions.ambiguousColumn[key] = true
+			} else {
+				positions.columnByLogical[key] = current
+			}
+		}
+		if file, number, column, ok := parseLineDirective(line); ok {
+			current = logicalLine{file: file, line: number, column: column}
+			continue
+		}
+		current.line++
+	}
+	return positions
+}
+
+func restoreUserLogicalDirective(line, originalFile string, positions originalLogicalPositions) string {
+	file, physicalLine, column, ok := parseLineDirective(line)
+	if !ok {
+		return line
+	}
+	key := logicalLineKey{file: normalizeLogicalFilename(file), line: physicalLine}
+	if column > 0 {
+		if logical, found := positions.columnByLogical[key]; found && !positions.ambiguousColumn[key] && logical.column == column {
+			return line
+		}
+	}
+	// printer.SourcePos can omit a user directive's column. Restore it from an
+	// exact logical filename+line only when the original source establishes one
+	// unique positive column. This check precedes physical-line restoration so
+	// a user virtual filename equal to the original basename is not mistaken for
+	// a printer reference to the unchanged file.
+	if column == 0 {
+		if logical, found := positions.columnByLogical[key]; found && !positions.ambiguousColumn[key] {
+			var restored strings.Builder
+			writeLineDirective(&restored, logical)
+			return strings.TrimSuffix(restored.String(), "\n")
+		}
+	}
+	if !sameOriginalDirectiveFile(file, originalFile) {
+		return line
+	}
+	logical, found := positions.physical[physicalLine]
+	if !found {
+		return line
+	}
+	var restored strings.Builder
+	writeLineDirective(&restored, logical)
+	return strings.TrimSuffix(restored.String(), "\n")
+}
+
+func normalizeLogicalFilename(filename string) string {
+	return filepath.ToSlash(filepath.Clean(filename))
+}
+
+func sameOriginalDirectiveFile(left, right string) bool {
+	left = normalizeLogicalFilename(left)
+	right = normalizeLogicalFilename(right)
+	return left == right || filepath.Base(left) == filepath.Base(right)
+}
+
+func writeLineDirective(output *strings.Builder, position logicalLine) {
+	if position.column > 0 {
+		fmt.Fprintf(output, "//line %s:%d:%d\n", position.file, position.line, position.column)
+		return
+	}
+	fmt.Fprintf(output, "//line %s:%d\n", position.file, position.line)
 }
 
 // normalizeOriginalLineDirective keeps printer.SourcePos's stable
@@ -595,56 +815,29 @@ func unusedLogicalLineRange(positions []logicalLine, width int) (int, bool) {
 	return start, true
 }
 
-func parseLineDirective(line string) (string, int, bool) {
+func parseLineDirective(line string) (string, int, int, bool) {
 	trimmed := strings.TrimSpace(line)
 	if !strings.HasPrefix(trimmed, "//line ") {
-		return "", 0, false
+		return "", 0, 0, false
 	}
 	value := strings.TrimPrefix(trimmed, "//line ")
 	separator := strings.LastIndexByte(value, ':')
 	if separator <= 0 || separator == len(value)-1 {
-		return "", 0, false
+		return "", 0, 0, false
 	}
 	number, err := strconv.Atoi(value[separator+1:])
 	if err != nil || number <= 0 {
-		return "", 0, false
+		return "", 0, 0, false
 	}
 	file := value[:separator]
 	if previous := strings.LastIndexByte(file, ':'); previous > 0 {
 		if lineNumber, lineErr := strconv.Atoi(file[previous+1:]); lineErr == nil && lineNumber > 0 {
 			// filename:line:column -- the last numeric component is the
 			// column, while logical line tracking uses the penultimate one.
-			return file[:previous], lineNumber, true
+			return file[:previous], lineNumber, number, true
 		}
 	}
-	return file, number, true
-}
-
-func generatedStatementLine(line, helperName string) bool {
-	trimmed := strings.TrimSpace(line)
-	if strings.HasPrefix(trimmed, "var "+helperName+"Slots ") ||
-		strings.HasPrefix(trimmed, "var "+helperName+"Switches ") ||
-		strings.HasPrefix(trimmed, "defer "+helperName+".AbortSlots(") ||
-		generatedBoundaryStartLine(line, helperName) {
-		return true
-	}
-	for _, method := range []string{"SelectClause", "CompilerDirectClause", "CompilerNoMatch"} {
-		if strings.HasPrefix(trimmed, helperName+"."+method+"(") {
-			return true
-		}
-	}
-	return false
-}
-
-func generatedBoundaryStartLine(line, helperName string) bool {
-	trimmed := strings.TrimSpace(line)
-	return strings.HasPrefix(trimmed, "if "+helperName+"Boundary") && strings.HasSuffix(trimmed, " {")
-}
-
-func compilerMarkerStatementLine(line, helperName string) bool {
-	trimmed := strings.TrimSpace(line)
-	return strings.HasPrefix(trimmed, helperName+".CompilerDirectClause(") ||
-		strings.HasPrefix(trimmed, helperName+".CompilerNoMatch(")
+	return file, number, 0, true
 }
 
 type fileTransformer struct {

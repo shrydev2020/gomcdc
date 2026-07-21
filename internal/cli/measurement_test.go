@@ -55,7 +55,7 @@ func TestMeasureUsesOneCombinedWorkspaceWhenInterrupted(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(20*time.Millisecond, cancel)
-	outcome, workspaces, err := measure(measurementRequest{
+	outcome, measurementWork, err := measure(measurementRequest{
 		context: ctx,
 		loaded: loader.Result{
 			ModulePath: "example.test/m", ModuleRoot: module, RelativeWorkDir: ".",
@@ -69,18 +69,15 @@ func TestMeasureUsesOneCombinedWorkspaceWhenInterrupted(t *testing.T) {
 		t.Fatalf("measure: %v", err)
 	}
 	defer func() {
-		if cleanupErr := workspaces.cleanup(io.Discard); cleanupErr != nil {
+		if cleanupErr := measurementWork.cleanup(io.Discard); cleanupErr != nil {
 			t.Errorf("cleanup: %v", cleanupErr)
 		}
 	}()
 	if !outcome.interrupted {
 		t.Fatal("measurement was not classified as interrupted")
 	}
-	if len(workspaces.items) != 1 {
-		t.Fatalf("workspace count = %d, want one combined measurement workspace", len(workspaces.items))
-	}
-	if workspaces.items[0].measurement != "combined" {
-		t.Fatalf("measurement = %q, want combined", workspaces.items[0].measurement)
+	if measurementWork == nil || measurementWork.measurement != "combined" {
+		t.Fatalf("measurement workspace = %#v, want combined", measurementWork)
 	}
 }
 

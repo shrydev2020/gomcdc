@@ -5,8 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -87,7 +91,7 @@ func TestIntegratedFixtureWritesPackageCenteredHTML(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range [][]byte{[]byte("Package navigation"), []byte("example.test/gomcdc-fixture/allow"), []byte("allow/allow.go"), []byte("Allow"), []byte("Original source"), []byte("source-code"), []byte("metric-condition"), []byte("No-match selection"), []byte("a &amp;&amp; b"), []byte("UC MC/DC"), []byte("Mask MC/DC"), []byte("Masking witness")} {
+	for _, required := range [][]byte{[]byte("Package navigation"), []byte("Evidence producers"), []byte("compiler-selection"), []byte("accepted"), []byte("example.test/gomcdc-fixture/allow"), []byte("allow/allow.go"), []byte("Allow"), []byte("Original source"), []byte("source-code"), []byte("metric-condition"), []byte("No-match selection"), []byte("a &amp;&amp; b"), []byte("UC MC/DC"), []byte("Mask MC/DC"), []byte("Masking witness")} {
 		if !bytes.Contains(contents, required) {
 			t.Errorf("HTML missing %q", required)
 		}
@@ -278,24 +282,12 @@ func TestIntegratedFixtureReportsAllMetricsAcrossPackages(t *testing.T) {
 		}
 	}
 
-	c0Only, c0Stderr, code := runFixture(t, root, "--coverage=statement,function", "--format=json", "./...")
-	if code != ExitSuccess {
-		t.Fatalf("C0-only exit = %d\nstderr:\n%s", code, c0Stderr)
+	oracle := runV1DualRunOracle(t, root)
+	if got, want := projectC0Semantics(all), projectC0Semantics(oracle.c0); !reflect.DeepEqual(got, want) {
+		t.Fatalf("single-run C0 projection differs from v1 dual-run oracle: %s", firstSemanticDifference(reflect.ValueOf(got), reflect.ValueOf(want), "c0"))
 	}
-	if c0Only.MeasurementMode != report.MeasurementStandardCover || len(c0Only.Measurements) != 1 {
-		t.Fatalf("C0 measurement provenance = mode %q runs %#v", c0Only.MeasurementMode, c0Only.Measurements)
-	}
-	if all.Summary.Statement.Covered != c0Only.Summary.Statement.Covered ||
-		all.Summary.Statement.Total != c0Only.Summary.Statement.Total ||
-		all.Summary.Function.Covered != c0Only.Summary.Function.Covered ||
-		all.Summary.Function.Total != c0Only.Summary.Function.Total {
-		t.Fatalf(
-			"integrated C0 differs from uninstrumented C0: all statement=%d/%d function=%d/%d; c0-only statement=%d/%d function=%d/%d",
-			all.Summary.Statement.Covered, all.Summary.Statement.Total,
-			all.Summary.Function.Covered, all.Summary.Function.Total,
-			c0Only.Summary.Statement.Covered, c0Only.Summary.Statement.Total,
-			c0Only.Summary.Function.Covered, c0Only.Summary.Function.Total,
-		)
+	if got, want := projectASTSemantics(all), projectASTSemantics(oracle.ast); !reflect.DeepEqual(got, want) {
+		t.Fatalf("single-run AST projection differs from v1 dual-run oracle: %s", firstSemanticDifference(reflect.ValueOf(got), reflect.ValueOf(want), "ast"))
 	}
 }
 
@@ -428,7 +420,7 @@ func TestFailedAndInterruptedRunsRetainEvidenceAndIndependentResults(t *testing.
 		t.Setenv("GOMCDC_FAILURE_MODE", "fail")
 		built, stderr, code := runFixture(
 			t, root,
-			"--coverage=decision", "--strict", "--fail-under-decision=100", "--format=json", "./unstable",
+			"--coverage=statement,decision", "--strict", "--fail-under-decision=100", "--format=json", "./unstable",
 		)
 		if code != ExitTestsFailed {
 			t.Fatalf("exit=%d, want %d\nstderr:\n%s", code, ExitTestsFailed, stderr)
@@ -440,6 +432,7 @@ func TestFailedAndInterruptedRunsRetainEvidenceAndIndependentResults(t *testing.
 		if built.Run.Status != cover.RunFailed || built.Run.FailureKind != cover.RunFailureTest || built.Run.Complete || built.Run.Results != wantResults {
 			t.Fatalf("failed run = %#v", built.Run)
 		}
+		assertCombinedFailureEvidence(t, built, report.ProducerIntegrityValid, report.ProducerUsabilityAcceptedPartial, true)
 		assertPartialDecisionEvidence(t, built)
 		for _, code := range []string{"go-test-test", "coverage-threshold-failed"} {
 			if !hasReportErrorCode(built, code) {
@@ -450,13 +443,14 @@ func TestFailedAndInterruptedRunsRetainEvidenceAndIndependentResults(t *testing.
 
 	t.Run("truncated tail is recoverable after test failure", func(t *testing.T) {
 		t.Setenv("GOMCDC_FAILURE_MODE", "truncate")
-		built, stderr, code := runFixture(t, root, "--coverage=decision", "--format=json", "./unstable")
+		built, stderr, code := runFixture(t, root, "--coverage=statement,decision", "--format=json", "./unstable")
 		if code != ExitTestsFailed {
 			t.Fatalf("exit=%d, want %d\nstderr:\n%s", code, ExitTestsFailed, stderr)
 		}
 		if built.Run.Results.Test != report.ResultFailed || built.Run.Results.Integrity != report.ResultPassed {
 			t.Fatalf("truncated-tail results = %#v", built.Run.Results)
 		}
+		assertCombinedFailureEvidence(t, built, report.ProducerIntegrityValidPrefix, report.ProducerUsabilityAcceptedPartial, true)
 		assertPartialDecisionEvidence(t, built)
 		if !hasReportErrorCode(built, "runtime-recoverable-interruption") {
 			t.Fatalf("recoverable diagnostic is missing: %#v", built.Errors)
@@ -467,7 +461,7 @@ func TestFailedAndInterruptedRunsRetainEvidenceAndIndependentResults(t *testing.
 		t.Setenv("GOMCDC_FAILURE_MODE", "corrupt")
 		built, stderr, code := runFixture(
 			t, root,
-			"--coverage=decision", "--fail-under-decision=100", "--format=json", "./unstable",
+			"--coverage=statement,decision", "--fail-under-decision=100", "--format=json", "./unstable",
 		)
 		if code != ExitMeasurementFailed {
 			t.Fatalf("exit=%d, want %d\nstderr:\n%s", code, ExitMeasurementFailed, stderr)
@@ -479,6 +473,7 @@ func TestFailedAndInterruptedRunsRetainEvidenceAndIndependentResults(t *testing.
 		if built.Run.Results != wantResults {
 			t.Fatalf("integrity-failure results = %#v", built.Run.Results)
 		}
+		assertCombinedFailureEvidence(t, built, report.ProducerIntegrityInvalid, report.ProducerUsabilityRejected, true)
 		if built.Summary.Decision.Covered != 0 || built.Summary.Decision.Total != 0 || built.Summary.Decision.Unknown != 2 {
 			t.Fatalf("corrupt evidence was reported as coverage: %#v", built.Summary.Decision)
 		}
@@ -493,7 +488,7 @@ func TestFailedAndInterruptedRunsRetainEvidenceAndIndependentResults(t *testing.
 		t.Setenv("GOMCDC_FAILURE_MODE", "timeout")
 		built, stderr, code := runFixture(
 			t, root,
-			"--coverage=decision", "--strict", "--fail-under-decision=100", "--format=json", "./unstable",
+			"--coverage=statement,decision", "--strict", "--fail-under-decision=100", "--format=json", "./unstable",
 			"--", "-test.timeout=250ms",
 		)
 		if code != ExitTestsFailed {
@@ -506,11 +501,109 @@ func TestFailedAndInterruptedRunsRetainEvidenceAndIndependentResults(t *testing.
 		if built.Run.Status != cover.RunTimeout || built.Run.FailureKind != cover.RunFailureTimeout || built.Run.Results != wantResults {
 			t.Fatalf("timeout run = %#v", built.Run)
 		}
+		assertCombinedFailureEvidence(t, built, report.ProducerIntegrityValid, report.ProducerUsabilityAcceptedPartial, true)
 		assertPartialDecisionEvidence(t, built)
 		if !hasReportErrorCode(built, "go-test-timeout") {
 			t.Fatalf("timeout error is missing: %#v", built.Errors)
 		}
 	})
+
+	t.Run("panic retains accepted evidence", func(t *testing.T) {
+		t.Setenv("GOMCDC_FAILURE_MODE", "panic")
+		built, stderr, code := runFixture(t, root, "--coverage=statement,decision", "--format=json", "./unstable")
+		if code != ExitTestsFailed {
+			t.Fatalf("exit=%d, want %d\nstderr:\n%s", code, ExitTestsFailed, stderr)
+		}
+		if built.Run.Status != cover.RunFailed || built.Run.FailureKind != cover.RunFailureTest || built.Run.Complete {
+			t.Fatalf("panic run = %#v", built.Run)
+		}
+		assertCombinedFailureEvidence(t, built, report.ProducerIntegrityValid, report.ProducerUsabilityAcceptedPartial, false)
+		assertPartialDecisionEvidence(t, built)
+	})
+
+	t.Run("caller interruption retains accepted AST prefix", func(t *testing.T) {
+		t.Setenv("GOMCDC_FAILURE_MODE", "interrupt")
+		marker := filepath.Join(t.TempDir(), "ready")
+		t.Setenv("GOMCDC_INTERRUPT_MARKER", marker)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		canceled := make(chan struct{})
+		go func() {
+			defer close(canceled)
+			ticker := time.NewTicker(10 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				if _, err := os.Stat(marker); err == nil {
+					cancel()
+					return
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
+			}
+		}()
+		var stdout, stderr bytes.Buffer
+		code := runAt(ctx, root, []string{
+			"test", "--timeout=2m", "--coverage=statement,decision", "--format=json", "./unstable",
+		}, &stdout, &stderr)
+		<-canceled
+		var built report.Report
+		if err := json.Unmarshal(stdout.Bytes(), &built); err != nil {
+			t.Fatalf("decode interrupted report (exit %d): %v\nstdout:\n%s\nstderr:\n%s", code, err, stdout.String(), stderr.String())
+		}
+		if code != ExitInterrupted {
+			t.Fatalf("exit=%d, want %d\nstderr:\n%s", code, ExitInterrupted, stderr.String())
+		}
+		if built.Run.Status != cover.RunFailed || built.Run.FailureKind != cover.RunFailureInterrupted || built.Run.Complete {
+			t.Fatalf("interrupted run = %#v", built.Run)
+		}
+		if built.MeasurementMode != report.MeasurementSingleRun || len(built.Measurements) != 1 || built.Measurements[0].Name != "combined" {
+			t.Fatalf("interrupted measurement provenance = %#v", built.Measurements)
+		}
+		astOutcome := findProducerOutcome(t, built, report.ProducerASTRuntime)
+		if astOutcome.Mapping != report.ProducerMappingComplete || astOutcome.Usability != report.ProducerUsabilityAcceptedPartial {
+			t.Fatalf("interrupted AST outcome = %#v", astOutcome)
+		}
+		assertPartialDecisionEvidence(t, built)
+	})
+}
+
+func assertCombinedFailureEvidence(
+	t *testing.T,
+	built report.Report,
+	astIntegrity report.ProducerIntegrity,
+	astUsability report.ProducerUsability,
+	wantC0Evidence bool,
+) {
+	t.Helper()
+	if built.MeasurementMode != report.MeasurementSingleRun || len(built.Measurements) != 1 || built.Measurements[0].Name != "combined" {
+		t.Fatalf("combined measurement provenance = mode %q runs %#v", built.MeasurementMode, built.Measurements)
+	}
+	goCover := findProducerOutcome(t, built, report.ProducerGoCover)
+	if goCover != (report.ProducerOutcome{
+		Producer: report.ProducerGoCover, Integrity: report.ProducerIntegrityValid,
+		Completeness: report.ProducerCompletenessPartial, Mapping: report.ProducerMappingComplete,
+		Usability: report.ProducerUsabilityAcceptedPartial,
+	}) {
+		t.Fatalf("partial Go cover outcome = %#v", goCover)
+	}
+	ast := findProducerOutcome(t, built, report.ProducerASTRuntime)
+	if ast != (report.ProducerOutcome{
+		Producer: report.ProducerASTRuntime, Integrity: astIntegrity,
+		Completeness: report.ProducerCompletenessPartial, Mapping: report.ProducerMappingComplete,
+		Usability: astUsability,
+	}) {
+		t.Fatalf("partial AST outcome = %#v", ast)
+	}
+	if wantC0Evidence {
+		if built.Summary.Statement.Covered == 0 || built.Summary.Statement.Total == 0 || built.Summary.Statement.Unknown != 0 {
+			t.Fatalf("partial Go cover evidence = %#v", built.Summary.Statement)
+		}
+	} else if built.Summary.Statement.Unknown == 0 {
+		t.Fatalf("missing partial Go cover evidence was not reported unknown: %#v", built.Summary.Statement)
+	}
 }
 
 func assertPartialDecisionEvidence(t *testing.T, built report.Report) {
@@ -898,18 +991,15 @@ func TestRejectsMeasurementOwnedFlagsFromExplicitFlagsAndGOFLAGS(t *testing.T) {
 	}
 }
 
-func TestCombinedRunRetainsPackageStatuses(t *testing.T) {
+func TestMeasurementRunRetainsPackageStatuses(t *testing.T) {
 	t.Parallel()
 	combined := &gotest.Result{
 		Status: cover.RunPassed, FailureKind: cover.RunFailureNone,
 		Packages: map[string]gotest.PackageStatus{"example.test/p": gotest.PackagePassed},
 	}
-	measurements := measurementRuns(nil, combined, true)
+	measurements := measurementRuns("combined", combined)
 	if len(measurements) != 1 || measurements[0].Name != "combined" || measurements[0].Packages["example.test/p"] != "passed" {
 		t.Fatalf("measurement package provenance = %#v", measurements)
-	}
-	if got := mergePackageStatus("build-failed", "passed"); got != "build-failed" {
-		t.Fatalf("combined package status = %q", got)
 	}
 }
 
@@ -946,6 +1036,294 @@ func TestRuntimeDiagnosticReportMessageDoesNotExposeEventDetails(t *testing.T) {
 			t.Fatalf("report message for %q = %q", severity, message)
 		}
 	}
+}
+
+// v1DualRunOracle deliberately lives in tests. It preserves the former
+// standard-cover + AST two-execution model only as a semantic comparison
+// oracle; production code must never call it or fall back to it.
+type v1DualRunOracle struct {
+	c0  report.Report
+	ast report.Report
+}
+
+func runV1DualRunOracle(t *testing.T, root string) v1DualRunOracle {
+	t.Helper()
+	c0Report, c0Stderr, code := runFixture(t, root, "--coverage=statement,function", "--format=json", "./...")
+	if code != ExitSuccess {
+		t.Fatalf("v1 C0 oracle exit = %d\nstderr:\n%s", code, c0Stderr)
+	}
+	if c0Report.MeasurementMode != report.MeasurementStandardCover || len(c0Report.Measurements) != 1 || c0Report.Measurements[0].Name != "standard-cover" {
+		t.Fatalf("v1 C0 oracle provenance = mode %q runs %#v", c0Report.MeasurementMode, c0Report.Measurements)
+	}
+	astReport, astStderr, code := runFixture(
+		t,
+		root,
+		"--coverage=decision,switch-clause-body,type-switch-clause-body,select-clause-body,switch-clause-selection,type-switch-clause-selection,condition,mcdc-unique,mcdc-masking",
+		"--format=json",
+		"./...",
+	)
+	if code != ExitSuccess {
+		t.Fatalf("v1 AST oracle exit = %d\nstderr:\n%s", code, astStderr)
+	}
+	if astReport.MeasurementMode != report.MeasurementSingleRun || len(astReport.Measurements) != 1 || astReport.Measurements[0].Name != "ast" {
+		t.Fatalf("v1 AST oracle provenance = mode %q runs %#v", astReport.MeasurementMode, astReport.Measurements)
+	}
+	return v1DualRunOracle{c0: c0Report, ast: astReport}
+}
+
+type c0OracleSummary struct {
+	Statement report.MetricSummary
+	Function  report.MetricSummary
+}
+
+type c0OracleProjection struct {
+	Summary  c0OracleSummary
+	Packages []c0OraclePackage
+}
+
+type c0OraclePackage struct {
+	Path    string
+	Status  string
+	Summary c0OracleSummary
+	Files   []c0OracleFile
+}
+
+type c0OracleFile struct {
+	Path      string
+	Summary   c0OracleSummary
+	Functions []c0OracleFunction
+}
+
+type c0OracleFunction struct {
+	Name       string
+	Location   *cover.SourceLocation
+	Summary    c0OracleSummary
+	Statements []report.StatementReport
+}
+
+func projectC0Semantics(built report.Report) c0OracleProjection {
+	projected := c0OracleProjection{Summary: c0Summary(built.Summary)}
+	for _, packageReport := range built.Packages {
+		projectedPackage := c0OraclePackage{
+			Path: packageReport.Path, Status: packageReport.Status,
+			Summary: c0Summary(packageReport.Summary),
+		}
+		for _, file := range packageReport.Files {
+			projectedFile := c0OracleFile{Path: file.Path, Summary: c0Summary(file.Summary)}
+			for _, function := range file.Functions {
+				if len(function.Statements) == 0 && !metricHasObligation(function.Summary.Statement) && !metricHasObligation(function.Summary.Function) {
+					continue
+				}
+				projectedFile.Functions = append(projectedFile.Functions, c0OracleFunction{
+					Name: function.Name, Location: function.Location, Summary: c0Summary(function.Summary),
+					Statements: append([]report.StatementReport(nil), function.Statements...),
+				})
+			}
+			projectedPackage.Files = append(projectedPackage.Files, projectedFile)
+		}
+		projected.Packages = append(projected.Packages, projectedPackage)
+	}
+	return projected
+}
+
+func c0Summary(summary report.Summary) c0OracleSummary {
+	return c0OracleSummary{Statement: summary.Statement, Function: summary.Function}
+}
+
+func metricHasObligation(metric report.MetricSummary) bool {
+	return metric.Total != 0 || metric.Unsupported != 0 || metric.Unknown != 0 || metric.Infeasible != 0 || metric.AnalysisIncomplete != 0
+}
+
+type astOracleSummary struct {
+	Decision                  report.MetricSummary
+	SwitchClauseBody          report.MetricSummary
+	TypeSwitchClauseBody      report.MetricSummary
+	SelectClauseBody          report.MetricSummary
+	SwitchClauseSelection     report.MetricSummary
+	TypeSwitchClauseSelection report.MetricSummary
+	Condition                 report.MetricSummary
+	MCDCUnique                report.MetricSummary
+	MCDCMasking               report.MetricSummary
+}
+
+type astOracleProjection struct {
+	Summary  astOracleSummary
+	Packages []astOraclePackage
+}
+
+type astOraclePackage struct {
+	Path    string
+	Status  string
+	Summary astOracleSummary
+	Files   []astOracleFile
+}
+
+type astOracleFile struct {
+	Path      string
+	Summary   astOracleSummary
+	Functions []astOracleFunction
+}
+
+type astOracleFunction struct {
+	Name      string
+	Location  *cover.SourceLocation
+	Summary   astOracleSummary
+	Decisions []report.DecisionReport
+	Clauses   []report.ClauseReport
+	NoMatches []report.NoMatchReport
+}
+
+func projectASTSemantics(built report.Report) astOracleProjection {
+	projected := astOracleProjection{Summary: astSummary(built.Summary)}
+	for _, packageReport := range built.Packages {
+		projectedPackage := astOraclePackage{
+			Path: packageReport.Path, Status: packageReport.Status,
+			Summary: astSummary(packageReport.Summary),
+		}
+		for _, file := range packageReport.Files {
+			projectedFile := astOracleFile{Path: file.Path, Summary: astSummary(file.Summary)}
+			for _, function := range file.Functions {
+				if len(function.Decisions) == 0 && len(function.Clauses) == 0 && len(function.NoMatches) == 0 {
+					continue
+				}
+				decisions := make([]report.DecisionReport, len(function.Decisions))
+				for index, decision := range function.Decisions {
+					decisions[index] = normalizeOracleDecision(decision)
+				}
+				projectedFile.Functions = append(projectedFile.Functions, astOracleFunction{
+					Name: function.Name, Location: function.Location, Summary: astSummary(function.Summary),
+					Decisions: decisions,
+					Clauses:   append([]report.ClauseReport(nil), function.Clauses...),
+					NoMatches: append([]report.NoMatchReport(nil), function.NoMatches...),
+				})
+			}
+			projectedPackage.Files = append(projectedPackage.Files, projectedFile)
+		}
+		projected.Packages = append(projected.Packages, projectedPackage)
+	}
+	return projected
+}
+
+func astSummary(summary report.Summary) astOracleSummary {
+	return astOracleSummary{
+		Decision: summary.Decision, SwitchClauseBody: summary.SwitchClauseBody,
+		TypeSwitchClauseBody: summary.TypeSwitchClauseBody, SelectClauseBody: summary.SelectClauseBody,
+		SwitchClauseSelection: summary.SwitchClauseSelection, TypeSwitchClauseSelection: summary.TypeSwitchClauseSelection,
+		Condition: summary.Condition, MCDCUnique: summary.MCDCUnique, MCDCMasking: summary.MCDCMasking,
+	}
+}
+
+func normalizeOracleDecision(decision report.DecisionReport) report.DecisionReport {
+	decision.Summary.Statement = report.MetricSummary{}
+	decision.Summary.Function = report.MetricSummary{}
+	decision.Evaluations = normalizeOracleEvaluations(decision.Evaluations)
+	decision.MCDCUnique = normalizeOracleMCDCAnalysis(decision.MCDCUnique)
+	decision.MCDCMasking = normalizeOracleMCDCAnalysis(decision.MCDCMasking)
+	decision.Conditions = append([]report.ConditionReport(nil), decision.Conditions...)
+	for index := range decision.Conditions {
+		decision.Conditions[index].MCDCUnique = normalizeOracleMCDCCondition(decision.Conditions[index].MCDCUnique)
+		decision.Conditions[index].MCDCMasking = normalizeOracleMCDCCondition(decision.Conditions[index].MCDCMasking)
+	}
+	return decision
+}
+
+func normalizeOracleMCDCAnalysis(analysis report.MCDCAnalysisReport) report.MCDCAnalysisReport {
+	analysis.Conditions = append([]report.MCDCConditionReport(nil), analysis.Conditions...)
+	for index := range analysis.Conditions {
+		analysis.Conditions[index] = normalizeOracleMCDCCondition(analysis.Conditions[index])
+	}
+	return analysis
+}
+
+func normalizeOracleMCDCCondition(condition report.MCDCConditionReport) report.MCDCConditionReport {
+	condition.Witness = normalizeOracleWitness(condition.Witness)
+	return condition
+}
+
+func normalizeOracleWitness(witness *report.WitnessReport) *report.WitnessReport {
+	if witness == nil {
+		return nil
+	}
+	normalized := *witness
+	normalized.First = normalizeOracleEvaluation(normalized.First)
+	normalized.Second = normalizeOracleEvaluation(normalized.Second)
+	normalized.FirstCompletion = append([]string(nil), normalized.FirstCompletion...)
+	normalized.SecondCompletion = append([]string(nil), normalized.SecondCompletion...)
+	normalized.UnobservedConditions = append([]uint16(nil), normalized.UnobservedConditions...)
+	normalized.MaskedConditions = append([]uint16(nil), normalized.MaskedConditions...)
+	if oracleEvaluationKey(normalized.Second) < oracleEvaluationKey(normalized.First) {
+		normalized.First, normalized.Second = normalized.Second, normalized.First
+		normalized.FirstCompletion, normalized.SecondCompletion = normalized.SecondCompletion, normalized.FirstCompletion
+	}
+	return &normalized
+}
+
+func normalizeOracleEvaluations(evaluations []report.EvaluationReport) []report.EvaluationReport {
+	normalized := make([]report.EvaluationReport, len(evaluations))
+	for index, evaluation := range evaluations {
+		normalized[index] = normalizeOracleEvaluation(evaluation)
+	}
+	sort.Slice(normalized, func(i, j int) bool {
+		return oracleEvaluationKey(normalized[i]) < oracleEvaluationKey(normalized[j])
+	})
+	return normalized
+}
+
+func normalizeOracleEvaluation(evaluation report.EvaluationReport) report.EvaluationReport {
+	evaluation.EvaluationID = ""
+	evaluation.RunID = ""
+	evaluation.ProcessID = 0
+	evaluation.TestID = ""
+	evaluation.Conditions = append([]string(nil), evaluation.Conditions...)
+	return evaluation
+}
+
+func oracleEvaluationKey(evaluation report.EvaluationReport) string {
+	return evaluation.DecisionID + "\x00" + evaluation.Status + "\x00" + evaluation.PackagePath + "\x00" +
+		strings.Join(evaluation.Conditions, "\x00") + "\x00" + strconv.FormatBool(evaluation.Result)
+}
+
+func firstSemanticDifference(got, want reflect.Value, path string) string {
+	if got.IsValid() != want.IsValid() {
+		return path + ": validity differs"
+	}
+	if !got.IsValid() {
+		return ""
+	}
+	if got.Type() != want.Type() {
+		return path + ": type differs"
+	}
+	switch got.Kind() {
+	case reflect.Pointer, reflect.Interface:
+		if got.IsNil() != want.IsNil() {
+			return path + ": nil differs"
+		}
+		if got.IsNil() {
+			return ""
+		}
+		return firstSemanticDifference(got.Elem(), want.Elem(), path)
+	case reflect.Struct:
+		for index := 0; index < got.NumField(); index++ {
+			fieldPath := path + "." + got.Type().Field(index).Name
+			if difference := firstSemanticDifference(got.Field(index), want.Field(index), fieldPath); difference != "" {
+				return difference
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		if got.Len() != want.Len() {
+			return path + ": length " + strconv.Itoa(got.Len()) + ", want " + strconv.Itoa(want.Len())
+		}
+		for index := 0; index < got.Len(); index++ {
+			if difference := firstSemanticDifference(got.Index(index), want.Index(index), path+"["+strconv.Itoa(index)+"]"); difference != "" {
+				return difference
+			}
+		}
+	default:
+		if !reflect.DeepEqual(got.Interface(), want.Interface()) {
+			return path + ": got " + fmt.Sprint(got.Interface()) + ", want " + fmt.Sprint(want.Interface())
+		}
+	}
+	return ""
 }
 
 func runFixture(t *testing.T, root string, arguments ...string) (report.Report, string, int) {

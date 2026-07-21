@@ -705,9 +705,11 @@ func validateProfileRange(sourceRange SourceRange) error {
 	if sourceRange.Start.Line < 0 || sourceRange.Start.Column < 0 || sourceRange.End.Line < 0 || sourceRange.End.Column < 0 {
 		return fmt.Errorf("range positions must be nonnegative: %s", formatRange(sourceRange))
 	}
-	if comparePosition(sourceRange.End, sourceRange.Start) < 0 {
-		return fmt.Errorf("range end precedes start: %s", formatRange(sourceRange))
-	}
+	// Go's cover tool can emit a lexically decreasing logical range when a
+	// user //line directive spans rewritten statements. The two endpoints are
+	// still an exact producer identity, so profile validation preserves them as
+	// an opaque coordinate pair. Physical original-source ranges remain ordered
+	// and are validated separately by validateOriginalRange.
 	return nil
 }
 

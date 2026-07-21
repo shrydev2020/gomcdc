@@ -1,10 +1,10 @@
 # gomcdc Normative Specification
 
-This document defines the semantics and conformance requirements of `gomcdc` 1.0. The Japanese edition is normative; this English edition is a reference translation with identical definition numbers. The specification version is `1.0`.
+This document defines the semantics and conformance requirements of `gomcdc` 2.0. The Japanese edition is normative; this English edition is a reference translation with identical definition numbers. The specification version is `2.0`.
 
-The `gomcdc` v1 series treats this specification as its compatibility contract. The v1 series does not remove or change the meaning of existing metrics, CLI options and exit codes, or required JSON fields. It may add opt-in capabilities and optional fields that do not require existing data to be reinterpreted.
+The `gomcdc` v2 series treats this specification as its compatibility contract. The v2 series does not remove or change the meaning of existing metrics, CLI options and exit codes, or required schema-2.0 JSON fields. It may add opt-in capabilities and optional fields that do not require existing data to be reinterpreted.
 
-A public JSON field-set change uses a new `schemaVersion` and a new checked-in schema; schema `1.0` is never changed in place.
+A public JSON field-set change uses a new `schemaVersion` and a new checked-in schema; schemas `1.0` and `1.1` remain immutable.
 
 ## 1. Scope
 
@@ -58,7 +58,7 @@ A Function is a function declaration, method declaration, or function literal. M
 
 ### D6. Decision
 
-A v1 Decision is the whole condition of an `if`, the condition of a conditional `for`, or each case expression of a conditionless switch. Multiple expressions in one case are independent Decisions.
+A Decision is the whole condition of an `if`, the condition of a conditional `for`, or each case expression of a conditionless switch. Multiple expressions in one case are independent Decisions.
 
 ### D7. Boolean expression tree
 
@@ -190,13 +190,33 @@ The module, package, file, function, decision, condition, and clause levels sum 
 
 Go standard cover over original sources supplies Statement and Function evidence. The AST backend supplies Decision, Condition, both MC/DC metrics, and the three Clause Body metrics. A compiler-aware backend supplies the two Clause Selection metrics.
 
+The unchanged original-source Inventory is the sole denominator authority. Raw
+producer output becomes coverage evidence only after integrity, provenance,
+producer compatibility, correspondence mapping, and execution completeness are
+validated. Accepted evidence is then projected to original Inventory
+obligations; generated statements never add obligations.
+
+Each requested producer reports four independent axes: `integrity` is `valid`,
+`valid-prefix`, `invalid`, or `unavailable`; `completeness` is `complete`,
+`partial`, or `unavailable`; `mapping` is `complete`, `invalid`, or
+`unavailable`; and `usability` is `accepted`, `accepted-partial`, or `rejected`.
+The execution layer decides usability. Report construction does not infer a
+different decision or let one producer reject evidence owned by another.
+
 For each entity, a backend emits SupportStatus. Instrumentation Coverage carries `discovered`, `supported`, `instrumented`, `unsupported`, and `unknown` for every metric.
 
 `--strict` fails when any requested metric has an unsupported-by-backend, unknown, analysis-incomplete, or supported-but-uninstrumented entity.
 
 ### D22. Measurement
 
-MeasurementMode is `standard-cover`, `single-run`, or `dual-run-standard-cover`. Statement/Function alone uses standard-cover; non-standard-cover metrics alone use single-run; selecting both uses dual-run-standard-cover. A dual run executes original-source and instrumented-source runs once each. Each run retains independent status, failure kind, and package status; evaluations are not correlated across runs. The test suite is not repeated separately for each metric using the same evidence.
+MeasurementMode is `standard-cover` or `single-run`. Statement/Function alone
+uses `standard-cover`. Any request containing a non-standard-cover metric uses
+`single-run`, including a request for all eleven metrics. One measurement
+session creates one disposable workspace and executes each selected package
+test binary exactly once. Go cover, AST runtime, and compiler-aware producers
+observe that same physical execution. The report retains one run status,
+failure kind, and package-status map. Production has no dual-run fallback; the
+former v1 two-run behavior exists only as a deterministic test oracle.
 
 ## 7. Execution model
 
@@ -246,7 +266,7 @@ Each metric has exactly one `--fail-under-<metric>` threshold flag. A threshold 
 
 ```text
 0 success
-1 one or more go test runs failed
+1 the go test run failed
 2 measurement, instrumentation, integrity, or report failure
 3 coverage threshold failure
 4 invalid CLI usage
@@ -260,9 +280,9 @@ Precedence for ordinary completion is `4 > 2 > 1 > 3 > 0`. A handled termination
 
 ### D29. JSON
 
-The root contains `schemaVersion`, `toolVersion`, `module`, `run`, `measurementMode`, `measurements`, `capabilities`, `backendCapabilities`, `instrumentationCoverage`, `summary`, `packages`, and `errors`. `schemaVersion` is the report compatibility contract and is `1.1`; tool interruption adds `interrupted` to `failureKind` without conflating it with timeout or a command failure. `toolVersion` is the build identity from `gomcdc version`. `capabilities` is the tool-wide aggregate, while `backendCapabilities` exposes the per-producer authority required by D21.
+The root contains `schemaVersion`, `toolVersion`, `module`, `run`, `measurementMode`, `measurements`, `producerOutcomes`, `capabilities`, `backendCapabilities`, `instrumentationCoverage`, `summary`, `packages`, and `errors`. `schemaVersion` is the report compatibility contract and is `2.0`; tool interruption adds `interrupted` to `failureKind` without conflating it with timeout or a command failure. `toolVersion` is the build identity from `gomcdc version`. `producerOutcomes` carries the four D21 evidence axes for every requested producer. `capabilities` is the tool-wide aggregate, while `backendCapabilities` exposes per-producer instrumentation authority.
 
-[`schema/report-v1.1.schema.json`](../schema/report-v1.1.schema.json) is the machine-readable JSON Schema for every current public field, required and optional key, type, enum, and nullability rule. Schema 1.0 remains checked in as the immutable preceding contract.
+[`schema/report-v2.0.schema.json`](../schema/report-v2.0.schema.json) is the machine-readable JSON Schema for every current public field, required and optional key, type, enum, and nullability rule. Schemas 1.0 and 1.1 remain checked in as immutable preceding contracts.
 
 The summary keys are `statement`, `function`, `decision`, `switchClauseBody`, `typeSwitchClauseBody`, `selectClauseBody`, `switchClauseSelection`, `typeSwitchClauseSelection`, `condition`, `mcdcUnique`, and `mcdcMasking`.
 
@@ -278,15 +298,17 @@ Every enabled metric displays `covered / total = percentage` or `n/a`, with Inst
 
 The module summary leads to package-centered navigation, followed by files and functions within each package. The function table presents all eleven metrics as independent columns. Function detail presents original-source Locations, Decisions, Conditions, Clause Body, Clause Selection, and both MC/DC results. Partial runs, unsupported, unknown, infeasible, and analysis-incomplete remain distinct from ordinary non-coverage.
 
+The report also presents every producer's integrity, completeness, mapping, and usability axes without collapsing them into the overall run status.
+
 The output is one self-contained static HTML file with no external asset, CDN, network request, or JavaScript. Source expressions and paths are escaped for their HTML context. Information does not depend on color alone; numerator, denominator, percentage, and status text are present.
 
 ### D32. Resources and trust boundary
 
-One instrumented run collects all non-standard-cover evidence with one source instrumentation, compiler instrumentation, build, and test. The event journal aggregates and compacts without losing witnesses and does not retain every record in memory in proportion to loop iterations. Performance claims require a checked-in benchmark and are not part of v1 conformance.
+One instrumented run collects all requested Go-cover, AST, and compiler-aware evidence with one source instrumentation, compiler instrumentation, build, and test. The event journal aggregates and compacts without losing witnesses and does not retain every record in memory in proportion to loop iterations. Performance claims require a checked-in benchmark and a reproducible profile; functional conformance does not define a hardware-independent wall-time threshold.
 
 The tool builds and tests a trusted target module with the current user's authority. The temporary workspace is not a security sandbox, and evidence authenticity is not guaranteed against malicious target code. Temporary directories and event files are readable and writable only by the current user. Source copying prevents symlinks and hardlinks from writing outside the workspace. Normal reports contain no user absolute local path.
 
-The tool defines coverage semantics only and claims no DO-178C compliance, tool qualification, or safety certification. Windows, assembly, cgo internals, coverage whose obligations are compiler IR, path coverage, and distributed test execution are outside v1.
+The tool defines coverage semantics only and claims no DO-178C compliance, tool qualification, or safety certification. Windows, assembly, cgo internals, coverage whose obligations are compiler IR, path coverage, and distributed test execution are outside v2.
 
 ## 9. Conformance conditions
 
@@ -298,19 +320,22 @@ An implementation conforms only when all conditions hold.
 4. It does not use an aborted evaluation as coverage evidence or an entity status.
 5. It does not merge Clause Body with Clause Selection, or direct selection with fallthrough body execution.
 6. It does not name or aggregate Decision Coverage as CFG Edge Coverage.
-7. It does not add Boolean expressions used only in assignment, return, or call arguments to the v1 Decision set.
+7. It does not add Boolean expressions used only in assignment, return, or call arguments to the Decision set.
 8. It does not infer covered or not-covered from unsupported or unknown evidence.
 9. It exposes no generic `clause` metric, `clause` / `clauseBody` summary, metric alias, or ambiguous threshold flag.
 10. It does not expose instrumented sources, temporary paths, or generated lines as formal Locations.
 11. Package load order, map iteration, goroutine order, and analysis parallelism do not affect IDs or report order.
-12. Test caching does not omit a measurement run.
+12. Test caching does not omit the measurement run, and each selected package test binary executes exactly once per session.
 13. Test processes do not write to the same evidence file.
 14. A compiler-aware backend does not mark an unsupported Go version as supported.
 15. Completion does not omit integrated C0, either MC/DC strategy, multiple packages, source mapping, concurrent evaluation, or Clause Selection.
+16. Production contains no dual-run fallback; the v1 dual-run implementation is test-oracle code only.
+17. Unknown, partial, or ambiguous correspondence never becomes covered through source-range overlap or basename inference.
+18. A rejected producer does not erase accepted evidence owned by another producer.
 
 ## 10. Acceptance verification
 
-The acceptance suite includes AND, OR, NOT, nested expressions, side effects, evaluation order, conditionless switch, expression switch, type switch, select, empty bodies, fallthrough, direct selection, no-match, recursion, nested decisions, loops, multiple goroutines, panic, recover, defer, `runtime.Goexit`, multiple packages, external test packages, build tags, test/build failure, timeout, truncated events, partial recovery, provenance mutation, source mapping, user `//line`, generated-code exclusion, JSON Schema contract mutation, and all eleven thresholds. For `a && b`, Unique-Cause yields `a=infeasible` and `b=covered`, while Masking covers both conditions.
+The acceptance suite includes AND, OR, NOT, nested expressions, side effects, evaluation order, conditionless switch, expression switch, type switch, select, empty bodies, fallthrough, direct selection, no-match, recursion, nested decisions, loops, multiple goroutines, panic, recover, defer, `runtime.Goexit`, multiple packages, external test packages, build tags, test/build failure, timeout, caller interruption, truncated events, partial recovery, provenance mutation, source mapping, user `//line`, generated-code exclusion, JSON Schema contract mutation, and all eleven thresholds. A deterministic all-metric fixture must match the semantic projection of the v1 C0-plus-AST dual-run oracle while executing each package test binary once. For `a && b`, Unique-Cause yields `a=infeasible` and `b=covered`, while Masking covers both conditions.
 
 Completion requires successful `go test -count=1 ./...`, `go test -race -count=1 ./...`, and `go vet ./...`, and integer equality between fixture-module aggregation and the sum of its package aggregations.
 

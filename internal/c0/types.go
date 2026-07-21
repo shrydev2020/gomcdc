@@ -23,7 +23,9 @@ type Position struct {
 	Column int `json:"column"`
 }
 
-// SourceRange is a half-open physical source range.
+// SourceRange is a pair of source coordinates. Physical original-source
+// ranges are ordered and half-open; logical Go cover ranges may be lexically
+// decreasing when //line directives change the producer coordinate space.
 type SourceRange struct {
 	Start Position `json:"start"`
 	End   Position `json:"end"`

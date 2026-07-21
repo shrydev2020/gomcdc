@@ -14,7 +14,7 @@ func TestAssembleReportInputUsesOneCombinedMeasurement(t *testing.T) {
 	input := assembleReportInput(reportAssembly{
 		loaded:                 loader.Result{ModulePath: "example.test/m", PackageImportSet: []string{"example.test/m/p"}},
 		coverage:               config.AllCoverage(),
-		astResult:              &gotest.Result{Status: cover.RunFailed, FailureKind: cover.RunFailureTest, Packages: map[string]gotest.PackageStatus{"example.test/m/p": gotest.PackageFailed}},
+		testResult:             &gotest.Result{Status: cover.RunFailed, FailureKind: cover.RunFailureTest, Packages: map[string]gotest.PackageStatus{"example.test/m/p": gotest.PackageFailed}},
 		standardCoverRequested: true,
 		astRequested:           true,
 		evidence:               acceptedRuntimeEvidence{},

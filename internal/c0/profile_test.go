@@ -74,7 +74,6 @@ func TestParseProfileRejectsMalformedInput(t *testing.T) {
 		{name: "empty data line", input: "mode: set\n\n", wantInError: "empty profile line"},
 		{name: "missing fields", input: "mode: set\na.go:1.1,1.2 1\n", wantInError: "NumStmt"},
 		{name: "negative count", input: "mode: count\na.go:1.1,1.2 1 -1\n", wantInError: "Count"},
-		{name: "backwards range", input: "mode: set\na.go:2.1,1.2 1 0\n", wantInError: "precedes start"},
 		{
 			name:        "inconsistent NumStmt",
 			input:       "mode: set\na.go:1.1,1.2 1 0\na.go:1.1,1.2 2 1\n",
@@ -98,6 +97,19 @@ func TestParseProfileRejectsMalformedInput(t *testing.T) {
 				t.Fatalf("error = %q, want it to contain %q", err, test.wantInError)
 			}
 		})
+	}
+}
+
+func TestParseProfilePreservesDecreasingLineDirectiveRange(t *testing.T) {
+	t.Parallel()
+
+	profile, err := c0.ParseProfile(strings.NewReader("mode: set\nvirtual.go:900.34,6.0 3 1\n"))
+	if err != nil {
+		t.Fatalf("ParseProfile: %v", err)
+	}
+	want := c0.SourceRange{Start: c0.Position{Line: 900, Column: 34}, End: c0.Position{Line: 6, Column: 0}}
+	if len(profile.Files) != 1 || len(profile.Files[0].Blocks) != 1 || profile.Files[0].Blocks[0].Position != want {
+		t.Fatalf("decreasing logical range = %#v", profile)
 	}
 }
 

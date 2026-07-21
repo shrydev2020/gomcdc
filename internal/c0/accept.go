@@ -134,7 +134,7 @@ func AcceptProfileEvidence(
 			if block.Statements == 0 {
 				originalPath := ""
 				for _, plan := range preparedPlans {
-					if !acceptancePathMatches(actualPath, plan.OriginalPath, options.ModulePath, plan.PackagePath) {
+					if !acceptancePathMatchesPlan(actualPath, plan, options.ModulePath) {
 						continue
 					}
 					if originalPath != "" && originalPath != plan.OriginalPath {
@@ -284,6 +284,18 @@ func AcceptProfileEvidence(
 	}
 	sortExcluded(accepted.Excluded)
 	return accepted, nil
+}
+
+func acceptancePathMatchesPlan(actualPath string, plan SourceCoveragePlan, modulePath string) bool {
+	if acceptancePathMatches(actualPath, plan.OriginalPath, modulePath, plan.PackagePath) {
+		return true
+	}
+	for _, region := range plan.Correspondence.Regions() {
+		if acceptancePathMatches(actualPath, region.Region.ProfilePath, modulePath, plan.PackagePath) {
+			return true
+		}
+	}
+	return false
 }
 
 // ProjectAcceptedEvidence constructs C0 directly from accepted block evidence;

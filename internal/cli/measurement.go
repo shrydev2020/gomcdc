@@ -43,8 +43,8 @@ type measurementRequest struct {
 }
 
 type measurementOutcome struct {
-	standardResult   *gotest.Result
-	astResult        *gotest.Result
+	testResult       *gotest.Result
+	measurementName  string
 	evidence         acceptedRuntimeEvidence
 	c0               *c0.Report
 	producerOutcomes []report.ProducerOutcome
@@ -64,32 +64,21 @@ type measurementWorkspace struct {
 	workspace   *workspace.Workspace
 }
 
-type measurementWorkspaces struct {
-	items []measurementWorkspace
-}
-
-func (set *measurementWorkspaces) add(measurement string, item *workspace.Workspace) {
-	set.items = append(set.items, measurementWorkspace{measurement: measurement, workspace: item})
-}
-
-func (set *measurementWorkspaces) cleanup(stderr io.Writer) error {
-	var cleanupErr error
-	for _, item := range set.items {
-		if err := item.workspace.Cleanup(); err != nil {
-			fmt.Fprintf(stderr, "gomcdc: %s workspace cleanup failed: %v\n", item.measurement, err)
-			cleanupErr = err
-		}
-		if item.workspace.IsKept() {
-			fmt.Fprintf(stderr, "gomcdc: kept %s workspace: %s\n", item.measurement, item.workspace.RootDir)
-		}
+func (item *measurementWorkspace) cleanup(stderr io.Writer) error {
+	if err := item.workspace.Cleanup(); err != nil {
+		fmt.Fprintf(stderr, "gomcdc: %s workspace cleanup failed: %v\n", item.measurement, err)
+		return err
 	}
-	return cleanupErr
+	if item.workspace.IsKept() {
+		fmt.Fprintf(stderr, "gomcdc: kept %s workspace: %s\n", item.measurement, item.workspace.RootDir)
+	}
+	return nil
 }
 
 // measure performs source-copy setup, one requested test run, evidence
 // collection, and evidence acceptance. It owns measurement failures and
-// returns a workspace set so the caller can preserve cleanup timing.
-func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, *measurementWorkspaces, error) {
+// returns its workspace separately so the caller can preserve cleanup timing.
+func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, *measurementWorkspace, error) {
 	outcome := measurementOutcome{}
 	markInterrupted := func() {
 		if outcome.interrupted {
@@ -100,22 +89,17 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 			phase: "execution", code: "measurement-interrupted", message: "measurement was interrupted",
 		})
 	}
-	workspaces := &measurementWorkspaces{}
 	work, err := workspace.Create(request.context, workspace.Options{
 		SourceDir:  request.loaded.ModuleRoot,
 		TempParent: request.workDirParent,
 		Keep:       request.keepWorkDir,
 	})
 	if err != nil {
-		return outcome, workspaces, fmt.Errorf("temporary workspace creation failed: %w", err)
+		return outcome, nil, fmt.Errorf("temporary workspace creation failed: %w", err)
 	}
-	measurementName := "standard-cover"
-	if request.needsAST && request.needsC0 {
-		measurementName = "combined"
-	} else if request.needsAST {
-		measurementName = "ast"
-	}
-	workspaces.add(measurementName, work)
+	measurementName := requestedMeasurementName(request.needsC0, request.needsAST)
+	outcome.measurementName = measurementName
+	measurementWork := &measurementWorkspace{measurement: measurementName, workspace: work}
 
 	var instrumentationResults []instrument.PackageResult
 	generatedProfilePaths := generatedPaths(request.generated)
@@ -125,7 +109,7 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 			if request.context.Err() != nil {
 				markInterrupted()
 			} else {
-				return outcome, workspaces, fmt.Errorf("runtime instrumentation failed: %w", injectErr)
+				return outcome, measurementWork, fmt.Errorf("runtime instrumentation failed: %w", injectErr)
 			}
 		}
 		if request.context.Err() != nil {
@@ -145,14 +129,14 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 				if request.context.Err() != nil {
 					markInterrupted()
 				} else {
-					return outcome, workspaces, fmt.Errorf("source instrumentation failed: %w", instrumentErr)
+					return outcome, measurementWork, fmt.Errorf("source instrumentation failed: %w", instrumentErr)
 				}
 			}
 			for _, result := range instrumentationResults {
 				for _, generatedFile := range result.GeneratedFiles {
 					relative, relErr := filepath.Rel(work.ModuleDir, generatedFile)
 					if relErr != nil {
-						return outcome, workspaces, fmt.Errorf("resolve generated coverage file %q: %w", generatedFile, relErr)
+						return outcome, measurementWork, fmt.Errorf("resolve generated coverage file %q: %w", generatedFile, relErr)
 					}
 					generatedProfilePaths = append(generatedProfilePaths, filepath.ToSlash(relative))
 				}
@@ -167,7 +151,7 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 			if request.context.Err() != nil {
 				markInterrupted()
 			} else {
-				return outcome, workspaces, fmt.Errorf("compiler-aware instrumentation failed: %w", err)
+				return outcome, measurementWork, fmt.Errorf("compiler-aware instrumentation failed: %w", err)
 			}
 		}
 	}
@@ -176,7 +160,7 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 	if !outcome.interrupted && request.needsAST {
 		runID, err = newRunID()
 		if err != nil {
-			return outcome, workspaces, fmt.Errorf("create coverage run ID: %w", err)
+			return outcome, measurementWork, fmt.Errorf("create coverage run ID: %w", err)
 		}
 	}
 	if !outcome.interrupted {
@@ -214,11 +198,7 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 			DisableCover:  !request.needsC0,
 			Output:        stderr,
 		})
-		if request.needsAST {
-			outcome.astResult = &result
-		} else {
-			outcome.standardResult = &result
-		}
+		outcome.testResult = &result
 		if request.context.Err() != nil {
 			markInterrupted()
 		}
@@ -263,7 +243,7 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 				phase: "collection", code: "runtime-" + string(diagnostic.Severity), message: runtimeDiagnosticReportMessage(diagnostic.Severity),
 			})
 		}
-		diagnosticsInvalidate, diagnosticsErr := runtimeDiagnosticsInvalidate(recoveryContext, acceptedRuntime.Diagnostics, outcome.astResult)
+		diagnosticsInvalidate, diagnosticsErr := runtimeDiagnosticsInvalidate(recoveryContext, acceptedRuntime.Diagnostics, outcome.testResult)
 		runtimeDiagnosticsErr = errors.Join(runtimeDiagnosticsErr, diagnosticsErr)
 		if diagnosticsErr != nil || diagnosticsInvalidate {
 			outcome.integrityFailure = true
@@ -271,7 +251,7 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 		outcome.evidence = acceptedRuntime
 		outcome.producerOutcomes = append(outcome.producerOutcomes, runtimeProducerOutcome(
 			report.ProducerASTRuntime,
-			outcome.astResult,
+			outcome.testResult,
 			collectionErr,
 			runtimeValidationIssues.astErr(),
 			runtimeDiagnosticsErr,
@@ -280,7 +260,7 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 		if request.compilerClauseSelection {
 			outcome.producerOutcomes = append(outcome.producerOutcomes, runtimeProducerOutcome(
 				report.ProducerCompilerSelection,
-				outcome.astResult,
+				outcome.testResult,
 				collectionErr,
 				runtimeValidationIssues.compilerErr(),
 				runtimeDiagnosticsErr,
@@ -294,12 +274,9 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 		profile, profileReadErr := readCoverProfile(coverProfile)
 		plans, planErr := sourceCoveragePlans(recoveryContext, request.sources, instrumentationResults)
 		if planErr != nil {
-			return outcome, workspaces, fmt.Errorf("coverage correspondence assembly failed: %w", planErr)
+			return outcome, measurementWork, fmt.Errorf("coverage correspondence assembly failed: %w", planErr)
 		}
-		runResult := outcome.standardResult
-		if request.needsAST {
-			runResult = outcome.astResult
-		}
+		runResult := outcome.testResult
 		runComplete := runResult != nil && runResult.Status == cover.RunPassed
 		var mappingErr error
 		if profileReadErr == nil {
@@ -345,7 +322,7 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 	if request.context.Err() != nil {
 		markInterrupted()
 	}
-	return outcome, workspaces, nil
+	return outcome, measurementWork, nil
 }
 
 func runtimeProducerOutcome(

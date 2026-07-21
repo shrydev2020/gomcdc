@@ -12,6 +12,10 @@ independently affected its decision. It distinguishes clause body execution
 from direct switch/type-switch selection and preserves partial results when a
 test run fails or is interrupted.
 
+One measurement session executes each selected package test binary once. Go
+cover, AST runtime instrumentation, and compiler-aware selection hooks observe
+that same execution; there is no production dual-run fallback.
+
 ## Requirements
 
 - Go 1.26.x (1.26.0 or later)
@@ -79,6 +83,11 @@ the clause chosen by dispatch.
 
 Text is the default. JSON follows the checked-in report schema. HTML writes a
 self-contained report to the requested directory.
+
+Schema 2.0 exposes an outcome for every requested evidence producer. Integrity,
+execution completeness, source mapping, and the final usability decision remain
+separate, so a rejected compiler-selection stream does not erase valid AST or
+Go-cover evidence.
 
 ```sh
 # Text on stdout
@@ -163,7 +172,7 @@ gomcdc test \
 | Exit code | Meaning |
 | ---: | --- |
 | 0 | Success |
-| 1 | One or more `go test` runs failed |
+| 1 | The `go test` run failed |
 | 2 | Measurement, instrumentation, integrity, or report failure |
 | 3 | Coverage threshold failure |
 | 4 | Invalid CLI usage |
@@ -176,7 +185,7 @@ gomcdc test \
 - `_test.go` decisions enter AST metrics only with `--include-tests`;
   Statement and Function Coverage remain based on standard Go coverage.
 - Windows, assembly internals, cgo internals, compiler-IR obligations, path
-  coverage, and distributed test execution are outside v1.
+  coverage, and distributed test execution are outside v2.
 - The target module is built and tested with the current user's authority. The
   temporary workspace is not a sandbox for malicious target code.
 - `gomcdc` defines coverage semantics; it does not claim safety certification,
@@ -186,7 +195,7 @@ gomcdc test \
 
 - [Normative specification](docs/specification.ja.md)
 - [English reference specification](docs/specification.md)
-- [JSON report schema](schema/report-v1.1.schema.json)
+- [JSON report schema](schema/report-v2.0.schema.json)
 
 ## Development
 

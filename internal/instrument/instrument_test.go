@@ -153,17 +153,18 @@ func TestBroken( {
 func TestParseLineDirectiveHandlesOptionalColumn(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
-		input string
-		file  string
-		line  int
+		input  string
+		file   string
+		line   int
+		column int
 	}{
 		{input: "//line original.go:42", file: "original.go", line: 42},
-		{input: "//line original.go:42:7", file: "original.go", line: 42},
+		{input: "//line original.go:42:7", file: "original.go", line: 42, column: 7},
 		{input: "//line C:/project/original.go:42", file: "C:/project/original.go", line: 42},
 	} {
-		file, line, ok := parseLineDirective(test.input)
-		if !ok || file != test.file || line != test.line {
-			t.Errorf("parseLineDirective(%q) = %q, %d, %v", test.input, file, line, ok)
+		file, line, column, ok := parseLineDirective(test.input)
+		if !ok || file != test.file || line != test.line || column != test.column {
+			t.Errorf("parseLineDirective(%q) = %q, %d, %d, %v", test.input, file, line, column, ok)
 		}
 	}
 }
@@ -176,6 +177,58 @@ func TestNormalizeOriginalLineDirectiveUsesCopiedFileRelativeIdentity(t *testing
 	}
 	if got := normalizeOriginalLineDirective("//line virtual.go:42", "logic/logic.go"); got != "//line virtual.go:42" {
 		t.Fatalf("unrelated directive = %q", got)
+	}
+}
+
+func TestGeneratedStatementLineKindsRecognizeSplitSelector(t *testing.T) {
+	t.Parallel()
+	const source = `package p
+
+func f() {
+	gomcdc.
+//line p.go:30
+	// a source-positioned comment can be printed inside a generated selector
+//line p.go:4
+	SelectClause(1)
+	return
+}
+`
+	kinds, err := generatedStatementLineKinds([]byte(source), "gomcdc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range []int{4, 5, 6, 7, 8} {
+		if kinds[line] != generatedLineRuntime {
+			t.Errorf("line %d kind = %d, want runtime-generated", line, kinds[line])
+		}
+	}
+	if kinds[9] != generatedLineNone {
+		t.Errorf("original return line kind = %d, want none", kinds[9])
+	}
+
+	mapped, err := mapGeneratedStatements(
+		[]byte(source), "gomcdc", "p.go", ".gomcdc/generated/p.go", ".gomcdc/compiler/p.go", []byte(source),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inventory, err := c0.BuildInventory("p.go", mapped)
+	if err != nil {
+		t.Fatalf("mapped source is not valid: %v\n%s", err, mapped)
+	}
+	generated, original := 0, 0
+	for _, block := range inventory.Blocks {
+		for _, unit := range block.StatementUnits {
+			switch unit.ProfileFile {
+			case ".gomcdc/generated/p.go":
+				generated++
+			case "p.go":
+				original++
+			}
+		}
+	}
+	if generated != 1 || original != 1 {
+		t.Fatalf("mapped statement files = generated:%d original:%d, want 1 each\n%s", generated, original, mapped)
 	}
 }
 
@@ -483,12 +536,13 @@ func Check(value bool) { if value {} }
 	copyPath := writeFile(t, workspace, "p/p.go", source)
 	analysis := analyze(t, original, originalRoot, "example.com/p", "example.com/p")
 	result, err := InstrumentPackage(PackageOptions{
-		Directory:         filepath.Dir(copyPath),
-		PackageName:       "p",
-		PackagePath:       "example.com/p",
-		RuntimeImportPath: "example.com/p/internal/runtimecov",
-		ActiveFiles:       []string{copyPath},
-		Files:             []FileMapping{{CopyPath: copyPath, Analysis: analysis}},
+		Directory:                  filepath.Dir(copyPath),
+		PackageName:                "p",
+		PackagePath:                "example.com/p",
+		RuntimeImportPath:          "example.com/p/internal/runtimecov",
+		PlanCoverageCorrespondence: true,
+		ActiveFiles:                []string{copyPath},
+		Files:                      []FileMapping{{CopyPath: copyPath, Analysis: analysis}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -496,9 +550,57 @@ func Check(value bool) { if value {} }
 	if len(result.SourceMaps) != 1 || len(result.SourceMaps[0].LineMappings) == 0 {
 		t.Fatalf("line mappings = %#v", result.SourceMaps)
 	}
+	if len(result.CoveragePlans) != 1 {
+		t.Fatalf("coverage plans = %#v", result.CoveragePlans)
+	}
+	if _, err := result.CoveragePlans[0].Correspondence.ProjectableRegions(); err != nil {
+		t.Fatalf("line-directive correspondence is not projectable: %v", err)
+	}
 	mapping := result.SourceMaps[0].LineMappings[len(result.SourceMaps[0].LineMappings)-1]
 	if filepath.Base(mapping.LogicalFile) != "imaginary.go" || mapping.LogicalLine < 900 || mapping.LogicalColumn != 7 {
 		t.Errorf("line mapping = %#v", mapping)
+	}
+}
+
+func TestInstrumentPackagePreservesSameBasenameUserLineDirective(t *testing.T) {
+	t.Parallel()
+	originalRoot := t.TempDir()
+	workspace := t.TempDir()
+	const source = `package p
+
+//line p.go:3:7
+func Check(value bool) { if value {} }
+`
+	original := writeFile(t, originalRoot, "p/p.go", source)
+	copyPath := writeFile(t, workspace, "p/p.go", source)
+	analysis := analyze(t, original, originalRoot, "example.com/p", "example.com/p")
+	result, err := InstrumentPackage(PackageOptions{
+		Directory:                  filepath.Dir(copyPath),
+		PackageName:                "p",
+		PackagePath:                "example.com/p",
+		RuntimeImportPath:          "example.com/p/internal/runtimecov",
+		PlanCoverageCorrespondence: true,
+		ActiveFiles:                []string{copyPath},
+		Files:                      []FileMapping{{CopyPath: copyPath, Analysis: analysis}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := result.CoveragePlans[0].Correspondence.ProjectableRegions(); err != nil {
+		t.Fatalf("same-basename line-directive correspondence is not projectable: %v", err)
+	}
+	transformed, err := os.ReadFile(copyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	parsed, err := parser.ParseFile(fset, "p/p.go", transformed, parser.ParseComments|parser.AllErrors)
+	if err != nil {
+		t.Fatalf("parse transformed source: %v\n%s", err, transformed)
+	}
+	position := fset.PositionFor(parsed.Decls[0].Pos(), true)
+	if filepath.Base(position.Filename) != "p.go" || position.Line != 3 || position.Column != 7 {
+		t.Fatalf("transformed function position = %s, want basename p.go:3:7\n%s", position, transformed)
 	}
 }
 

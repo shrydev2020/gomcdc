@@ -169,7 +169,7 @@ func TestPlanCoverageCorrespondenceFailsClosedForUnknownAndAmbiguousAnchors(t *t
 	})
 }
 
-func TestPlanCoverageCorrespondenceUsesProvenSameLineOrderForZeroColumns(t *testing.T) {
+func TestPlanCoverageCorrespondenceUsesProvenSameLineOrderWhenColumnsMove(t *testing.T) {
 	t.Parallel()
 
 	original := c0.FileInventory{Blocks: []c0.InventoryBlock{
@@ -177,8 +177,8 @@ func TestPlanCoverageCorrespondenceUsesProvenSameLineOrderForZeroColumns(t *test
 		plannerBlock("p.go", 4, 5, plannerStatementAt("p.go", 4, 4, 20)),
 	}}
 	rewritten := c0.FileInventory{Blocks: []c0.InventoryBlock{
-		plannerBlock("p.go", 4, 4, plannerStatementAt("p.go", 10, 4, 0)),
-		plannerBlock("p.go", 4, 5, plannerStatementAt("p.go", 11, 4, 0)),
+		plannerBlock("p.go", 4, 4, plannerStatementAt("p.go", 10, 4, 8)),
+		plannerBlock("p.go", 4, 5, plannerStatementAt("p.go", 11, 4, 9)),
 	}}
 	correspondence, err := c0.PlanCoverageCorrespondence(t.Context(), c0.CorrespondencePlanInput{
 		PackagePath: "example.test/m/p", OriginalPath: "p.go", Original: original, Rewritten: rewritten,

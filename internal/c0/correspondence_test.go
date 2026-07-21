@@ -67,14 +67,6 @@ func TestCoverageCorrespondenceRejectsInvalidPlans(t *testing.T) {
 			want: "profile path is empty",
 		},
 		{
-			name: "backward range",
-			regions: []c0.RegionCorrespondence{{
-				Region: c0.CoverRegion{ProfilePath: "p.go", Range: correspondenceLineRange(2, 1)}, Relation: c0.CorrespondenceExact,
-				Obligations: []c0.StatementObligation{validObligation},
-			}},
-			want: "range end precedes start",
-		},
-		{
 			name: "unknown relation",
 			regions: []c0.RegionCorrespondence{{
 				Region: validRegion, Relation: c0.CorrespondenceRelation("invented"),
@@ -169,6 +161,22 @@ func TestCoverageCorrespondenceRejectsInvalidPlans(t *testing.T) {
 				t.Fatalf("NewCoverageCorrespondence error = %v, want substring %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestCoverageCorrespondencePreservesDecreasingLineDirectiveRange(t *testing.T) {
+	t.Parallel()
+
+	region := coverRegion("virtual.go", 2, 1)
+	correspondence, err := c0.NewCoverageCorrespondence([]c0.RegionCorrespondence{{
+		Region: region, Relation: c0.CorrespondenceExact,
+		Obligations: []c0.StatementObligation{obligation("example.test/m/p", "p.go", 0)},
+	}})
+	if err != nil {
+		t.Fatalf("NewCoverageCorrespondence: %v", err)
+	}
+	if got := correspondence.Regions(); len(got) != 1 || got[0].Region.Range != region.Range {
+		t.Fatalf("decreasing logical range = %#v", got)
 	}
 }
 

@@ -30,6 +30,12 @@ func TestBooleanDecisions(t *testing.T) {
 	if !Any(true, false) || !Any(false, true) || Any(false, false) {
 		t.Fatal("unexpected Any result")
 	}
+	if TaggedMultiline(true, true) != 2 || TaggedMultiline(true, false) != 1 || TaggedMultiline(false, false) != 0 {
+		t.Fatal("unexpected build-tagged multiline result")
+	}
+	if LineMapped(true) != 1 || LineMapped(false) != 0 {
+		t.Fatal("unexpected //line-mapped result")
+	}
 	for _, values := range [][3]bool{
 		{false, false, false},
 		{true, true, false},
