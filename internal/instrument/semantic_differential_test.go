@@ -52,17 +52,24 @@ func TestInstrumentationModesPreserveProgramSemantics(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = InstrumentPackage(PackageOptions{
-				Directory:               filepath.Dir(copyPath),
-				PackageName:             "logic",
-				PackagePath:             semanticFixtureModule + "/logic",
-				RuntimeImportPath:       injected.ImportPath,
-				CompilerClauseSelection: test.compilerAware,
-				ActiveFiles:             []string{copyPath},
-				Files:                   []FileMapping{{CopyPath: copyPath, Analysis: analysis}},
+			result, err := InstrumentPackage(PackageOptions{
+				Directory:                  filepath.Dir(copyPath),
+				PackageName:                "logic",
+				PackagePath:                semanticFixtureModule + "/logic",
+				RuntimeImportPath:          injected.ImportPath,
+				CompilerClauseSelection:    test.compilerAware,
+				PlanCoverageCorrespondence: true,
+				ActiveFiles:                []string{copyPath},
+				Files:                      []FileMapping{{CopyPath: copyPath, Analysis: analysis}},
 			})
 			if err != nil {
 				t.Fatal(err)
+			}
+			if len(result.SourceMaps) != 1 || len(result.CoveragePlans) != 1 {
+				t.Fatalf("instrumentation result = %#v", result)
+			}
+			if _, err := result.CoveragePlans[0].Correspondence.ProjectableRegions(); err != nil {
+				t.Fatalf("combined coverage plan is not projectable: %v", err)
 			}
 
 			dataDir := t.TempDir()
@@ -308,6 +315,14 @@ outer:
 	return total
 }
 
+func ShadowedPredeclared(value bool) int {
+	false := 0 == 0
+	if value && false {
+		return 1
+	}
+	return 0
+}
+
 func PanicFlow(shouldPanic bool) (result string) {
 	defer func() {
 		events = append(events, "defer")
@@ -337,6 +352,7 @@ type transcript struct {
 	NoMatch      int      ` + "`json:\"noMatch\"`" + `
 	Types        []string ` + "`json:\"types\"`" + `
 	Labelled     []int    ` + "`json:\"labelled\"`" + `
+	Shadowed     int      ` + "`json:\"shadowed\"`" + `
 	Panics       []string ` + "`json:\"panics\"`" + `
 	Events       []string ` + "`json:\"events\"`" + `
 }
@@ -362,6 +378,7 @@ func main() {
 			logic.TypeSwitch(1.5),
 		},
 		Labelled: []int{logic.Labelled(0), logic.Labelled(3)},
+		Shadowed: logic.ShadowedPredeclared(true),
 		Panics:   []string{logic.PanicFlow(true), logic.PanicFlow(false)},
 	}
 	result.Events = logic.Events()

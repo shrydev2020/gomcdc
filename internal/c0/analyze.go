@@ -248,6 +248,7 @@ func cloneAndValidateInventory(ctx context.Context, inventory *FileInventory) (*
 		}
 		cloned.Blocks[index] = block
 		cloned.Blocks[index].ProfileAnchors = append([]Position(nil), block.ProfileAnchors...)
+		cloned.Blocks[index].StatementUnits = append([]InventoryStatement(nil), block.StatementUnits...)
 		for anchorIndex, anchor := range block.ProfileAnchors {
 			if err := ctx.Err(); err != nil {
 				return nil, err
@@ -274,11 +275,17 @@ func equalInventory(left, right *FileInventory) bool {
 			leftBlock.ProfileFile != rightBlock.ProfileFile ||
 			leftBlock.ProfileRange != rightBlock.ProfileRange ||
 			leftBlock.Statements != rightBlock.Statements ||
-			len(leftBlock.ProfileAnchors) != len(rightBlock.ProfileAnchors) {
+			len(leftBlock.ProfileAnchors) != len(rightBlock.ProfileAnchors) ||
+			len(leftBlock.StatementUnits) != len(rightBlock.StatementUnits) {
 			return false
 		}
 		for anchorIndex := range leftBlock.ProfileAnchors {
 			if leftBlock.ProfileAnchors[anchorIndex] != rightBlock.ProfileAnchors[anchorIndex] {
+				return false
+			}
+		}
+		for statementIndex := range leftBlock.StatementUnits {
+			if leftBlock.StatementUnits[statementIndex] != rightBlock.StatementUnits[statementIndex] {
 				return false
 			}
 		}

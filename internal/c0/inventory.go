@@ -216,9 +216,17 @@ func (visitor inventoryVisitor) record(start, end token.Pos, statementCount int,
 	}
 	builder.seen[pair] = struct{}{}
 	anchors := make([]Position, 0, len(statements))
+	statementUnits := make([]InventoryStatement, 0, len(statements))
 	for _, statement := range statements {
-		position := builder.fset.PositionFor(statement.Pos(), true)
-		anchors = append(anchors, Position{Line: position.Line, Column: position.Column})
+		physical := builder.fset.PositionFor(statement.Pos(), false)
+		logical := builder.fset.PositionFor(statement.Pos(), true)
+		logicalPosition := Position{Line: logical.Line, Column: logical.Column}
+		anchors = append(anchors, logicalPosition)
+		statementUnits = append(statementUnits, InventoryStatement{
+			PhysicalPosition: Position{Line: physical.Line, Column: physical.Column},
+			ProfileFile:      logical.Filename,
+			ProfilePosition:  logicalPosition,
+		})
 	}
 	builder.blocks = append(builder.blocks, InventoryBlock{
 		PhysicalRange: SourceRange{
@@ -228,6 +236,7 @@ func (visitor inventoryVisitor) record(start, end token.Pos, statementCount int,
 		ProfileFile:    profileFile,
 		ProfileRange:   SourceRange{Start: pair.start, End: pair.end},
 		ProfileAnchors: anchors,
+		StatementUnits: statementUnits,
 		Statements:     statementCount,
 	})
 }

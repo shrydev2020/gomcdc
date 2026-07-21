@@ -175,6 +175,7 @@ func cloneInventory(inventory *c0.FileInventory) *c0.FileInventory {
 	for index, block := range inventory.Blocks {
 		cloned.Blocks[index] = block
 		cloned.Blocks[index].ProfileAnchors = append([]c0.Position(nil), block.ProfileAnchors...)
+		cloned.Blocks[index].StatementUnits = append([]c0.InventoryStatement(nil), block.StatementUnits...)
 	}
 	return cloned
 }

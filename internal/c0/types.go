@@ -80,11 +80,22 @@ type FileInventory struct {
 // with the logical range/file emitted by Go coverage. ProfileAnchors are the
 // starts of original statements represented by this block.
 type InventoryBlock struct {
-	PhysicalRange  SourceRange `json:"physical_range"`
-	ProfileFile    string      `json:"profile_file"`
-	ProfileRange   SourceRange `json:"profile_range"`
-	ProfileAnchors []Position  `json:"profile_anchors"`
-	Statements     int         `json:"statements"`
+	PhysicalRange  SourceRange          `json:"physical_range"`
+	ProfileFile    string               `json:"profile_file"`
+	ProfileRange   SourceRange          `json:"profile_range"`
+	ProfileAnchors []Position           `json:"profile_anchors"`
+	StatementUnits []InventoryStatement `json:"statement_units,omitempty"`
+	Statements     int                  `json:"statements"`
+}
+
+// InventoryStatement identifies one original statement unit in both physical
+// source and Go cover's logical coordinate space. ProfileFile is recorded per
+// statement because //line directives can make one rewritten cover block span
+// original and generated logical files.
+type InventoryStatement struct {
+	PhysicalPosition Position `json:"physical_position"`
+	ProfileFile      string   `json:"profile_file"`
+	ProfilePosition  Position `json:"profile_position"`
 }
 
 // BlockMapping overrides the identity mapping for one exact profile block
