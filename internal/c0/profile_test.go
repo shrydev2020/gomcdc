@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/shrydev2020/gomcdc/internal/c0"
+	"github.com/shrydev2020/gomcdc/v2/internal/c0"
 )
 
 func TestParseProfileModesMergeDuplicateBlocks(t *testing.T) {

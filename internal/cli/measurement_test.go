@@ -10,16 +10,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/shrydev2020/gomcdc/internal/analyzer"
-	"github.com/shrydev2020/gomcdc/internal/c0"
-	"github.com/shrydev2020/gomcdc/internal/c0map"
-	cover "github.com/shrydev2020/gomcdc/internal/coverage"
-	"github.com/shrydev2020/gomcdc/internal/gotest"
-	"github.com/shrydev2020/gomcdc/internal/instrument"
-	"github.com/shrydev2020/gomcdc/internal/loader"
-	"github.com/shrydev2020/gomcdc/internal/modulecontext"
-	"github.com/shrydev2020/gomcdc/internal/report"
-	"github.com/shrydev2020/gomcdc/internal/runtimecov"
+	"github.com/shrydev2020/gomcdc/v2/internal/analyzer"
+	"github.com/shrydev2020/gomcdc/v2/internal/c0"
+	"github.com/shrydev2020/gomcdc/v2/internal/c0map"
+	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
+	"github.com/shrydev2020/gomcdc/v2/internal/gotest"
+	"github.com/shrydev2020/gomcdc/v2/internal/instrument"
+	"github.com/shrydev2020/gomcdc/v2/internal/loader"
+	"github.com/shrydev2020/gomcdc/v2/internal/modulecontext"
+	"github.com/shrydev2020/gomcdc/v2/internal/report"
+	"github.com/shrydev2020/gomcdc/v2/internal/runtimecov"
+	"github.com/shrydev2020/gomcdc/v2/internal/workspace"
 )
 
 func TestWithRelocatedModFilePreservesOnlyCopiedSelectionAndBinaryArgs(t *testing.T) {
@@ -31,6 +32,18 @@ func TestWithRelocatedModFilePreservesOnlyCopiedSelectionAndBinaryArgs(t *testin
 	want := []string{"-run", "TestOne", "-modfile=/workspace/config/gomcdc.mod", "-args", "-fixture", "value"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("withRelocatedModFile() = %#v, want %#v", got, want)
+	}
+}
+
+func TestWithRelocatedBuildModFileUsesOnlyRequestWorkspaceSelection(t *testing.T) {
+	t.Parallel()
+	got := withRelocatedBuildModFile(
+		[]string{"-tags=integration", "-modfile=/source/analysis.mod", "-mod=mod"},
+		"/workspace/config/gomcdc.mod",
+	)
+	want := []string{"-tags=integration", "-mod=mod", "-modfile=/workspace/config/gomcdc.mod"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("withRelocatedBuildModFile() = %#v, want %#v", got, want)
 	}
 }
 
@@ -56,7 +69,7 @@ func TestRecoveryContextSurvivesRequestCancellationUntilDeadline(t *testing.T) {
 	}
 }
 
-func TestMeasureUsesOneCombinedWorkspaceWhenInterrupted(t *testing.T) {
+func TestMeasureUsesPreparedWorkspaceWhenInterrupted(t *testing.T) {
 	module := t.TempDir()
 	if err := os.WriteFile(filepath.Join(module, "go.mod"), []byte("module example.test/m\n\ngo 1.26\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -65,6 +78,11 @@ func TestMeasureUsesOneCombinedWorkspaceWhenInterrupted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	work, err := workspace.Create(t.Context(), workspace.Options{SourceConfiguration: moduleSettings})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = work.Remove() })
 	bin := t.TempDir()
 	if err := os.WriteFile(filepath.Join(bin, "go"), []byte("#!/bin/sh\nwhile :; do :; done\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -73,30 +91,24 @@ func TestMeasureUsesOneCombinedWorkspaceWhenInterrupted(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	time.AfterFunc(20*time.Millisecond, cancel)
-	outcome, measurementWork, err := measure(measurementRequest{
+	outcome, err := measure(measurementRequest{
 		context: ctx,
 		loaded: loader.Result{
-			ModulePath: "example.test/m", ModuleRoot: module, RelativeWorkDir: ".",
+			ModulePath: "example.test/m", ModuleRoot: work.ModuleDir,
 			PackageImportSet: []string{"example.test/m"}, CoverPackageImportSet: []string{"example.test/m"},
-			ModuleSettings: moduleSettings,
 		},
 		decisions: []cover.DecisionMetadata{{ID: 1, Package: "example.test/m"}},
 		needsC0:   true,
 		needsAST:  true,
-	}, io.Discard)
+	}, work, io.Discard)
 	if err != nil {
 		t.Fatalf("measure: %v", err)
 	}
-	defer func() {
-		if cleanupErr := measurementWork.finalize(io.Discard); cleanupErr != nil {
-			t.Errorf("cleanup: %v", cleanupErr)
-		}
-	}()
 	if !outcome.interrupted {
 		t.Fatal("measurement was not classified as interrupted")
 	}
-	if measurementWork == nil || measurementWork.measurement != "combined" {
-		t.Fatalf("measurement workspace = %#v, want combined", measurementWork)
+	if outcome.measurementName != "combined" {
+		t.Fatalf("measurement name = %q, want combined", outcome.measurementName)
 	}
 }
 

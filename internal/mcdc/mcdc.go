@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sort"
 
-	cover "github.com/shrydev2020/gomcdc/internal/coverage"
+	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
 )
 
 // MCDCStrategy is the consumer-owned boundary for an MC/DC definition.

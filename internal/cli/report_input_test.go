@@ -3,12 +3,12 @@ package cli
 import (
 	"testing"
 
-	"github.com/shrydev2020/gomcdc/internal/config"
-	cover "github.com/shrydev2020/gomcdc/internal/coverage"
-	"github.com/shrydev2020/gomcdc/internal/gotest"
-	"github.com/shrydev2020/gomcdc/internal/loader"
-	"github.com/shrydev2020/gomcdc/internal/mcdc"
-	"github.com/shrydev2020/gomcdc/internal/report"
+	"github.com/shrydev2020/gomcdc/v2/internal/config"
+	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
+	"github.com/shrydev2020/gomcdc/v2/internal/gotest"
+	"github.com/shrydev2020/gomcdc/v2/internal/loader"
+	"github.com/shrydev2020/gomcdc/v2/internal/mcdc"
+	"github.com/shrydev2020/gomcdc/v2/internal/report"
 )
 
 func TestAssembleReportInputUsesOneCombinedMeasurement(t *testing.T) {

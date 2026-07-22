@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/shrydev2020/gomcdc/internal/config"
-	cover "github.com/shrydev2020/gomcdc/internal/coverage"
+	"github.com/shrydev2020/gomcdc/v2/internal/config"
+	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
 )
 
 func TestParallelDecisionBuildMatchesSequentialReport(t *testing.T) {

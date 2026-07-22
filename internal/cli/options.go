@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/shrydev2020/gomcdc/internal/config"
-	"github.com/shrydev2020/gomcdc/internal/mcdc"
+	"github.com/shrydev2020/gomcdc/v2/internal/config"
+	"github.com/shrydev2020/gomcdc/v2/internal/mcdc"
 )
 
 type options struct {

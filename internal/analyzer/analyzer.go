@@ -19,7 +19,7 @@ import (
 	"strconv"
 	"strings"
 
-	cover "github.com/shrydev2020/gomcdc/internal/coverage"
+	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
 )
 
 // StableIDVersion is part of every decision key. Changing the key schema must
@@ -33,10 +33,14 @@ const (
 
 // FileOptions identifies an original source file in its module and package.
 type FileOptions struct {
-	Path        string
-	ModuleDir   string
-	ModulePath  string
-	PackagePath string
+	// Path is the request-owned file whose bytes are analyzed.
+	Path string
+	// OriginalPath is the corresponding caller-owned source identity. When
+	// empty, Path is used. Analysis never reads OriginalPath.
+	OriginalPath string
+	ModuleDir    string
+	ModulePath   string
+	PackagePath  string
 }
 
 // Span is a zero-based, half-open byte range in the original source file.
@@ -146,20 +150,27 @@ func AnalyzeFile(options FileOptions) (File, error) {
 		return File{}, errors.New("analyze file: package path is empty")
 	}
 
-	originalPath, err := filepath.Abs(options.Path)
+	analysisPath, err := filepath.Abs(options.Path)
 	if err != nil {
 		return File{}, fmt.Errorf("analyze file %q: resolve source path: %w", options.Path, err)
+	}
+	originalPath := analysisPath
+	if options.OriginalPath != "" {
+		originalPath, err = filepath.Abs(options.OriginalPath)
+		if err != nil {
+			return File{}, fmt.Errorf("analyze file %q: resolve original source identity: %w", options.Path, err)
+		}
 	}
 	moduleDir, err := filepath.Abs(options.ModuleDir)
 	if err != nil {
 		return File{}, fmt.Errorf("analyze file %q: resolve module directory: %w", options.Path, err)
 	}
-	relativePath, err := moduleRelativePath(moduleDir, originalPath)
+	relativePath, err := moduleRelativePath(moduleDir, analysisPath)
 	if err != nil {
 		return File{}, fmt.Errorf("analyze file %q: %w", options.Path, err)
 	}
 
-	source, err := os.ReadFile(originalPath)
+	source, err := os.ReadFile(analysisPath)
 	if err != nil {
 		return File{}, fmt.Errorf("analyze file %q: read: %w", options.Path, err)
 	}

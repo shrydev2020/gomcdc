@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"syscall"
 
-	"github.com/shrydev2020/gomcdc/internal/cli"
+	"github.com/shrydev2020/gomcdc/v2/internal/cli"
 )
 
 func main() {

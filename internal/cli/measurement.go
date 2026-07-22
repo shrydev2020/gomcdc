@@ -11,17 +11,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/shrydev2020/gomcdc/internal/c0"
-	"github.com/shrydev2020/gomcdc/internal/c0map"
-	"github.com/shrydev2020/gomcdc/internal/compileraware"
-	cover "github.com/shrydev2020/gomcdc/internal/coverage"
-	"github.com/shrydev2020/gomcdc/internal/goflags"
-	"github.com/shrydev2020/gomcdc/internal/gotest"
-	"github.com/shrydev2020/gomcdc/internal/instrument"
-	"github.com/shrydev2020/gomcdc/internal/loader"
-	"github.com/shrydev2020/gomcdc/internal/report"
-	"github.com/shrydev2020/gomcdc/internal/runtimecov"
-	"github.com/shrydev2020/gomcdc/internal/workspace"
+	"github.com/shrydev2020/gomcdc/v2/internal/c0"
+	"github.com/shrydev2020/gomcdc/v2/internal/c0map"
+	"github.com/shrydev2020/gomcdc/v2/internal/compileraware"
+	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
+	"github.com/shrydev2020/gomcdc/v2/internal/goflags"
+	"github.com/shrydev2020/gomcdc/v2/internal/gotest"
+	"github.com/shrydev2020/gomcdc/v2/internal/instrument"
+	"github.com/shrydev2020/gomcdc/v2/internal/loader"
+	"github.com/shrydev2020/gomcdc/v2/internal/report"
+	"github.com/shrydev2020/gomcdc/v2/internal/runtimecov"
+	"github.com/shrydev2020/gomcdc/v2/internal/workspace"
 )
 
 type measurementRequest struct {
@@ -30,8 +30,6 @@ type measurementRequest struct {
 	goTestArgs              []string
 	goFlags                 string
 	json                    bool
-	workDirParent           string
-	keepWorkDir             bool
 	loaded                  loader.Result
 	sources                 []sourceInstrumentation
 	generated               []c0map.GeneratedFile
@@ -105,10 +103,10 @@ func (outcome measurementOutcome) results(analysisIncomplete bool, finalizationE
 	}
 }
 
-// measure performs source-copy setup, one requested test run, evidence
-// collection, and evidence acceptance. It owns measurement failures and
-// returns its workspace separately so the caller can preserve cleanup timing.
-func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, *measurementWorkspace, error) {
+// measure instruments the already-resolved request workspace, performs one
+// requested test run, and accepts its evidence. Package loading and test
+// execution therefore share one module configuration and mapped working dir.
+func measure(request measurementRequest, work *workspace.Workspace, stderr io.Writer) (measurementOutcome, error) {
 	outcome := measurementOutcome{}
 	markInterrupted := func() {
 		if outcome.interrupted {
@@ -119,18 +117,12 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 			phase: "execution", code: "measurement-interrupted", message: "measurement was interrupted",
 		})
 	}
-	work, err := workspace.Create(request.context, workspace.Options{
-		SourceDir:      request.loaded.ModuleRoot,
-		ModuleSettings: request.loaded.ModuleSettings,
-		TempParent:     request.workDirParent,
-		Keep:           request.keepWorkDir,
-	})
-	if err != nil {
-		return outcome, nil, fmt.Errorf("temporary workspace creation failed: %w", err)
+	if work == nil {
+		return outcome, errors.New("request workspace is required")
 	}
 	measurementName := requestedMeasurementName(request.needsC0, request.needsAST)
 	outcome.measurementName = measurementName
-	measurementWork := &measurementWorkspace{measurement: measurementName, workspace: work}
+	var err error
 
 	var instrumentationResults []instrument.PackageResult
 	generatedProfilePaths := generatedPaths(request.generated)
@@ -140,7 +132,7 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 			if request.context.Err() != nil {
 				markInterrupted()
 			} else {
-				return outcome, measurementWork, fmt.Errorf("runtime instrumentation failed: %w", injectErr)
+				return outcome, fmt.Errorf("runtime instrumentation failed: %w", injectErr)
 			}
 		}
 		if request.context.Err() != nil {
@@ -160,14 +152,14 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 				if request.context.Err() != nil {
 					markInterrupted()
 				} else {
-					return outcome, measurementWork, fmt.Errorf("source instrumentation failed: %w", instrumentErr)
+					return outcome, fmt.Errorf("source instrumentation failed: %w", instrumentErr)
 				}
 			}
 			for _, result := range instrumentationResults {
 				for _, generatedFile := range result.GeneratedFiles {
 					relative, relErr := filepath.Rel(work.ModuleDir, generatedFile)
 					if relErr != nil {
-						return outcome, measurementWork, fmt.Errorf("resolve generated coverage file %q: %w", generatedFile, relErr)
+						return outcome, fmt.Errorf("resolve generated coverage file %q: %w", generatedFile, relErr)
 					}
 					generatedProfilePaths = append(generatedProfilePaths, filepath.ToSlash(relative))
 				}
@@ -182,7 +174,7 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 			if request.context.Err() != nil {
 				markInterrupted()
 			} else {
-				return outcome, measurementWork, fmt.Errorf("compiler-aware instrumentation failed: %w", err)
+				return outcome, fmt.Errorf("compiler-aware instrumentation failed: %w", err)
 			}
 		}
 	}
@@ -191,7 +183,7 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 	if !outcome.interrupted && request.needsAST {
 		runID, err = newRunID()
 		if err != nil {
-			return outcome, measurementWork, fmt.Errorf("create coverage run ID: %w", err)
+			return outcome, fmt.Errorf("create coverage run ID: %w", err)
 		}
 	}
 	if !outcome.interrupted {
@@ -206,7 +198,7 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 			goTestArgs = withRelocatedModFile(goTestArgs, work.ModFilePath)
 			goFlags, err = goflags.Without(goFlags, map[string]bool{"modfile": true})
 			if err != nil {
-				return outcome, measurementWork, fmt.Errorf("relocate GOFLAGS modfile: %w", err)
+				return outcome, fmt.Errorf("relocate GOFLAGS modfile: %w", err)
 			}
 		}
 		environment := map[string]string{"GOWORK": goWorkPath, "GOFLAGS": goFlags}
@@ -228,12 +220,8 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 			// binaries from running and destroy recoverable partial evidence.
 			coverPackages = nil
 		}
-		testDir := work.ModuleDir
-		if request.loaded.WorkingDirBase == loader.WorkingDirectoryWorkspace {
-			testDir = work.RootDir
-		}
 		result := runGoTest(request.context, request.timeout, gotest.Options{
-			Dir:           filepath.Join(testDir, request.loaded.RelativeWorkDir),
+			Dir:           work.WorkingDir,
 			Patterns:      request.loaded.PackageImportSet,
 			Args:          goTestArgs,
 			CoverProfile:  coverProfile,
@@ -324,7 +312,7 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 		profile, profileReadErr := readCoverProfile(coverProfile)
 		plans, planErr := sourceCoveragePlans(recoveryContext, request.sources, instrumentationResults)
 		if planErr != nil {
-			return outcome, measurementWork, fmt.Errorf("coverage correspondence assembly failed: %w", planErr)
+			return outcome, fmt.Errorf("coverage correspondence assembly failed: %w", planErr)
 		}
 		runResult := outcome.testResult
 		runComplete := runResult != nil && runResult.Status == cover.RunPassed
@@ -372,7 +360,7 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 	if request.context.Err() != nil {
 		markInterrupted()
 	}
-	return outcome, measurementWork, nil
+	return outcome, nil
 }
 
 // withRelocatedModFile removes every source -modfile selection before the test
@@ -396,6 +384,18 @@ func withRelocatedModFile(arguments []string, path string) []string {
 		filtered = append(filtered, binaryArguments...)
 	}
 	return filtered
+}
+
+// withRelocatedBuildModFile replaces every source -modfile build flag with the
+// request-owned selection used by both package loading and go test.
+func withRelocatedBuildModFile(flags []string, path string) []string {
+	result := make([]string, 0, len(flags)+1)
+	for _, flag := range flags {
+		if goflags.Name(flag) != "modfile" {
+			result = append(result, flag)
+		}
+	}
+	return append(result, "-modfile="+path)
 }
 
 func splitMeasurementBinaryArgs(arguments []string) (goArguments, binaryArguments []string) {

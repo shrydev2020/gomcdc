@@ -5,9 +5,9 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/shrydev2020/gomcdc/internal/config"
-	cover "github.com/shrydev2020/gomcdc/internal/coverage"
-	"github.com/shrydev2020/gomcdc/internal/mcdc"
+	"github.com/shrydev2020/gomcdc/v2/internal/config"
+	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
+	"github.com/shrydev2020/gomcdc/v2/internal/mcdc"
 )
 
 // Four concurrent decisions cap the multiplier applied to each independent

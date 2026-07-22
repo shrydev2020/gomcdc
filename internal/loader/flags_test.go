@@ -23,17 +23,3 @@ func TestBuildFlagsMissingValue(t *testing.T) {
 		t.Fatal("BuildFlags() error = nil, want missing-value error")
 	}
 }
-
-func TestWithoutBuildFlagRemovesEqualsAndSeparateForms(t *testing.T) {
-	t.Parallel()
-	for _, flags := range [][]string{
-		{"-tags=integration", "-modfile=first.mod", "-mod=readonly"},
-		{"-tags=integration", "-modfile", "second.mod", "-mod=readonly"},
-	} {
-		got := withoutBuildFlag(flags, "modfile")
-		want := []string{"-tags=integration", "-mod=readonly"}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("withoutBuildFlag(%#v) = %#v, want %#v", flags, got, want)
-		}
-	}
-}

@@ -3,8 +3,8 @@ package backend_test
 import (
 	"testing"
 
-	"github.com/shrydev2020/gomcdc/internal/backend"
-	cover "github.com/shrydev2020/gomcdc/internal/coverage"
+	"github.com/shrydev2020/gomcdc/v2/internal/backend"
+	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
 )
 
 func TestASTBackendAdvertisesSemanticBoundary(t *testing.T) {

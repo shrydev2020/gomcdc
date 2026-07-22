@@ -7,7 +7,7 @@ import (
 	"io"
 	"strings"
 
-	cover "github.com/shrydev2020/gomcdc/internal/coverage"
+	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
 )
 
 type htmlMetric struct {

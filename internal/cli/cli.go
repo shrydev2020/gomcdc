@@ -13,19 +13,21 @@ import (
 	"strings"
 	"time"
 
-	"github.com/shrydev2020/gomcdc/internal/analyzer"
-	"github.com/shrydev2020/gomcdc/internal/buildinfo"
-	"github.com/shrydev2020/gomcdc/internal/c0"
-	"github.com/shrydev2020/gomcdc/internal/c0map"
-	"github.com/shrydev2020/gomcdc/internal/config"
-	cover "github.com/shrydev2020/gomcdc/internal/coverage"
-	"github.com/shrydev2020/gomcdc/internal/goflags"
-	"github.com/shrydev2020/gomcdc/internal/gotest"
-	"github.com/shrydev2020/gomcdc/internal/instrument"
-	"github.com/shrydev2020/gomcdc/internal/loader"
-	"github.com/shrydev2020/gomcdc/internal/mcdc"
-	"github.com/shrydev2020/gomcdc/internal/report"
-	"github.com/shrydev2020/gomcdc/internal/runtimecov"
+	"github.com/shrydev2020/gomcdc/v2/internal/analyzer"
+	"github.com/shrydev2020/gomcdc/v2/internal/buildinfo"
+	"github.com/shrydev2020/gomcdc/v2/internal/c0"
+	"github.com/shrydev2020/gomcdc/v2/internal/c0map"
+	"github.com/shrydev2020/gomcdc/v2/internal/config"
+	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
+	"github.com/shrydev2020/gomcdc/v2/internal/goflags"
+	"github.com/shrydev2020/gomcdc/v2/internal/gotest"
+	"github.com/shrydev2020/gomcdc/v2/internal/instrument"
+	"github.com/shrydev2020/gomcdc/v2/internal/loader"
+	"github.com/shrydev2020/gomcdc/v2/internal/mcdc"
+	"github.com/shrydev2020/gomcdc/v2/internal/modulecontext"
+	"github.com/shrydev2020/gomcdc/v2/internal/report"
+	"github.com/shrydev2020/gomcdc/v2/internal/runtimecov"
+	"github.com/shrydev2020/gomcdc/v2/internal/workspace"
 )
 
 const (
@@ -149,12 +151,13 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		fmt.Fprintf(stderr, "gomcdc: parse GOFLAGS: %v\n", goFlagsErr)
 		return ExitInvalidUsage
 	}
-	loaded, err := loader.Load(ctx, loader.Options{
-		Dir:          workingDir,
-		Patterns:     opts.patterns,
-		BuildFlags:   buildFlags,
-		IncludeTests: opts.includeTests,
-		GOFLAGS:      &filteredGOFLAGS,
+	needsC0 := opts.metrics.Enabled(config.MetricStatement) || opts.metrics.Enabled(config.MetricFunction)
+	needsASTRun := needsASTRuntime(opts.metrics)
+	needsCompilerSelection := opts.metrics.Enabled(config.MetricSwitchClauseSelection) || opts.metrics.Enabled(config.MetricTypeSwitchClauseSelection)
+	measurementName := requestedMeasurementName(needsC0, needsASTRun)
+
+	sourceConfiguration, err := modulecontext.Discover(ctx, modulecontext.DiscoverOptions{
+		Dir: workingDir, BuildFlags: buildFlags, GOFLAGS: filteredGOFLAGS,
 	})
 	if err != nil {
 		if ctx.Err() != nil {
@@ -164,10 +167,58 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		fmt.Fprintf(stderr, "gomcdc: package load failed: %v\n", err)
 		return ExitMeasurementFailed
 	}
-	needsC0 := opts.metrics.Enabled(config.MetricStatement) || opts.metrics.Enabled(config.MetricFunction)
-	needsASTRun := needsASTRuntime(opts.metrics)
-	needsCompilerSelection := opts.metrics.Enabled(config.MetricSwitchClauseSelection) || opts.metrics.Enabled(config.MetricTypeSwitchClauseSelection)
+	work, err := workspace.Create(ctx, workspace.Options{
+		SourceConfiguration: sourceConfiguration,
+		WorkingDir:          workingDir,
+		TempParent:          opts.workDirParent,
+		Keep:                opts.keepWorkDir,
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			fmt.Fprintf(stderr, "gomcdc: interrupted: %v\n", ctx.Err())
+			return ExitInterrupted
+		}
+		fmt.Fprintf(stderr, "gomcdc: temporary workspace creation failed: %v\n", err)
+		return ExitMeasurementFailed
+	}
+	measurementWork := &measurementWorkspace{measurement: measurementName, workspace: work}
+	defer func() {
+		if finalizationErr := measurementWork.finalize(stderr); finalizationErr != nil && exitCode != ExitInterrupted {
+			exitCode = ExitMeasurementFailed
+		}
+	}()
 
+	packageBuildFlags := append([]string(nil), buildFlags...)
+	packageGOFLAGS := filteredGOFLAGS
+	if work.ModFilePath != "" {
+		packageBuildFlags = withRelocatedBuildModFile(packageBuildFlags, work.ModFilePath)
+		packageGOFLAGS, err = goflags.Without(packageGOFLAGS, map[string]bool{"modfile": true})
+		if err != nil {
+			fmt.Fprintf(stderr, "gomcdc: relocate GOFLAGS modfile: %v\n", err)
+			return ExitMeasurementFailed
+		}
+	}
+	goWorkPath := work.GoWorkPath
+	if goWorkPath == "" {
+		goWorkPath = "off"
+	}
+	loaded, err := loader.Load(ctx, loader.Options{
+		Dir:                work.WorkingDir,
+		Patterns:           opts.patterns,
+		BuildFlags:         packageBuildFlags,
+		IncludeTests:       opts.includeTests,
+		GOFLAGS:            &packageGOFLAGS,
+		GOWORK:             &goWorkPath,
+		ExpectedModuleRoot: work.ModuleDir,
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			fmt.Fprintf(stderr, "gomcdc: interrupted: %v\n", ctx.Err())
+			return ExitInterrupted
+		}
+		fmt.Fprintf(stderr, "gomcdc: package load failed: %v\n", err)
+		return ExitMeasurementFailed
+	}
 	var sources []sourceInstrumentation
 	var generatedFiles []c0map.GeneratedFile
 	var ignoredCoverageFiles []string
@@ -191,10 +242,11 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 			continue
 		}
 		analysis, analysisErr := analyzer.AnalyzeFile(analyzer.FileOptions{
-			Path:        file.Path,
-			ModuleDir:   loaded.ModuleRoot,
-			ModulePath:  loaded.ModulePath,
-			PackagePath: file.PackagePath,
+			Path:         file.Path,
+			OriginalPath: filepath.Join(sourceConfiguration.MainModuleDir(), relative),
+			ModuleDir:    loaded.ModuleRoot,
+			ModulePath:   loaded.ModulePath,
+			PackagePath:  file.PackagePath,
 		})
 		if err := ctx.Err(); err != nil {
 			fmt.Fprintf(stderr, "gomcdc: source analysis interrupted: %v\n", err)
@@ -255,22 +307,12 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	}
 
 	jsonMode := goTestJSONEnabled(opts.goTestArgs)
-	measurement, measurementWork, measurementErr := measure(measurementRequest{
+	measurement, measurementErr := measure(measurementRequest{
 		context: ctx, timeout: opts.timeout, goTestArgs: opts.goTestArgs, goFlags: filteredGOFLAGS, json: jsonMode,
-		workDirParent: opts.workDirParent, keepWorkDir: opts.keepWorkDir,
 		loaded: loaded, sources: sources, generated: generatedFiles, ignoredCoverageFiles: ignoredCoverageFiles,
 		decisions: decisions, clauses: clauses, noMatches: noMatches,
 		needsC0: needsC0, needsAST: needsASTRun, compilerClauseSelection: needsCompilerSelection,
-	}, stderr)
-	if measurementWork != nil {
-		defer func() {
-			if finalizationErr := measurementWork.finalize(stderr); finalizationErr != nil {
-				if exitCode != ExitInterrupted {
-					exitCode = ExitMeasurementFailed
-				}
-			}
-		}()
-	}
+	}, work, stderr)
 	if measurementErr != nil {
 		if ctx.Err() != nil {
 			fmt.Fprintf(stderr, "gomcdc: interrupted: %v\n", ctx.Err())
@@ -279,14 +321,11 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		fmt.Fprintf(stderr, "gomcdc: %v\n", measurementErr)
 		return ExitMeasurementFailed
 	}
-	var finalizationErr error
-	if measurementWork != nil {
-		finalizationErr = measurementWork.finalize(stderr)
-		if finalizationErr != nil {
-			reportErrors = append(reportErrors, report.ReportError{
-				Phase: "cleanup", Code: "workspace-cleanup-failed", Message: "temporary workspace cleanup failed",
-			})
-		}
+	finalizationErr := measurementWork.finalize(stderr)
+	if finalizationErr != nil {
+		reportErrors = append(reportErrors, report.ReportError{
+			Phase: "cleanup", Code: "workspace-cleanup-failed", Message: "temporary workspace cleanup failed",
+		})
 	}
 
 	input := assembleReportInput(reportAssembly{

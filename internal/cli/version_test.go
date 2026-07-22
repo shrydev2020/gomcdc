@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/shrydev2020/gomcdc/internal/buildinfo"
+	"github.com/shrydev2020/gomcdc/v2/internal/buildinfo"
 )
 
 func TestVersionCommand(t *testing.T) {

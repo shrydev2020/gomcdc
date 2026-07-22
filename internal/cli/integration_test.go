@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -16,11 +18,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/shrydev2020/gomcdc/internal/backend"
-	cover "github.com/shrydev2020/gomcdc/internal/coverage"
-	"github.com/shrydev2020/gomcdc/internal/gotest"
-	"github.com/shrydev2020/gomcdc/internal/report"
-	"github.com/shrydev2020/gomcdc/internal/runtimecov"
+	"github.com/shrydev2020/gomcdc/v2/internal/backend"
+	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
+	"github.com/shrydev2020/gomcdc/v2/internal/gotest"
+	"github.com/shrydev2020/gomcdc/v2/internal/report"
+	"github.com/shrydev2020/gomcdc/v2/internal/runtimecov"
 )
 
 func TestCancellationBoundariesStopHelperWork(t *testing.T) {
@@ -86,6 +88,10 @@ func TestSingleModuleGoWorkSettingsApplyToAnalysisAndTest(t *testing.T) {
 	goWork := filepath.Join(root, "go.work")
 	writeIntegrationFile(t, goWork, "go 1.26\n\nuse ./module\n\nreplace example.test/dependency => ./dependency\n")
 	t.Setenv("GOWORK", goWork)
+	workspaceSubdirectory := filepath.Join(root, "tools", "runner")
+	if err := os.MkdirAll(workspaceSubdirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, invocation := range []struct {
 		name    string
@@ -94,6 +100,7 @@ func TestSingleModuleGoWorkSettingsApplyToAnalysisAndTest(t *testing.T) {
 	}{
 		{name: "module-directory", dir: module, pattern: "."},
 		{name: "workspace-root", dir: root, pattern: "./module"},
+		{name: "workspace-subdirectory", dir: workspaceSubdirectory, pattern: "../../module"},
 	} {
 		t.Run(invocation.name, func(t *testing.T) {
 			built, stderr, code := runFixture(t, invocation.dir, "--coverage=statement", "--format=json", invocation.pattern)
@@ -105,6 +112,70 @@ func TestSingleModuleGoWorkSettingsApplyToAnalysisAndTest(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAlternateModFileModModeResolvesOnlyInsideRequestWorkspace(t *testing.T) {
+	root := t.TempDir()
+	module := filepath.Join(root, "module")
+	primaryMod := filepath.Join(module, "go.mod")
+	primaryContents := "module example.test/modmode\n\ngo 1.26\n"
+	writeIntegrationFile(t, primaryMod, primaryContents)
+	writeIntegrationFile(t, filepath.Join(module, "value.go"), "package modmode\n\nimport \"example.test/proxydep\"\n\nfunc Value() bool { return proxydep.Value() }\n")
+	writeIntegrationFile(t, filepath.Join(module, "value_test.go"), "package modmode\n\nimport \"testing\"\n\nfunc TestValue(t *testing.T) { if !Value() { t.Fatal(\"false\") } }\n")
+
+	proxyRoot := filepath.Join(root, "proxy")
+	dependencyMod := "module example.test/proxydep\n\ngo 1.26\n"
+	writeModuleProxy(t, proxyRoot, "example.test/proxydep", "v1.0.0", map[string]string{
+		"go.mod":   dependencyMod,
+		"value.go": "package proxydep\n\nfunc Value() bool { return true }\n",
+	})
+	proxyURL := (&url.URL{Scheme: "file", Path: filepath.ToSlash(proxyRoot)}).String()
+	t.Setenv("GOWORK", "off")
+	t.Setenv("GOPROXY", proxyURL)
+	t.Setenv("GONOPROXY", "none")
+	t.Setenv("GOPRIVATE", "")
+	t.Setenv("GOSUMDB", "off")
+	moduleCache := filepath.Join(root, "module-cache")
+	t.Setenv("GOMODCACHE", moduleCache)
+	t.Cleanup(func() { makeIntegrationTreeWritable(moduleCache) })
+
+	alternate := filepath.Join(root, "config", "analysis.mod")
+	alternateSum := strings.TrimSuffix(alternate, ".mod") + ".sum"
+	alternateContents := "module example.test/modmode\n\ngo 1.26\n\nrequire example.test/proxydep v1.0.0\n"
+	writeIntegrationFile(t, alternate, alternateContents)
+	if _, err := os.Stat(alternateSum); !os.IsNotExist(err) {
+		t.Fatalf("alternate sum exists before request: %v", err)
+	}
+
+	requestWorkParent := filepath.Join(root, "request-workspaces")
+	if err := os.MkdirAll(requestWorkParent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	built, stderr, code := runFixture(
+		t, module,
+		"--coverage=statement", "--format=json", "--keep-workdir", "--workdir="+requestWorkParent, ".", "--",
+		"-mod=mod", "-modfile="+alternate,
+	)
+	if code != ExitSuccess {
+		t.Fatalf("alternate modfile -mod=mod exit=%d\nstderr:\n%s", code, stderr)
+	}
+	if built.Run.Results.Test != report.ResultPassed || built.Run.Results.Measurement != report.ResultPassed {
+		t.Fatalf("alternate modfile -mod=mod run = %#v", built.Run)
+	}
+	requestWorkspace := keptWorkspacePath(t, stderr, "standard-cover")
+	t.Cleanup(func() {
+		makeIntegrationTreeWritable(requestWorkspace)
+		_ = os.RemoveAll(requestWorkspace)
+	})
+	requestSum, err := os.ReadFile(filepath.Join(requestWorkspace, "module-config", "gomcdc.sum"))
+	if err != nil || len(requestSum) == 0 {
+		t.Fatalf("request-owned alternate sum = %q, %v", requestSum, err)
+	}
+	if _, err := os.Stat(alternateSum); !os.IsNotExist(err) {
+		t.Fatalf("request created source alternate sum: %v", err)
+	}
+	assertIntegrationFileContents(t, primaryMod, primaryContents)
+	assertIntegrationFileContents(t, alternate, alternateContents)
 }
 
 func TestAlternateModFileAppliesSameSnapshotToAnalysisAndTest(t *testing.T) {
@@ -1491,6 +1562,85 @@ func writeIntegrationFile(t *testing.T, path, contents string) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertIntegrationFileContents(t *testing.T, path, want string) {
+	t.Helper()
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != want {
+		t.Fatalf("file %q changed:\n%s", path, contents)
+	}
+}
+
+func keptWorkspacePath(t *testing.T, stderr, measurement string) string {
+	t.Helper()
+	prefix := "gomcdc: kept " + measurement + " workspace: "
+	for _, line := range strings.Split(stderr, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimPrefix(line, prefix)
+		}
+	}
+	t.Fatalf("kept workspace path missing from stderr:\n%s", stderr)
+	return ""
+}
+
+func makeIntegrationTreeWritable(root string) {
+	_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			return os.Chmod(path, 0o700)
+		}
+		return os.Chmod(path, 0o600)
+	})
+}
+
+func writeModuleProxy(t *testing.T, root, module, version string, files map[string]string) {
+	t.Helper()
+	versionDir := filepath.Join(root, filepath.FromSlash(module), "@v")
+	moduleContents, ok := files["go.mod"]
+	if !ok {
+		t.Fatal("proxy module requires go.mod")
+	}
+	writeIntegrationFile(t, filepath.Join(versionDir, "list"), version+"\n")
+	writeIntegrationFile(t, filepath.Join(versionDir, version+".info"), fmt.Sprintf("{\"Version\":%q,\"Time\":\"2026-01-01T00:00:00Z\"}\n", version))
+	writeIntegrationFile(t, filepath.Join(versionDir, version+".mod"), moduleContents)
+
+	zipPath := filepath.Join(versionDir, version+".zip")
+	archive, err := os.Create(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := zip.NewWriter(archive)
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		entry, createErr := writer.Create(module + "@" + version + "/" + filepath.ToSlash(name))
+		if createErr != nil {
+			_ = writer.Close()
+			_ = archive.Close()
+			t.Fatal(createErr)
+		}
+		if _, writeErr := entry.Write([]byte(files[name])); writeErr != nil {
+			_ = writer.Close()
+			_ = archive.Close()
+			t.Fatal(writeErr)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		_ = archive.Close()
+		t.Fatal(err)
+	}
+	if err := archive.Close(); err != nil {
 		t.Fatal(err)
 	}
 }

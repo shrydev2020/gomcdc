@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	cover "github.com/shrydev2020/gomcdc/internal/coverage"
+	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
 )
 
 // SourceFileInput is immutable original source supplied by the analyzer.

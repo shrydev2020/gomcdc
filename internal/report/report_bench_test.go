@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/shrydev2020/gomcdc/internal/config"
-	cover "github.com/shrydev2020/gomcdc/internal/coverage"
-	"github.com/shrydev2020/gomcdc/internal/report"
+	"github.com/shrydev2020/gomcdc/v2/internal/config"
+	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
+	"github.com/shrydev2020/gomcdc/v2/internal/report"
 )
 
 var benchmarkReportSink report.Report

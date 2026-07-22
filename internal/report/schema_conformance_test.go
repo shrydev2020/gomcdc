@@ -10,11 +10,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/shrydev2020/gomcdc/internal/backend"
-	"github.com/shrydev2020/gomcdc/internal/config"
-	cover "github.com/shrydev2020/gomcdc/internal/coverage"
-	"github.com/shrydev2020/gomcdc/internal/gotest"
-	"github.com/shrydev2020/gomcdc/internal/report"
+	"github.com/shrydev2020/gomcdc/v2/internal/backend"
+	"github.com/shrydev2020/gomcdc/v2/internal/config"
+	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
+	"github.com/shrydev2020/gomcdc/v2/internal/gotest"
+	"github.com/shrydev2020/gomcdc/v2/internal/report"
 )
 
 type schemaNode struct {

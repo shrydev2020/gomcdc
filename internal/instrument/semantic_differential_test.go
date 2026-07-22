@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/shrydev2020/gomcdc/internal/analyzer"
-	"github.com/shrydev2020/gomcdc/internal/compileraware"
-	cover "github.com/shrydev2020/gomcdc/internal/coverage"
-	"github.com/shrydev2020/gomcdc/internal/runtimecov"
+	"github.com/shrydev2020/gomcdc/v2/internal/analyzer"
+	"github.com/shrydev2020/gomcdc/v2/internal/compileraware"
+	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
+	"github.com/shrydev2020/gomcdc/v2/internal/runtimecov"
 )
 
 const semanticFixtureModule = "example.test/gomcdc-semantic-fixture"

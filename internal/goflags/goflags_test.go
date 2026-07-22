@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/shrydev2020/gomcdc/internal/goflags"
+	"github.com/shrydev2020/gomcdc/v2/internal/goflags"
 )
 
 func TestSplitJoinAndFilter(t *testing.T) {

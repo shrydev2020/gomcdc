@@ -27,20 +27,15 @@ that same execution; there is no production dual-run fallback.
 The compiler-aware instrumentation validates exact anchors in the selected Go
 1.26.x compiler source and fails explicitly if that source is incompatible.
 
-## Install the v2 development version
+## Install
 
-The v2 contract documented here has not been published as a versioned release.
-Install it from a checkout of the default branch:
+Install the v2 release with Go 1.26 or later:
 
 ```sh
-git clone https://github.com/shrydev2020/gomcdc.git
-cd gomcdc
-go install .
+go install github.com/shrydev2020/gomcdc/v2@v2.0.0
 ```
 
-The latest tagged release is v1.1.2 and does not implement the v2 schema and
-CLI contract described by this README. Verify a development build with
-`gomcdc version`.
+Verify the installed build with `gomcdc version`.
 
 ## Quick start
 

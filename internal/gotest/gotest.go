@@ -12,9 +12,9 @@ import (
 	"os/exec"
 	"strings"
 
-	cover "github.com/shrydev2020/gomcdc/internal/coverage"
-	"github.com/shrydev2020/gomcdc/internal/goflags"
-	"github.com/shrydev2020/gomcdc/internal/processgroup"
+	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
+	"github.com/shrydev2020/gomcdc/v2/internal/goflags"
+	"github.com/shrydev2020/gomcdc/v2/internal/processgroup"
 )
 
 type Options struct {

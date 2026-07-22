@@ -3,7 +3,7 @@ package mcdc
 import (
 	"unsafe"
 
-	cover "github.com/shrydev2020/gomcdc/internal/coverage"
+	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
 )
 
 // maskingSearchBudget counts the operations that dominate the joint solver:

@@ -6,27 +6,27 @@
     "mcdcMasking": 44
   },
   "packages": {
-    "github.com/shrydev2020/gomcdc/internal/cli": {
+    "github.com/shrydev2020/gomcdc/v2/internal/cli": {
       "mcdcUnique": 46,
       "mcdcMasking": 46
     },
-    "github.com/shrydev2020/gomcdc/internal/compileraware": {
+    "github.com/shrydev2020/gomcdc/v2/internal/compileraware": {
       "mcdcUnique": 45,
       "mcdcMasking": 41
     },
-    "github.com/shrydev2020/gomcdc/internal/instrument": {
+    "github.com/shrydev2020/gomcdc/v2/internal/instrument": {
       "mcdcUnique": 31,
       "mcdcMasking": 33
     },
-    "github.com/shrydev2020/gomcdc/internal/mcdc": {
+    "github.com/shrydev2020/gomcdc/v2/internal/mcdc": {
       "mcdcUnique": 59,
       "mcdcMasking": 55
     },
-    "github.com/shrydev2020/gomcdc/internal/report": {
+    "github.com/shrydev2020/gomcdc/v2/internal/report": {
       "mcdcUnique": 59,
       "mcdcMasking": 58
     },
-    "github.com/shrydev2020/gomcdc/internal/runtimecov": {
+    "github.com/shrydev2020/gomcdc/v2/internal/runtimecov": {
       "mcdcUnique": 40,
       "mcdcMasking": 41
     }

@@ -21,10 +21,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/shrydev2020/gomcdc/internal/analyzer"
-	"github.com/shrydev2020/gomcdc/internal/c0"
-	cover "github.com/shrydev2020/gomcdc/internal/coverage"
-	"github.com/shrydev2020/gomcdc/internal/transformmap"
+	"github.com/shrydev2020/gomcdc/v2/internal/analyzer"
+	"github.com/shrydev2020/gomcdc/v2/internal/c0"
+	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
+	"github.com/shrydev2020/gomcdc/v2/internal/transformmap"
 )
 
 const defaultHelperBase = "__gomcdcHooks"

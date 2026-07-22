@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/shrydev2020/gomcdc/internal/report"
+	"github.com/shrydev2020/gomcdc/v2/internal/report"
 )
 
 func TestHTMLOutputRequiresDirectory(t *testing.T) {

@@ -7,11 +7,11 @@ import (
 	"math"
 	"sort"
 
-	"github.com/shrydev2020/gomcdc/internal/backend"
-	"github.com/shrydev2020/gomcdc/internal/c0"
-	"github.com/shrydev2020/gomcdc/internal/config"
-	cover "github.com/shrydev2020/gomcdc/internal/coverage"
-	"github.com/shrydev2020/gomcdc/internal/mcdc"
+	"github.com/shrydev2020/gomcdc/v2/internal/backend"
+	"github.com/shrydev2020/gomcdc/v2/internal/c0"
+	"github.com/shrydev2020/gomcdc/v2/internal/config"
+	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
+	"github.com/shrydev2020/gomcdc/v2/internal/mcdc"
 )
 
 // SchemaVersion identifies the current stable JSON and text report schema.

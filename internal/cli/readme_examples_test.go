@@ -30,7 +30,7 @@ func TestREADMEForwardedGoTestExampleUsesOnlyAllowedFlags(t *testing.T) {
 	}
 }
 
-func TestREADMEDoesNotPresentV1BinaryAsV2(t *testing.T) {
+func TestREADMEInstallsVersionedV2Module(t *testing.T) {
 	t.Parallel()
 	for _, path := range []string{"../../README.md", "../../README.ja.md"} {
 		contents, err := os.ReadFile(path)
@@ -38,11 +38,8 @@ func TestREADMEDoesNotPresentV1BinaryAsV2(t *testing.T) {
 			t.Fatal(err)
 		}
 		text := string(contents)
-		if strings.Contains(text, "go install github.com/shrydev2020/gomcdc@v1") {
-			t.Fatalf("%s installs a v1 binary while documenting the v2 contract", path)
-		}
-		if !strings.Contains(text, "go install .") {
-			t.Fatalf("%s does not provide the checked-out v2 install command", path)
+		if !strings.Contains(text, "go install github.com/shrydev2020/gomcdc/v2@v2.0.0") {
+			t.Fatalf("%s does not install the versioned v2 module", path)
 		}
 	}
 }

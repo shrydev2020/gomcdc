@@ -26,19 +26,15 @@ test失敗や中断時も検証可能なpartial resultを保持します。
 compiler-aware計装は選択されたGo 1.26.xのcompiler sourceにexact anchorが存在する
 ことを検証し、互換性がなければ明示的に失敗します。
 
-## v2開発版のインストール
+## インストール
 
-このREADMEが説明するv2契約は、version付きreleaseとしてまだ公開されていません。
-default branchをcheckoutしてインストールします。
+Go 1.26以降でv2 releaseをインストールします。
 
 ```sh
-git clone https://github.com/shrydev2020/gomcdc.git
-cd gomcdc
-go install .
+go install github.com/shrydev2020/gomcdc/v2@v2.0.0
 ```
 
-最新のtag付きreleaseはv1.1.2であり、このREADMEが説明するv2 schemaとCLI契約は
-実装していません。`gomcdc version`で開発版buildを確認できます。
+`gomcdc version`でインストールしたbuildを確認できます。
 
 ## Quick start
 

@@ -34,9 +34,6 @@ func TestDiscoverSnapshotsSingleModuleWorkspace(t *testing.T) {
 	// Mutation after discovery must not alter the configuration used by the
 	// copied test workspace.
 	writeContextFile(t, goWork, "go 1.26\n\nuse ./dependency\n")
-	if err := settings.AssertSourceUnchanged(); err == nil || !strings.Contains(err.Error(), "changed during package loading") {
-		t.Fatalf("AssertSourceUnchanged() error = %v", err)
-	}
 	copiedWorkspace := t.TempDir()
 	copiedModule := filepath.Join(copiedWorkspace, "module")
 	contents, err := settings.RelocatedGoWork(t.Context(), module, copiedWorkspace, copiedModule)
@@ -99,8 +96,12 @@ func TestDiscoverFreezesAndRelocatesAlternateModFileAndSum(t *testing.T) {
 		t.Fatalf("relocated alternate modfile does not target copied module:\n%s", mod)
 	}
 	writeContextFile(t, alternateSum, "changed\n")
-	if err := settings.AssertSourceUnchanged(); err == nil || !strings.Contains(err.Error(), "changed during package loading") {
-		t.Fatalf("AssertSourceUnchanged() error = %v", err)
+	_, frozenSum, frozenSumSet, err := settings.RelocatedAlternateMod(t.Context(), copiedModule)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !frozenSumSet || string(frozenSum) != "frozen sum bytes\n" {
+		t.Fatalf("source mutation changed captured alternate sum: set=%t sum=%q", frozenSumSet, frozenSum)
 	}
 }
 

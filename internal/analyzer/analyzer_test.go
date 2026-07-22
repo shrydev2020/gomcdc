@@ -8,8 +8,33 @@ import (
 	"strings"
 	"testing"
 
-	cover "github.com/shrydev2020/gomcdc/internal/coverage"
+	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
 )
+
+func TestAnalyzeFileReadsRequestWorkspaceButRetainsOriginalIdentity(t *testing.T) {
+	t.Parallel()
+	originalRoot := t.TempDir()
+	requestRoot := t.TempDir()
+	original := writeSource(t, originalRoot, "policy/policy.go", "this is not Go source\n")
+	requestPath := writeSource(t, requestRoot, "policy/policy.go", "package policy\n\nfunc Allow(value bool) bool { return value }\n")
+
+	file, err := AnalyzeFile(FileOptions{
+		Path:         requestPath,
+		OriginalPath: original,
+		ModuleDir:    requestRoot,
+		ModulePath:   "example.com/project",
+		PackagePath:  "example.com/project/policy",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.OriginalPath != original {
+		t.Fatalf("OriginalPath = %q, want %q", file.OriginalPath, original)
+	}
+	if file.RelativePath != "policy/policy.go" || !strings.Contains(string(file.Source), "package policy") {
+		t.Fatalf("analysis used wrong source: relative=%q source=%q", file.RelativePath, file.Source)
+	}
+}
 
 func TestAnalyzeFileDiscoversOnlyPhaseOneDecisions(t *testing.T) {
 	t.Parallel()

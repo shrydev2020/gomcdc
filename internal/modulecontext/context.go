@@ -1,9 +1,8 @@
-// Package modulecontext freezes the Go module settings shared by source
-// analysis and the copied test workspace.
+// Package modulecontext captures caller-owned Go module configuration for
+// relocation into a disposable request workspace.
 package modulecontext
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -11,17 +10,20 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/shrydev2020/gomcdc/internal/goflags"
-	"github.com/shrydev2020/gomcdc/internal/processgroup"
+	"github.com/shrydev2020/gomcdc/v2/internal/goflags"
+	"github.com/shrydev2020/gomcdc/v2/internal/processgroup"
 	"golang.org/x/mod/modfile"
 )
 
-// Settings is the immutable module-mode authority for one gomcdc request. A
-// valid value owns the exact primary go.mod bytes, the exact go.work bytes when
-// active, and the selected alternate mod/sum bytes when -modfile is active.
-type Settings struct {
+// SourceConfiguration is the immutable module configuration captured from the
+// caller's source tree. It seeds a disposable request workspace; Go commands
+// must use that workspace rather than these source paths so legitimate module
+// resolution updates never mutate the caller's files.
+type SourceConfiguration struct {
 	goWorkPath       string
 	goWork           []byte
+	goWorkSum        []byte
+	goWorkSumSet     bool
 	goModPath        string
 	goMod            []byte
 	alternateModPath string
@@ -41,17 +43,17 @@ type DiscoverOptions struct {
 	GOFLAGS    string
 }
 
-// Discover snapshots the active go.mod and optional go.work, rejecting a
-// workspace that does not have exactly one main module. The returned settings
-// must be checked against package loading with AssertMainModule.
-func Discover(ctx context.Context, options DiscoverOptions) (Settings, error) {
+// Discover captures the active source configuration, rejecting a workspace
+// that does not have exactly one main module. The result must seed a disposable
+// workspace before package loading begins.
+func Discover(ctx context.Context, options DiscoverOptions) (SourceConfiguration, error) {
 	alternateModPath, err := selectedAlternateModFile(options.Dir, options.GOFLAGS, options.BuildFlags)
 	if err != nil {
-		return Settings{}, err
+		return SourceConfiguration{}, err
 	}
 	discoveryGOFLAGS, err := goflags.Without(options.GOFLAGS, map[string]bool{"modfile": true})
 	if err != nil {
-		return Settings{}, fmt.Errorf("parse GOFLAGS for primary module discovery: %w", err)
+		return SourceConfiguration{}, fmt.Errorf("parse GOFLAGS for primary module discovery: %w", err)
 	}
 	command := exec.CommandContext(ctx, "go", "env", "GOWORK", "GOMOD")
 	processgroup.ConfigureCancellation(command)
@@ -61,55 +63,62 @@ func Discover(ctx context.Context, options DiscoverOptions) (Settings, error) {
 	command.Env = overrideEnvironment(os.Environ(), "GOFLAGS", discoveryGOFLAGS)
 	output, err := command.Output()
 	if err != nil {
-		return Settings{}, fmt.Errorf("inspect Go workspace: %w", err)
+		return SourceConfiguration{}, fmt.Errorf("inspect Go workspace: %w", err)
 	}
 	values := strings.Split(strings.TrimRight(string(output), "\r\n"), "\n")
 	if len(values) != 2 {
-		return Settings{}, fmt.Errorf("inspect Go module settings: go env returned %d values", len(values))
+		return SourceConfiguration{}, fmt.Errorf("inspect Go module settings: go env returned %d values", len(values))
 	}
 	workspacePath := strings.TrimSuffix(values[0], "\r")
 	goModPath := strings.TrimSuffix(values[1], "\r")
 	if workspacePath == "" || workspacePath == "off" {
 		settings, discoverErr := discoverModuleMode(goModPath)
 		if discoverErr != nil {
-			return Settings{}, discoverErr
+			return SourceConfiguration{}, discoverErr
 		}
 		return settings.withAlternateModFile(alternateModPath)
 	}
 	if alternateModPath != "" {
-		return Settings{}, fmt.Errorf("alternate modfile %q cannot be used with active go.work", alternateModPath)
+		return SourceConfiguration{}, fmt.Errorf("alternate modfile %q cannot be used with active go.work", alternateModPath)
 	}
 	absolutePath, err := filepath.Abs(workspacePath)
 	if err != nil {
-		return Settings{}, fmt.Errorf("resolve active go.work %q: %w", workspacePath, err)
+		return SourceConfiguration{}, fmt.Errorf("resolve active go.work %q: %w", workspacePath, err)
 	}
 	absolutePath, err = filepath.EvalSymlinks(absolutePath)
 	if err != nil {
-		return Settings{}, fmt.Errorf("resolve active go.work links %q: %w", workspacePath, err)
+		return SourceConfiguration{}, fmt.Errorf("resolve active go.work links %q: %w", workspacePath, err)
 	}
 	contents, err := os.ReadFile(absolutePath)
 	if err != nil {
-		return Settings{}, fmt.Errorf("inspect active go.work %q: %w", absolutePath, err)
+		return SourceConfiguration{}, fmt.Errorf("inspect active go.work %q: %w", absolutePath, err)
 	}
 	parsed, err := modfile.ParseWork(absolutePath, contents, nil)
 	if err != nil {
-		return Settings{}, fmt.Errorf("inspect active go.work %q: %w", absolutePath, err)
+		return SourceConfiguration{}, fmt.Errorf("inspect active go.work %q: %w", absolutePath, err)
 	}
 	if len(parsed.Use) != 1 {
-		return Settings{}, fmt.Errorf("active go.work %q has %d main modules; exactly one is required", absolutePath, len(parsed.Use))
+		return SourceConfiguration{}, fmt.Errorf("active go.work %q has %d main modules; exactly one is required", absolutePath, len(parsed.Use))
+	}
+	goWorkSum, goWorkSumErr := os.ReadFile(absolutePath + ".sum")
+	goWorkSumSet := goWorkSumErr == nil
+	if goWorkSumErr != nil && !os.IsNotExist(goWorkSumErr) {
+		return SourceConfiguration{}, fmt.Errorf("snapshot active workspace sum %q: %w", absolutePath+".sum", goWorkSumErr)
 	}
 	mainModuleDir, err := canonicalDirectory(filepath.Join(filepath.Dir(absolutePath), filepath.FromSlash(parsed.Use[0].Path)))
 	if err != nil {
-		return Settings{}, fmt.Errorf("resolve active go.work module: %w", err)
+		return SourceConfiguration{}, fmt.Errorf("resolve active go.work module: %w", err)
 	}
 	goModPath = filepath.Join(mainModuleDir, "go.mod")
 	goMod, err := os.ReadFile(goModPath)
 	if err != nil {
-		return Settings{}, fmt.Errorf("snapshot main module file %q: %w", goModPath, err)
+		return SourceConfiguration{}, fmt.Errorf("snapshot main module file %q: %w", goModPath, err)
 	}
-	return Settings{
+	return SourceConfiguration{
 		goWorkPath:    absolutePath,
 		goWork:        append([]byte(nil), contents...),
+		goWorkSum:     append([]byte(nil), goWorkSum...),
+		goWorkSumSet:  goWorkSumSet,
 		goModPath:     goModPath,
 		goMod:         append([]byte(nil), goMod...),
 		mainModuleDir: mainModuleDir,
@@ -172,19 +181,19 @@ func modFileFlagValue(words []string, separateValue bool) (string, error) {
 	return selected, nil
 }
 
-func (settings Settings) withAlternateModFile(path string) (Settings, error) {
+func (settings SourceConfiguration) withAlternateModFile(path string) (SourceConfiguration, error) {
 	if path == "" {
 		return settings, nil
 	}
 	contents, err := os.ReadFile(path)
 	if err != nil {
-		return Settings{}, fmt.Errorf("snapshot alternate modfile %q: %w", path, err)
+		return SourceConfiguration{}, fmt.Errorf("snapshot alternate modfile %q: %w", path, err)
 	}
 	sumPath := strings.TrimSuffix(path, ".mod") + ".sum"
 	sum, sumErr := os.ReadFile(sumPath)
 	sumSet := sumErr == nil
 	if sumErr != nil && !os.IsNotExist(sumErr) {
-		return Settings{}, fmt.Errorf("snapshot alternate sum file %q: %w", sumPath, sumErr)
+		return SourceConfiguration{}, fmt.Errorf("snapshot alternate sum file %q: %w", sumPath, sumErr)
 	}
 	settings.alternateModPath = path
 	settings.alternateMod = append([]byte(nil), contents...)
@@ -194,108 +203,69 @@ func (settings Settings) withAlternateModFile(path string) (Settings, error) {
 	return settings, nil
 }
 
-func discoverModuleMode(goModPath string) (Settings, error) {
+func discoverModuleMode(goModPath string) (SourceConfiguration, error) {
 	if goModPath == "" || goModPath == os.DevNull {
-		return Settings{}, fmt.Errorf("no active go.mod; gomcdc requires a main Go module")
+		return SourceConfiguration{}, fmt.Errorf("no active go.mod; gomcdc requires a main Go module")
 	}
 	return SnapshotModule(goModPath)
 }
 
-// SnapshotModule freezes a standalone main module with GOWORK=off. It is used
-// by lower-level workspace callers that already own module discovery.
-func SnapshotModule(goModPath string) (Settings, error) {
+// SnapshotModule captures a standalone main module with GOWORK=off. It is
+// used by lower-level workspace callers that already own module discovery.
+func SnapshotModule(goModPath string) (SourceConfiguration, error) {
 	absolutePath, err := filepath.Abs(goModPath)
 	if err != nil {
-		return Settings{}, fmt.Errorf("resolve active go.mod %q: %w", goModPath, err)
+		return SourceConfiguration{}, fmt.Errorf("resolve active go.mod %q: %w", goModPath, err)
 	}
 	mainModuleDir, err := canonicalDirectory(filepath.Dir(absolutePath))
 	if err != nil {
-		return Settings{}, fmt.Errorf("resolve active module directory %q: %w", filepath.Dir(absolutePath), err)
+		return SourceConfiguration{}, fmt.Errorf("resolve active module directory %q: %w", filepath.Dir(absolutePath), err)
 	}
 	absolutePath = filepath.Join(mainModuleDir, filepath.Base(absolutePath))
 	contents, err := os.ReadFile(absolutePath)
 	if err != nil {
-		return Settings{}, fmt.Errorf("snapshot active go.mod %q: %w", absolutePath, err)
+		return SourceConfiguration{}, fmt.Errorf("snapshot active go.mod %q: %w", absolutePath, err)
 	}
-	return Settings{
+	return SourceConfiguration{
 		goModPath:     absolutePath,
 		goMod:         append([]byte(nil), contents...),
 		mainModuleDir: mainModuleDir,
 	}, nil
 }
 
-// Active reports whether the request uses a snapshotted go.work.
-func (settings Settings) Active() bool { return settings.goWorkPath != "" }
+// Active reports whether the source configuration uses go.work.
+func (settings SourceConfiguration) Active() bool { return settings.goWorkPath != "" }
 
-// Valid reports whether the settings own a frozen go.mod.
-func (settings Settings) Valid() bool { return settings.goModPath != "" }
+// Valid reports whether the source configuration contains a main go.mod.
+func (settings SourceConfiguration) Valid() bool { return settings.goModPath != "" }
 
-// GoWorkPath returns the source go.work path for diagnostics and tests. Test
-// execution must use RelocatedGoWork instead of this source path.
-func (settings Settings) GoWorkPath() string { return settings.goWorkPath }
+// GoWorkPath returns the source go.work path for diagnostics and workspace
+// construction. Go commands must use the relocated request-owned copy.
+func (settings SourceConfiguration) GoWorkPath() string { return settings.goWorkPath }
 
-// HasAlternateModFile reports whether -modfile selected a frozen alternate
+// MainModuleDir returns the source main-module directory owned by the
+// configuration. Go commands must use the request workspace's ModuleDir.
+func (settings SourceConfiguration) MainModuleDir() string { return settings.mainModuleDir }
+
+// HasAlternateModFile reports whether -modfile selected an alternate source
 // module file for this request.
-func (settings Settings) HasAlternateModFile() bool { return settings.alternateModPath != "" }
+func (settings SourceConfiguration) HasAlternateModFile() bool {
+	return settings.alternateModPath != ""
+}
 
-// AlternateModFilePath returns the source alternate modfile path selected for
-// package loading. Test execution must use the relocated copy.
-func (settings Settings) AlternateModFilePath() string { return settings.alternateModPath }
+// AlternateModFilePath returns the selected source alternate modfile path for
+// diagnostics. Package loading and test execution must use the relocated copy.
+func (settings SourceConfiguration) AlternateModFilePath() string { return settings.alternateModPath }
 
-// AssertMainModule proves that package loading selected the module owned by the
-// frozen settings.
-func (settings Settings) AssertMainModule(moduleDir string) error {
+// AssertMainModule proves that a directory is the source module owned by this
+// configuration.
+func (settings SourceConfiguration) AssertMainModule(moduleDir string) error {
 	canonical, err := canonicalDirectory(moduleDir)
 	if err != nil {
 		return fmt.Errorf("resolve loaded main module: %w", err)
 	}
 	if canonical != settings.mainModuleDir {
-		return fmt.Errorf("frozen module settings own main module %q, not loaded main module %q", settings.mainModuleDir, canonical)
-	}
-	return nil
-}
-
-// AssertSourceUnchanged closes the analysis/configuration race: package
-// loading is accepted only if the go.mod and optional go.work still equal the
-// bytes captured immediately before loading.
-func (settings Settings) AssertSourceUnchanged() error {
-	files := []struct {
-		path string
-		want []byte
-	}{{path: settings.goModPath, want: settings.goMod}}
-	if settings.Active() {
-		files = append(files, struct {
-			path string
-			want []byte
-		}{path: settings.goWorkPath, want: settings.goWork})
-	}
-	if settings.HasAlternateModFile() {
-		files = append(files, struct {
-			path string
-			want []byte
-		}{path: settings.alternateModPath, want: settings.alternateMod})
-	}
-	for _, file := range files {
-		contents, err := os.ReadFile(file.path)
-		if err != nil {
-			return fmt.Errorf("verify frozen module settings %q: %w", file.path, err)
-		}
-		if !bytes.Equal(contents, file.want) {
-			return fmt.Errorf("module settings %q changed during package loading", file.path)
-		}
-	}
-	if settings.HasAlternateModFile() {
-		contents, err := os.ReadFile(settings.alternateSumPath)
-		switch {
-		case err == nil && !settings.alternateSumSet:
-			return fmt.Errorf("module settings %q appeared during package loading", settings.alternateSumPath)
-		case err == nil && !bytes.Equal(contents, settings.alternateSum):
-			return fmt.Errorf("module settings %q changed during package loading", settings.alternateSumPath)
-		case os.IsNotExist(err) && settings.alternateSumSet:
-			return fmt.Errorf("module settings %q disappeared during package loading", settings.alternateSumPath)
-		case err != nil && !os.IsNotExist(err):
-			return fmt.Errorf("verify frozen module settings %q: %w", settings.alternateSumPath, err)
-		}
+		return fmt.Errorf("source module configuration owns main module %q, not %q", settings.mainModuleDir, canonical)
 	}
 	return nil
 }
@@ -303,14 +273,14 @@ func (settings Settings) AssertSourceUnchanged() error {
 // RelocatedGoMod derives the copied module file exclusively from the frozen
 // source bytes and relocates every local replacement away from the original
 // module tree.
-func (settings Settings) RelocatedGoMod(ctx context.Context, copiedModuleDir string) ([]byte, error) {
+func (settings SourceConfiguration) RelocatedGoMod(ctx context.Context, copiedModuleDir string) ([]byte, error) {
 	return settings.relocatedModuleFile(ctx, settings.goModPath, settings.goMod, copiedModuleDir)
 }
 
 // RelocatedAlternateMod derives the selected alternate modfile from its frozen
 // bytes and returns the matching frozen sum bytes. Local replacements are
 // relocated against the copied main module just as they are for go.mod.
-func (settings Settings) RelocatedAlternateMod(ctx context.Context, copiedModuleDir string) (mod, sum []byte, sumSet bool, err error) {
+func (settings SourceConfiguration) RelocatedAlternateMod(ctx context.Context, copiedModuleDir string) (mod, sum []byte, sumSet bool, err error) {
 	if !settings.HasAlternateModFile() {
 		return nil, nil, false, nil
 	}
@@ -321,7 +291,7 @@ func (settings Settings) RelocatedAlternateMod(ctx context.Context, copiedModule
 	return mod, append([]byte(nil), settings.alternateSum...), settings.alternateSumSet, nil
 }
 
-func (settings Settings) relocatedModuleFile(ctx context.Context, sourcePath string, source []byte, copiedModuleDir string) ([]byte, error) {
+func (settings SourceConfiguration) relocatedModuleFile(ctx context.Context, sourcePath string, source []byte, copiedModuleDir string) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -362,11 +332,11 @@ func overrideEnvironment(environment []string, key, value string) []string {
 	return append(result, prefix+value)
 }
 
-// RelocatedGoWork derives a go.work for a copied module from the immutable
-// source snapshot. It preserves Go, toolchain, godebug, and replace settings,
-// relocates the sole use directive to copiedModuleDir, and resolves local
-// replacements without leaving references back into the original module.
-func (settings Settings) RelocatedGoWork(ctx context.Context, sourceModuleDir, copiedWorkspaceDir, copiedModuleDir string) ([]byte, error) {
+// RelocatedGoWork derives a request-owned go.work from the source snapshot. It
+// preserves Go, toolchain, godebug, and replace settings, and relocates the
+// sole use directive to copiedModuleDir. The module may be outside the copied
+// workspace directory when the source go.work itself uses such a layout.
+func (settings SourceConfiguration) RelocatedGoWork(ctx context.Context, sourceModuleDir, copiedWorkspaceDir, copiedModuleDir string) ([]byte, error) {
 	if !settings.Active() {
 		return nil, nil
 	}
@@ -375,9 +345,6 @@ func (settings Settings) RelocatedGoWork(ctx context.Context, sourceModuleDir, c
 	}
 	if err := settings.AssertMainModule(sourceModuleDir); err != nil {
 		return nil, err
-	}
-	if !containsPath(copiedWorkspaceDir, copiedModuleDir) {
-		return nil, fmt.Errorf("copied module %q is outside copied workspace %q", copiedModuleDir, copiedWorkspaceDir)
 	}
 	usePath, err := filepath.Rel(copiedWorkspaceDir, copiedModuleDir)
 	if err != nil {
@@ -415,6 +382,13 @@ func (settings Settings) RelocatedGoWork(ctx context.Context, sourceModuleDir, c
 	}
 	parsed.Cleanup()
 	return modfile.Format(parsed.Syntax), nil
+}
+
+// GoWorkSum returns the captured source go.work.sum bytes, when present.
+// Legitimate updates are allowed only after these bytes are copied into the
+// request workspace.
+func (settings SourceConfiguration) GoWorkSum() ([]byte, bool) {
+	return append([]byte(nil), settings.goWorkSum...), settings.goWorkSumSet
 }
 
 func relocateLocalPath(baseDir, sourceModuleDir, copiedModuleDir, path string) (string, error) {

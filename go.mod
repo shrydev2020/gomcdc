@@ -1,4 +1,4 @@
-module github.com/shrydev2020/gomcdc
+module github.com/shrydev2020/gomcdc/v2
 
 go 1.26.0
 

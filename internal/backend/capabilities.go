@@ -7,7 +7,7 @@ import (
 	"math"
 	"sort"
 
-	cover "github.com/shrydev2020/gomcdc/internal/coverage"
+	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
 )
 
 // Capability identifies one semantically distinct instrumentation feature.

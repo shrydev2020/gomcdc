@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/shrydev2020/gomcdc/internal/modulecontext"
+	"github.com/shrydev2020/gomcdc/v2/internal/modulecontext"
 )
 
 func BenchmarkCreateModuleCopy(b *testing.B) {
@@ -32,7 +32,7 @@ func BenchmarkCreateModuleCopy(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for index := 0; index < b.N; index++ {
-		workspace, err := Create(b.Context(), Options{SourceDir: source, ModuleSettings: settings, TempParent: tempParent})
+		workspace, err := Create(b.Context(), Options{SourceConfiguration: settings, TempParent: tempParent})
 		if err != nil {
 			b.Fatal(err)
 		}

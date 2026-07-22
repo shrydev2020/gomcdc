@@ -12,21 +12,23 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/shrydev2020/gomcdc/internal/modulecontext"
+	"github.com/shrydev2020/gomcdc/v2/internal/modulecontext"
 )
 
 const tempPrefix = "gomcdc-"
 
 // Options controls creation and lifetime of a Workspace.
 type Options struct {
-	// SourceDir is the module directory to copy. It must already exist.
-	SourceDir string
-	// ModuleSettings is the immutable module context captured before package
-	// loading. Valid standalone settings use GOWORK=off in the copy.
-	ModuleSettings modulecontext.Settings
+	// SourceConfiguration supplies the caller-owned module files used to seed
+	// the request workspace. Go commands never receive its source paths.
+	SourceConfiguration modulecontext.SourceConfiguration
+	// WorkingDir is the caller's invocation directory. The workspace preserves
+	// its location relative to the source module and active go.work.
+	// An empty value defaults to the source main-module directory.
+	WorkingDir string
 	// TempParent is the directory under which the workspace is created. An
-	// empty value uses os.TempDir. It must not be SourceDir or one of its
-	// descendants, otherwise the copy could recursively include itself.
+	// empty value uses os.TempDir. It must not be the source module directory
+	// or one of its descendants, otherwise the copy could include itself.
 	TempParent string
 	// Keep causes Cleanup to retain the workspace for inspection.
 	Keep bool
@@ -36,12 +38,16 @@ type Options struct {
 // directory. Its paths remain available after cleanup so they can be reported
 // to the user.
 type Workspace struct {
-	SourceDir   string
-	RootDir     string
-	ModuleDir   string
-	EventDir    string
-	GoWorkPath  string
-	ModFilePath string
+	SourceModuleDir  string
+	SourceWorkingDir string
+	RootDir          string
+	MappedRootDir    string
+	WorkspaceDir     string
+	ModuleDir        string
+	WorkingDir       string
+	EventDir         string
+	GoWorkPath       string
+	ModFilePath      string
 
 	mu      sync.Mutex
 	keep    bool
@@ -54,15 +60,34 @@ func Create(ctx context.Context, options Options) (_ *Workspace, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	sourceDir, err := existingDirectory(options.SourceDir, "source directory")
+	if !options.SourceConfiguration.Valid() {
+		return nil, errors.New("source module configuration is required")
+	}
+	sourceDir, err := existingDirectory(options.SourceConfiguration.MainModuleDir(), "source module directory")
 	if err != nil {
 		return nil, err
 	}
-	if !options.ModuleSettings.Valid() {
-		return nil, errors.New("frozen module settings are required")
-	}
-	if err := options.ModuleSettings.AssertMainModule(sourceDir); err != nil {
+	if err := options.SourceConfiguration.AssertMainModule(sourceDir); err != nil {
 		return nil, err
+	}
+	sourceWorkingDir := options.WorkingDir
+	if sourceWorkingDir == "" {
+		sourceWorkingDir = sourceDir
+	}
+	sourceWorkingDir, err = existingDirectory(sourceWorkingDir, "source working directory")
+	if err != nil {
+		return nil, err
+	}
+	sourceWorkspaceDir := sourceDir
+	if options.SourceConfiguration.Active() {
+		sourceWorkspaceDir, err = existingDirectory(filepath.Dir(options.SourceConfiguration.GoWorkPath()), "source workspace directory")
+		if err != nil {
+			return nil, err
+		}
+	}
+	topologyRoot, err := commonDirectory(sourceDir, sourceWorkspaceDir, sourceWorkingDir)
+	if err != nil {
+		return nil, fmt.Errorf("map source topology: %w", err)
 	}
 
 	tempParent := options.TempParent
@@ -88,8 +113,20 @@ func Create(ctx context.Context, options Options) (_ *Workspace, err error) {
 		}
 	}()
 
-	moduleDir := filepath.Join(rootDir, "module")
-	if err := os.Mkdir(moduleDir, 0o700); err != nil {
+	topologyDir := filepath.Join(rootDir, "source")
+	moduleDir, err := mappedPath(topologyRoot, topologyDir, sourceDir)
+	if err != nil {
+		return nil, fmt.Errorf("map source module: %w", err)
+	}
+	workspaceDir, err := mappedPath(topologyRoot, topologyDir, sourceWorkspaceDir)
+	if err != nil {
+		return nil, fmt.Errorf("map source workspace: %w", err)
+	}
+	workingDir, err := mappedPath(topologyRoot, topologyDir, sourceWorkingDir)
+	if err != nil {
+		return nil, fmt.Errorf("map source working directory: %w", err)
+	}
+	if err := os.MkdirAll(moduleDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create workspace module directory: %w", err)
 	}
 	if err := copyTree(ctx, sourceDir, moduleDir); err != nil {
@@ -98,7 +135,7 @@ func Create(ctx context.Context, options Options) (_ *Workspace, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	goMod, err := options.ModuleSettings.RelocatedGoMod(ctx, moduleDir)
+	goMod, err := options.SourceConfiguration.RelocatedGoMod(ctx, moduleDir)
 	if err != nil {
 		return nil, fmt.Errorf("relocate copied go.mod: %w", err)
 	}
@@ -111,12 +148,12 @@ func Create(ctx context.Context, options Options) (_ *Workspace, err error) {
 		return nil, fmt.Errorf("write copied go.mod: %w", err)
 	}
 	modFilePath := ""
-	if options.ModuleSettings.HasAlternateModFile() {
+	if options.SourceConfiguration.HasAlternateModFile() {
 		configDir := filepath.Join(rootDir, "module-config")
 		if err := os.Mkdir(configDir, 0o700); err != nil {
 			return nil, fmt.Errorf("create alternate module configuration directory: %w", err)
 		}
-		modContents, sumContents, sumSet, relocateErr := options.ModuleSettings.RelocatedAlternateMod(ctx, moduleDir)
+		modContents, sumContents, sumSet, relocateErr := options.SourceConfiguration.RelocatedAlternateMod(ctx, moduleDir)
 		if relocateErr != nil {
 			return nil, fmt.Errorf("relocate alternate modfile: %w", relocateErr)
 		}
@@ -132,15 +169,26 @@ func Create(ctx context.Context, options Options) (_ *Workspace, err error) {
 		}
 	}
 	goWorkPath := ""
-	if options.ModuleSettings.Active() {
-		goWorkPath = filepath.Join(rootDir, "go.work")
-		contents, relocateErr := options.ModuleSettings.RelocatedGoWork(ctx, sourceDir, rootDir, moduleDir)
+	if options.SourceConfiguration.Active() {
+		if err := os.MkdirAll(workspaceDir, 0o700); err != nil {
+			return nil, fmt.Errorf("create copied Go workspace directory: %w", err)
+		}
+		goWorkPath = filepath.Join(workspaceDir, "go.work")
+		contents, relocateErr := options.SourceConfiguration.RelocatedGoWork(ctx, sourceDir, workspaceDir, moduleDir)
 		if relocateErr != nil {
 			return nil, fmt.Errorf("relocate copied Go workspace: %w", relocateErr)
 		}
 		if err := os.WriteFile(goWorkPath, contents, 0o600); err != nil {
 			return nil, fmt.Errorf("write copied Go workspace: %w", err)
 		}
+		if sum, present := options.SourceConfiguration.GoWorkSum(); present {
+			if err := os.WriteFile(goWorkPath+".sum", sum, 0o600); err != nil {
+				return nil, fmt.Errorf("write copied Go workspace sum: %w", err)
+			}
+		}
+	}
+	if err := os.MkdirAll(workingDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create mapped working directory: %w", err)
 	}
 
 	eventDir := filepath.Join(rootDir, "events")
@@ -150,14 +198,50 @@ func Create(ctx context.Context, options Options) (_ *Workspace, err error) {
 
 	removeOnError = false
 	return &Workspace{
-		SourceDir:   sourceDir,
-		RootDir:     rootDir,
-		ModuleDir:   moduleDir,
-		EventDir:    eventDir,
-		GoWorkPath:  goWorkPath,
-		ModFilePath: modFilePath,
-		keep:        options.Keep,
+		SourceModuleDir:  sourceDir,
+		SourceWorkingDir: sourceWorkingDir,
+		RootDir:          rootDir,
+		MappedRootDir:    topologyDir,
+		WorkspaceDir:     workspaceDir,
+		ModuleDir:        moduleDir,
+		WorkingDir:       workingDir,
+		EventDir:         eventDir,
+		GoWorkPath:       goWorkPath,
+		ModFilePath:      modFilePath,
+		keep:             options.Keep,
 	}, nil
+}
+
+func commonDirectory(paths ...string) (string, error) {
+	if len(paths) == 0 {
+		return "", errors.New("at least one source path is required")
+	}
+	common := filepath.Clean(paths[0])
+	for _, path := range paths[1:] {
+		path = filepath.Clean(path)
+		for !containsPath(common, path) {
+			parent := filepath.Dir(common)
+			if parent == common {
+				return "", fmt.Errorf("paths %q and %q do not share a filesystem root", paths[0], path)
+			}
+			common = parent
+		}
+	}
+	return common, nil
+}
+
+func mappedPath(sourceRoot, copiedRoot, sourcePath string) (string, error) {
+	relative, err := filepath.Rel(sourceRoot, sourcePath)
+	if err != nil {
+		return "", err
+	}
+	if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("source path %q is outside topology root %q", sourcePath, sourceRoot)
+	}
+	if relative == "." {
+		return copiedRoot, nil
+	}
+	return filepath.Join(copiedRoot, relative), nil
 }
 
 // Keep marks the workspace for retention. It is safe to call before a

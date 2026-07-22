@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	cover "github.com/shrydev2020/gomcdc/internal/coverage"
+	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
 )
 
 func TestSourceIntervalsSplitOverlappingRanges(t *testing.T) {

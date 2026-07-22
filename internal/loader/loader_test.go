@@ -59,6 +59,20 @@ func TestLoadHonorsBuildTags(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsMainModuleOutsidePreparedRequestRoot(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeLoaderFile(t, filepath.Join(root, "go.mod"), "module example.test/fixture\n\ngo 1.26\n")
+	writeLoaderFile(t, filepath.Join(root, "fixture.go"), "package fixture\n")
+
+	_, err := Load(t.Context(), Options{
+		Dir: root, Patterns: []string{"."}, ExpectedModuleRoot: t.TempDir(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "loaded main module") {
+		t.Fatalf("Load() error = %v, want request-root rejection", err)
+	}
+}
+
 func TestLoadAcceptsActiveSingleModuleWorkspace(t *testing.T) {
 	// The fixture must test filesystem workspace discovery, not an inherited
 	// caller policy such as GOWORK=off.
@@ -72,8 +86,8 @@ func TestLoadAcceptsActiveSingleModuleWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v, want single-module go.work support", err)
 	}
-	if result.ModuleSettings.GoWorkPath() != canonicalLoaderPath(t, filepath.Join(root, "go.work")) {
-		t.Fatalf("GoWorkPath = %q, want %q", result.ModuleSettings.GoWorkPath(), canonicalLoaderPath(t, filepath.Join(root, "go.work")))
+	if result.ModuleRoot != canonicalLoaderPath(t, module) {
+		t.Fatalf("ModuleRoot = %q, want %q", result.ModuleRoot, canonicalLoaderPath(t, module))
 	}
 }
 
@@ -89,12 +103,12 @@ func TestLoadAcceptsSingleModuleWorkspaceFromWorkspaceRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v, want workspace-root support", err)
 	}
-	if result.WorkingDirBase != WorkingDirectoryWorkspace || result.RelativeWorkDir != "." {
-		t.Fatalf("working directory mapping = base %d relative %q, want workspace/.", result.WorkingDirBase, result.RelativeWorkDir)
+	if result.ModuleRoot != canonicalLoaderPath(t, module) {
+		t.Fatalf("ModuleRoot = %q, want %q", result.ModuleRoot, canonicalLoaderPath(t, module))
 	}
 }
 
-func TestLoadRejectsUncopiedWorkspaceSubdirectory(t *testing.T) {
+func TestLoadAcceptsWorkspaceSubdirectory(t *testing.T) {
 	t.Setenv("GOWORK", "")
 	root := t.TempDir()
 	module := filepath.Join(root, "module")
@@ -106,26 +120,12 @@ func TestLoadRejectsUncopiedWorkspaceSubdirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := Load(t.Context(), Options{Dir: invocationDir, Patterns: []string{"../module"}})
-	if err == nil || !strings.Contains(err.Error(), "is not the single-module workspace root") {
-		t.Fatalf("Load() error = %v, want unmapped workspace-subdirectory rejection", err)
+	result, err := Load(t.Context(), Options{Dir: invocationDir, Patterns: []string{"../module"}})
+	if err != nil {
+		t.Fatalf("Load() error = %v, want workspace-subdirectory support", err)
 	}
-}
-
-func TestLoadRejectsActiveMultiModuleWorkspace(t *testing.T) {
-	t.Setenv("GOWORK", "")
-	root := t.TempDir()
-	first := filepath.Join(root, "first")
-	second := filepath.Join(root, "second")
-	writeLoaderFile(t, filepath.Join(first, "go.mod"), "module example.test/first\n\ngo 1.26\n")
-	writeLoaderFile(t, filepath.Join(first, "value.go"), "package first\n")
-	writeLoaderFile(t, filepath.Join(second, "go.mod"), "module example.test/second\n\ngo 1.26\n")
-	writeLoaderFile(t, filepath.Join(second, "value.go"), "package second\n")
-	writeLoaderFile(t, filepath.Join(root, "go.work"), "go 1.26\n\nuse (\n\t./first\n\t./second\n)\n")
-
-	_, err := Load(t.Context(), Options{Dir: first, Patterns: []string{"."}})
-	if err == nil || !strings.Contains(err.Error(), "has 2 main modules") {
-		t.Fatalf("Load() error = %v, want explicit multi-module rejection", err)
+	if result.ModuleRoot != canonicalLoaderPath(t, module) {
+		t.Fatalf("ModuleRoot = %q, want %q", result.ModuleRoot, canonicalLoaderPath(t, module))
 	}
 }
 

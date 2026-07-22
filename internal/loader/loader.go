@@ -13,8 +13,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/shrydev2020/gomcdc/internal/goflags"
-	"github.com/shrydev2020/gomcdc/internal/modulecontext"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -26,6 +24,11 @@ type Options struct {
 	// GOFLAGS, when non-nil, overrides the inherited value for package loading.
 	// The CLI uses this to remove measurement-owned flags while preserving tags.
 	GOFLAGS *string
+	// GOWORK, when non-nil, pins package loading to the request-owned workspace.
+	GOWORK *string
+	// ExpectedModuleRoot, when non-empty, rejects a package result outside the
+	// request-owned main module prepared by the caller.
+	ExpectedModuleRoot string
 }
 
 type File struct {
@@ -34,23 +37,9 @@ type File struct {
 	PackageName string
 }
 
-// WorkingDirectoryBase identifies which frozen source root owns
-// RelativeWorkDir. Module is the ordinary case; Workspace is used when a
-// single-module go.work command starts above the module directory.
-type WorkingDirectoryBase uint8
-
-const (
-	WorkingDirectoryModule WorkingDirectoryBase = iota
-	WorkingDirectoryWorkspace
-)
-
 type Result struct {
 	ModulePath       string
 	ModuleRoot       string
-	WorkingDir       string
-	RelativeWorkDir  string
-	WorkingDirBase   WorkingDirectoryBase
-	ModuleSettings   modulecontext.Settings
 	Files            []File
 	PackageImportSet []string
 	// CoverPackageImportSet contains production packages whose initial load had
@@ -71,32 +60,6 @@ func Load(ctx context.Context, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("resolve working directory: %w", err)
 	}
-	goFlags := os.Getenv("GOFLAGS")
-	if opts.GOFLAGS != nil {
-		goFlags = *opts.GOFLAGS
-	}
-	moduleSettings, err := modulecontext.Discover(ctx, modulecontext.DiscoverOptions{
-		Dir:        dir,
-		BuildFlags: opts.BuildFlags,
-		GOFLAGS:    goFlags,
-	})
-	if err != nil {
-		return Result{}, err
-	}
-	packageGOFLAGS := goFlags
-	packageBuildFlags := append([]string(nil), opts.BuildFlags...)
-	if moduleSettings.HasAlternateModFile() {
-		// x/tools/go/packages performs a preliminary `go env` invocation.
-		// cmd/go rejects -modfile for that verb, so normalize the effective
-		// selection into the list/build flags and keep it out of that env call.
-		packageGOFLAGS, err = goflags.Without(goFlags, map[string]bool{"modfile": true})
-		if err != nil {
-			return Result{}, fmt.Errorf("parse GOFLAGS for package loading: %w", err)
-		}
-		packageBuildFlags = withoutBuildFlag(packageBuildFlags, "modfile")
-		packageBuildFlags = append(packageBuildFlags, "-modfile="+moduleSettings.AlternateModFilePath())
-	}
-
 	mode := packages.NeedName |
 		packages.NeedFiles |
 		packages.NeedCompiledGoFiles |
@@ -108,18 +71,22 @@ func Load(ctx context.Context, opts Options) (Result, error) {
 		Context:    ctx,
 		Mode:       mode,
 		Dir:        dir,
-		BuildFlags: packageBuildFlags,
+		BuildFlags: append([]string(nil), opts.BuildFlags...),
 		Tests:      false,
 	}
-	if opts.GOFLAGS != nil || moduleSettings.HasAlternateModFile() {
-		cfg.Env = overrideEnvironment("GOFLAGS", packageGOFLAGS)
+	if opts.GOFLAGS != nil || opts.GOWORK != nil {
+		overrides := make(map[string]string, 2)
+		if opts.GOFLAGS != nil {
+			overrides["GOFLAGS"] = *opts.GOFLAGS
+		}
+		if opts.GOWORK != nil {
+			overrides["GOWORK"] = *opts.GOWORK
+		}
+		cfg.Env = overrideEnvironment(overrides)
 	}
 	pkgs, err := packages.Load(cfg, opts.Patterns...)
 	if err != nil {
 		return Result{}, fmt.Errorf("load packages: %w", err)
-	}
-	if err := moduleSettings.AssertSourceUnchanged(); err != nil {
-		return Result{}, err
 	}
 	if len(pkgs) == 0 {
 		return Result{}, errors.New("load packages: no packages matched")
@@ -128,12 +95,14 @@ func Load(ctx context.Context, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	if err := moduleSettings.AssertMainModule(moduleRoot); err != nil {
-		return Result{}, err
-	}
-	workingDir, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		return Result{}, fmt.Errorf("resolve working directory links: %w", err)
+	if opts.ExpectedModuleRoot != "" {
+		expected, expectedErr := canonicalDirectory(opts.ExpectedModuleRoot)
+		if expectedErr != nil {
+			return Result{}, fmt.Errorf("resolve expected main module: %w", expectedErr)
+		}
+		if moduleRoot != expected {
+			return Result{}, fmt.Errorf("loaded main module %q, want request workspace module %q", moduleRoot, expected)
+		}
 	}
 	files := make(map[string]File)
 	imports := make(map[string]struct{})
@@ -155,9 +124,6 @@ func Load(ctx context.Context, opts Options) (Result, error) {
 		if loadErr != nil && len(testPkgs) == 0 {
 			return Result{}, fmt.Errorf("load test package metadata: %w", loadErr)
 		}
-		if err := moduleSettings.AssertSourceUnchanged(); err != nil {
-			return Result{}, err
-		}
 		// Do not promote test-package diagnostics to an instrumentation error.
 		// The actual go test command owns compile/test failures and can still
 		// leave useful events from other packages behind.
@@ -167,26 +133,9 @@ func Load(ctx context.Context, opts Options) (Result, error) {
 	if len(files) == 0 {
 		return Result{}, errors.New("load packages: matched packages contain no instrumentable Go files")
 	}
-	workBase := WorkingDirectoryModule
-	relWork, err := relativeWithin(moduleRoot, workingDir)
-	if err != nil && moduleSettings.Active() {
-		workspaceRoot := filepath.Dir(moduleSettings.GoWorkPath())
-		if workingDir == workspaceRoot {
-			relWork, err = ".", nil
-			workBase = WorkingDirectoryWorkspace
-		}
-	}
-	if err != nil {
-		return Result{}, fmt.Errorf("working directory %q is outside the active module and is not the single-module workspace root", workingDir)
-	}
-
 	result := Result{
-		ModulePath:      modulePath,
-		ModuleRoot:      moduleRoot,
-		WorkingDir:      workingDir,
-		RelativeWorkDir: relWork,
-		WorkingDirBase:  workBase,
-		ModuleSettings:  moduleSettings,
+		ModulePath: modulePath,
+		ModuleRoot: moduleRoot,
 	}
 	for _, file := range files {
 		result.Files = append(result.Files, file)
@@ -203,38 +152,26 @@ func Load(ctx context.Context, opts Options) (Result, error) {
 	return result, nil
 }
 
-func withoutBuildFlag(flags []string, name string) []string {
-	result := make([]string, 0, len(flags))
-	for index := 0; index < len(flags); index++ {
-		flag := flags[index]
-		if goflags.Name(flag) == name {
-			if !strings.Contains(flag, "=") && index+1 < len(flags) {
-				index++
-			}
-			continue
-		}
-		result = append(result, flag)
-	}
-	return result
-}
-
-func relativeWithin(root, candidate string) (string, error) {
-	relative, err := filepath.Rel(root, candidate)
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("%q is outside %q", candidate, root)
-	}
-	return relative, nil
-}
-
-func overrideEnvironment(key, value string) []string {
-	prefix := key + "="
+func overrideEnvironment(overrides map[string]string) []string {
 	environment := make([]string, 0)
 	for _, entry := range os.Environ() {
-		if !strings.HasPrefix(entry, prefix) {
+		name, _, _ := strings.Cut(entry, "=")
+		if _, replaced := overrides[name]; !replaced {
 			environment = append(environment, entry)
 		}
 	}
-	return append(environment, prefix+value)
+	for name, value := range overrides {
+		environment = append(environment, name+"="+value)
+	}
+	return environment
+}
+
+func canonicalDirectory(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(absolute)
 }
 
 func commonMainModule(pkgs []*packages.Package) (modulePath, moduleRoot string, err error) {

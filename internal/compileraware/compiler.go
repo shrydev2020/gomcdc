@@ -18,7 +18,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/shrydev2020/gomcdc/internal/processgroup"
+	"github.com/shrydev2020/gomcdc/v2/internal/processgroup"
 )
 
 const compilerEnvironment = "GOMCDC_COMPILER"
