@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/shrydev2020/gomcdc/internal/modulecontext"
 )
 
 func BenchmarkCreateModuleCopy(b *testing.B) {
@@ -24,10 +26,14 @@ func BenchmarkCreateModuleCopy(b *testing.B) {
 		}
 	}
 	tempParent := b.TempDir()
+	settings, err := modulecontext.SnapshotModule(filepath.Join(source, "go.mod"))
+	if err != nil {
+		b.Fatal(err)
+	}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for index := 0; index < b.N; index++ {
-		workspace, err := Create(context.Background(), Options{SourceDir: source, TempParent: tempParent})
+		workspace, err := Create(context.Background(), Options{SourceDir: source, ModuleSettings: settings, TempParent: tempParent})
 		if err != nil {
 			b.Fatal(err)
 		}

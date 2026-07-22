@@ -52,10 +52,9 @@ func AllCoverage() CoverageSet {
 
 func ParseCoverage(value string) (CoverageSet, error) {
 	set := make(CoverageSet)
-	for _, raw := range strings.Split(value, ",") {
-		name := strings.TrimSpace(strings.ToLower(raw))
+	for _, name := range strings.Split(value, ",") {
 		if name == "" {
-			continue
+			return nil, fmt.Errorf("coverage metric list contains an empty token")
 		}
 		var expanded []Metric
 		switch name {
@@ -84,7 +83,7 @@ func ParseCoverage(value string) (CoverageSet, error) {
 		case "mcdc-masking":
 			expanded = []Metric{MetricMCDCMasking}
 		default:
-			return nil, fmt.Errorf("unknown coverage metric %q", raw)
+			return nil, fmt.Errorf("unknown coverage metric %q", name)
 		}
 		for _, metric := range expanded {
 			set[metric] = true

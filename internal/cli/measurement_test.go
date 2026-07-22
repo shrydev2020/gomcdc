@@ -16,6 +16,7 @@ import (
 	"github.com/shrydev2020/gomcdc/internal/gotest"
 	"github.com/shrydev2020/gomcdc/internal/instrument"
 	"github.com/shrydev2020/gomcdc/internal/loader"
+	"github.com/shrydev2020/gomcdc/internal/modulecontext"
 	"github.com/shrydev2020/gomcdc/internal/report"
 	"github.com/shrydev2020/gomcdc/internal/runtimecov"
 )
@@ -47,6 +48,10 @@ func TestMeasureUsesOneCombinedWorkspaceWhenInterrupted(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(module, "go.mod"), []byte("module example.test/m\n\ngo 1.26\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	moduleSettings, err := modulecontext.SnapshotModule(filepath.Join(module, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	bin := t.TempDir()
 	if err := os.WriteFile(filepath.Join(bin, "go"), []byte("#!/bin/sh\nwhile :; do :; done\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -60,6 +65,7 @@ func TestMeasureUsesOneCombinedWorkspaceWhenInterrupted(t *testing.T) {
 		loaded: loader.Result{
 			ModulePath: "example.test/m", ModuleRoot: module, RelativeWorkDir: ".",
 			PackageImportSet: []string{"example.test/m"}, CoverPackageImportSet: []string{"example.test/m"},
+			ModuleSettings: moduleSettings,
 		},
 		decisions: []cover.DecisionMetadata{{ID: 1, Package: "example.test/m"}},
 		needsC0:   true,
@@ -69,7 +75,7 @@ func TestMeasureUsesOneCombinedWorkspaceWhenInterrupted(t *testing.T) {
 		t.Fatalf("measure: %v", err)
 	}
 	defer func() {
-		if cleanupErr := measurementWork.cleanup(io.Discard); cleanupErr != nil {
+		if cleanupErr := measurementWork.finalize(io.Discard); cleanupErr != nil {
 			t.Errorf("cleanup: %v", cleanupErr)
 		}
 	}()
@@ -90,6 +96,28 @@ func TestRecoveryContextStartsWithDeadlineAfterInterruption(t *testing.T) {
 	defer cancelRecovery()
 	if _, ok := recovery.Deadline(); !ok {
 		t.Fatal("interrupted recovery has no deadline")
+	}
+}
+
+func TestMeasurementResultsPreserveIndependentExecutionFacts(t *testing.T) {
+	t.Parallel()
+	interrupted := measurementOutcome{interrupted: true}
+	if got := interrupted.results(false, nil); got != (report.RunResults{
+		Test: report.ResultNotRun, Measurement: report.ResultFailed, Integrity: report.ResultNotRun,
+		Strict: report.ResultNotRequested, Threshold: report.ResultNotRequested,
+	}) {
+		t.Fatalf("pre-test interruption results = %#v", got)
+	}
+
+	completed := measurementOutcome{
+		testResult:       &gotest.Result{Status: cover.RunPassed},
+		integrityChecked: true,
+	}
+	if got := completed.results(false, errors.New("cleanup failed")); got != (report.RunResults{
+		Test: report.ResultPassed, Measurement: report.ResultFailed, Integrity: report.ResultPassed,
+		Strict: report.ResultNotRequested, Threshold: report.ResultNotRequested,
+	}) {
+		t.Fatalf("cleanup failure results = %#v", got)
 	}
 }
 

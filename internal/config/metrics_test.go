@@ -28,7 +28,11 @@ func TestParseCoverageCanonicalNames(t *testing.T) {
 
 func TestParseCoverageRejectsUnknownAndEmpty(t *testing.T) {
 	t.Parallel()
-	for _, value := range []string{"", ",,", "branch", "c0", "c1", "c2", "mcdc", "clause"} {
+	for _, value := range []string{
+		"", ",,", "decision,", "decision,,condition",
+		"Decision", " decision", "decision ", "ALL",
+		"branch", "c0", "c1", "c2", "mcdc", "clause",
+	} {
 		if _, err := ParseCoverage(value); err == nil {
 			t.Errorf("ParseCoverage(%q) error = nil", value)
 		}

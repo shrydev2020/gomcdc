@@ -12,7 +12,7 @@ import (
 	"strings"
 	"sync"
 
-	"golang.org/x/mod/modfile"
+	"github.com/shrydev2020/gomcdc/internal/modulecontext"
 )
 
 const tempPrefix = "gomcdc-"
@@ -21,6 +21,9 @@ const tempPrefix = "gomcdc-"
 type Options struct {
 	// SourceDir is the module directory to copy. It must already exist.
 	SourceDir string
+	// ModuleSettings is the immutable module context captured before package
+	// loading. Valid standalone settings use GOWORK=off in the copy.
+	ModuleSettings modulecontext.Settings
 	// TempParent is the directory under which the workspace is created. An
 	// empty value uses os.TempDir. It must not be SourceDir or one of its
 	// descendants, otherwise the copy could recursively include itself.
@@ -33,10 +36,11 @@ type Options struct {
 // directory. Its paths remain available after cleanup so they can be reported
 // to the user.
 type Workspace struct {
-	SourceDir string
-	RootDir   string
-	ModuleDir string
-	EventDir  string
+	SourceDir  string
+	RootDir    string
+	ModuleDir  string
+	EventDir   string
+	GoWorkPath string
 
 	mu      sync.Mutex
 	keep    bool
@@ -51,6 +55,12 @@ func Create(ctx context.Context, options Options) (_ *Workspace, err error) {
 	}
 	sourceDir, err := existingDirectory(options.SourceDir, "source directory")
 	if err != nil {
+		return nil, err
+	}
+	if !options.ModuleSettings.Valid() {
+		return nil, errors.New("frozen module settings are required")
+	}
+	if err := options.ModuleSettings.AssertMainModule(sourceDir); err != nil {
 		return nil, err
 	}
 
@@ -87,8 +97,28 @@ func Create(ctx context.Context, options Options) (_ *Workspace, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := rewriteRelativeReplacements(ctx, sourceDir, moduleDir); err != nil {
-		return nil, fmt.Errorf("rewrite copied module replacements: %w", err)
+	goMod, err := options.ModuleSettings.RelocatedGoMod(ctx, moduleDir)
+	if err != nil {
+		return nil, fmt.Errorf("relocate copied go.mod: %w", err)
+	}
+	goModPath := filepath.Join(moduleDir, "go.mod")
+	goModInfo, err := os.Stat(goModPath)
+	if err != nil {
+		return nil, fmt.Errorf("inspect copied go.mod: %w", err)
+	}
+	if err := os.WriteFile(goModPath, goMod, goModInfo.Mode().Perm()); err != nil {
+		return nil, fmt.Errorf("write copied go.mod: %w", err)
+	}
+	goWorkPath := ""
+	if options.ModuleSettings.Active() {
+		goWorkPath = filepath.Join(rootDir, "go.work")
+		contents, relocateErr := options.ModuleSettings.RelocatedGoWork(ctx, sourceDir, rootDir, moduleDir)
+		if relocateErr != nil {
+			return nil, fmt.Errorf("relocate copied Go workspace: %w", relocateErr)
+		}
+		if err := os.WriteFile(goWorkPath, contents, 0o600); err != nil {
+			return nil, fmt.Errorf("write copied Go workspace: %w", err)
+		}
 	}
 
 	eventDir := filepath.Join(rootDir, "events")
@@ -98,72 +128,13 @@ func Create(ctx context.Context, options Options) (_ *Workspace, err error) {
 
 	removeOnError = false
 	return &Workspace{
-		SourceDir: sourceDir,
-		RootDir:   rootDir,
-		ModuleDir: moduleDir,
-		EventDir:  eventDir,
-		keep:      options.Keep,
+		SourceDir:  sourceDir,
+		RootDir:    rootDir,
+		ModuleDir:  moduleDir,
+		EventDir:   eventDir,
+		GoWorkPath: goWorkPath,
+		keep:       options.Keep,
 	}, nil
-}
-
-// rewriteRelativeReplacements keeps local development dependencies resolvable
-// after the main module moves to a temporary directory. Only the copied
-// go.mod is changed; replacement modules remain read-only inputs at their
-// original absolute paths.
-func rewriteRelativeReplacements(ctx context.Context, sourceDir, moduleDir string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	sourcePath := filepath.Join(sourceDir, "go.mod")
-	contents, err := os.ReadFile(sourcePath)
-	if err != nil {
-		return fmt.Errorf("read %q: %w", sourcePath, err)
-	}
-	parsed, err := modfile.Parse(sourcePath, contents, nil)
-	if err != nil {
-		return fmt.Errorf("parse %q: %w", sourcePath, err)
-	}
-	changed := false
-	for _, replacement := range parsed.Replace {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if replacement.New.Version != "" || filepath.IsAbs(replacement.New.Path) {
-			continue
-		}
-		absolute, err := filepath.Abs(filepath.Join(sourceDir, filepath.FromSlash(replacement.New.Path)))
-		if err != nil {
-			return fmt.Errorf("resolve replacement %q: %w", replacement.New.Path, err)
-		}
-		if err := parsed.AddReplace(
-			replacement.Old.Path,
-			replacement.Old.Version,
-			absolute,
-			"",
-		); err != nil {
-			return fmt.Errorf("rewrite replacement for %q: %w", replacement.Old.Path, err)
-		}
-		changed = true
-	}
-	if !changed {
-		return nil
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	formatted, err := parsed.Format()
-	if err != nil {
-		return fmt.Errorf("format copied go.mod: %w", err)
-	}
-	destination := filepath.Join(moduleDir, "go.mod")
-	info, err := os.Stat(destination)
-	if err != nil {
-		return fmt.Errorf("stat copied go.mod: %w", err)
-	}
-	if err := os.WriteFile(destination, formatted, info.Mode().Perm()); err != nil {
-		return fmt.Errorf("write copied go.mod: %w", err)
-	}
-	return nil
 }
 
 // Keep marks the workspace for retention. It is safe to call before a
@@ -306,6 +277,10 @@ func copyTree(ctx context.Context, sourceDir, destinationDir string) error {
 			if err != nil {
 				return fmt.Errorf("read symbolic link %q: %w", sourcePath, err)
 			}
+			target, err = copiedSymlinkTarget(sourceDir, destinationDir, sourcePath, destinationPath, target)
+			if err != nil {
+				return err
+			}
 			if err := os.Symlink(target, destinationPath); err != nil {
 				return fmt.Errorf("create symbolic link %q: %w", destinationPath, err)
 			}
@@ -329,6 +304,30 @@ func copyTree(ctx context.Context, sourceDir, destinationDir string) error {
 		}
 	}
 	return nil
+}
+
+func copiedSymlinkTarget(sourceDir, destinationDir, sourcePath, destinationPath, target string) (string, error) {
+	resolvedTarget := target
+	if !filepath.IsAbs(resolvedTarget) {
+		resolvedTarget = filepath.Join(filepath.Dir(sourcePath), resolvedTarget)
+	}
+	resolvedTarget, err := filepath.EvalSymlinks(resolvedTarget)
+	if err != nil {
+		return "", fmt.Errorf("resolve symbolic link %q: %w", sourcePath, err)
+	}
+	if !containsPath(sourceDir, resolvedTarget) {
+		return "", fmt.Errorf("symbolic link %q resolves outside source tree %q", sourcePath, sourceDir)
+	}
+	relativeToSource, err := filepath.Rel(sourceDir, resolvedTarget)
+	if err != nil {
+		return "", fmt.Errorf("locate symbolic link target %q in source tree: %w", sourcePath, err)
+	}
+	copiedTarget := filepath.Join(destinationDir, relativeToSource)
+	relativeToLink, err := filepath.Rel(filepath.Dir(destinationPath), copiedTarget)
+	if err != nil {
+		return "", fmt.Errorf("relocate symbolic link %q into workspace: %w", sourcePath, err)
+	}
+	return relativeToLink, nil
 }
 
 func copyRegularFile(ctx context.Context, sourcePath, destinationPath string, mode fs.FileMode) (err error) {

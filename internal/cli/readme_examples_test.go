@@ -1,0 +1,48 @@
+package cli
+
+import (
+	"io"
+	"os"
+	"strings"
+	"testing"
+)
+
+func TestREADMEForwardedGoTestExampleUsesOnlyAllowedFlags(t *testing.T) {
+	t.Parallel()
+	const example = "gomcdc test ./... -- -run TestCritical"
+	for _, path := range []string{"../../README.md", "../../README.ja.md"} {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(contents), example) {
+			t.Fatalf("%s does not contain the checked forwarding example %q", path, example)
+		}
+
+		arguments := strings.Fields(strings.TrimPrefix(example, "gomcdc "))
+		opts, err := parseOptions(arguments[1:], io.Discard)
+		if err != nil {
+			t.Fatalf("parse %s example: %v", path, err)
+		}
+		if conflict := measurementFlag(opts.goTestArgs); conflict != "" {
+			t.Fatalf("%s example forwards forbidden measurement flag -%s", path, conflict)
+		}
+	}
+}
+
+func TestREADMEDoesNotPresentV1BinaryAsV2(t *testing.T) {
+	t.Parallel()
+	for _, path := range []string{"../../README.md", "../../README.ja.md"} {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(contents)
+		if strings.Contains(text, "go install github.com/shrydev2020/gomcdc@v1") {
+			t.Fatalf("%s installs a v1 binary while documenting the v2 contract", path)
+		}
+		if !strings.Contains(text, "go install .") {
+			t.Fatalf("%s does not provide the checked-out v2 install command", path)
+		}
+	}
+}

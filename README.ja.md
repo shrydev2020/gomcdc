@@ -26,14 +26,19 @@ test失敗や中断時も検証可能なpartial resultを保持します。
 compiler-aware計装は選択されたGo 1.26.xのcompiler sourceにexact anchorが存在する
 ことを検証し、互換性がなければ明示的に失敗します。
 
-## インストール
+## v2開発版のインストール
+
+このREADMEが説明するv2契約は、version付きreleaseとしてまだ公開されていません。
+default branchをcheckoutしてインストールします。
 
 ```sh
-go install github.com/shrydev2020/gomcdc@v1.0.1
+git clone https://github.com/shrydev2020/gomcdc.git
+cd gomcdc
+go install .
 ```
 
-最新releaseへ追随する場合は`@latest`を使用します。`gomcdc version`で
-インストールされたbuildを確認できます。
+最新のtag付きreleaseはv1.1.2であり、このREADMEが説明するv2 schemaとCLI契約は
+実装していません。`gomcdc version`で開発版buildを確認できます。
 
 ## Quick start
 
@@ -135,7 +140,7 @@ gomcdc test --exclude='internal/generated/**' ./...
 gomcdc test --include-tests ./...
 
 # --以降をgo testへ渡す
-gomcdc test ./... -- -count=1 -run TestCritical
+gomcdc test ./... -- -run TestCritical
 ```
 
 | Option | 用途 |
@@ -185,6 +190,8 @@ gomcdc test \
 - package patternはmain module内のpackageへ解決される必要があります。標準
   library、外部module、`vendor`、Go標準generated-code commentを持つfileは
   除外します。
+- activeな`go.work`はmain moduleが一つの場合に対応します。複数main moduleを
+  持つworkspaceは明示的に拒否します。
 - `_test.go` decisionは`--include-tests`指定時だけAST metricへ含めます。
   Statement/Function CoverageはGo標準coverageに基づきます。
 - Windows、assembly内部、cgo内部、compiler IR obligation、path coverage、

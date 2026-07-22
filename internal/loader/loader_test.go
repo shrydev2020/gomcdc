@@ -21,7 +21,7 @@ func TestLoadModulePackages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if withoutTests.ModulePath != "example.test/fixture" || withoutTests.ModuleRoot != root {
+	if withoutTests.ModulePath != "example.test/fixture" || withoutTests.ModuleRoot != canonicalLoaderPath(t, root) {
 		t.Fatalf("unexpected module: %#v", withoutTests)
 	}
 	if got := baseNames(withoutTests.Files); strings.Contains(got, "alpha_test.go") {
@@ -60,7 +60,7 @@ func TestLoadHonorsBuildTags(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsActiveMultiModuleWorkspace(t *testing.T) {
+func TestLoadAcceptsActiveSingleModuleWorkspace(t *testing.T) {
 	// The fixture must test filesystem workspace discovery, not an inherited
 	// caller policy such as GOWORK=off.
 	t.Setenv("GOWORK", "")
@@ -69,9 +69,29 @@ func TestLoadRejectsActiveMultiModuleWorkspace(t *testing.T) {
 	writeLoaderFile(t, filepath.Join(module, "go.mod"), "module example.test/workmodule\n\ngo 1.26\n")
 	writeLoaderFile(t, filepath.Join(module, "value.go"), "package workmodule\n")
 	writeLoaderFile(t, filepath.Join(root, "go.work"), "go 1.26\n\nuse ./module\n")
-	_, err := Load(context.Background(), Options{Dir: module, Patterns: []string{"."}})
-	if err == nil || !strings.Contains(err.Error(), "active go.work") {
-		t.Fatalf("Load() error = %v, want explicit go.work rejection", err)
+	result, err := Load(context.Background(), Options{Dir: module, Patterns: []string{"."}})
+	if err != nil {
+		t.Fatalf("Load() error = %v, want single-module go.work support", err)
+	}
+	if result.ModuleSettings.GoWorkPath() != canonicalLoaderPath(t, filepath.Join(root, "go.work")) {
+		t.Fatalf("GoWorkPath = %q, want %q", result.ModuleSettings.GoWorkPath(), canonicalLoaderPath(t, filepath.Join(root, "go.work")))
+	}
+}
+
+func TestLoadRejectsActiveMultiModuleWorkspace(t *testing.T) {
+	t.Setenv("GOWORK", "")
+	root := t.TempDir()
+	first := filepath.Join(root, "first")
+	second := filepath.Join(root, "second")
+	writeLoaderFile(t, filepath.Join(first, "go.mod"), "module example.test/first\n\ngo 1.26\n")
+	writeLoaderFile(t, filepath.Join(first, "value.go"), "package first\n")
+	writeLoaderFile(t, filepath.Join(second, "go.mod"), "module example.test/second\n\ngo 1.26\n")
+	writeLoaderFile(t, filepath.Join(second, "value.go"), "package second\n")
+	writeLoaderFile(t, filepath.Join(root, "go.work"), "go 1.26\n\nuse (\n\t./first\n\t./second\n)\n")
+
+	_, err := Load(context.Background(), Options{Dir: first, Patterns: []string{"."}})
+	if err == nil || !strings.Contains(err.Error(), "has 2 main modules") {
+		t.Fatalf("Load() error = %v, want explicit multi-module rejection", err)
 	}
 }
 
@@ -123,4 +143,13 @@ func writeLoaderFile(t *testing.T, path, contents string) {
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func canonicalLoaderPath(t *testing.T, path string) string {
+	t.Helper()
+	canonical, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return canonical
 }

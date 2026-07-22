@@ -34,9 +34,8 @@ type reportAssembly struct {
 	astRequested           bool
 	producerOutcomes       []report.ProducerOutcome
 	instrumentationUnknown int
-	integrityFailure       bool
+	results                report.RunResults
 	interrupted            bool
-	analysisIncomplete     bool
 	errors                 []report.ReportError
 	measurementDiagnostics []measurementDiagnostic
 }
@@ -69,30 +68,25 @@ func assembleReportInput(assembly reportAssembly) report.Input {
 		})
 	}
 	errors = append(errors, measurementRunErrors(measurementName, assembly.testResult)...)
+	results := assembly.results
 
 	return report.Input{
-		Context:               assembly.context,
-		ToolVersion:           assembly.toolVersion,
-		ModulePath:            assembly.loaded.ModulePath,
-		SourceFiles:           sourceFileInputs(assembly.sources),
-		Coverage:              assembly.coverage,
-		MaskingAnalysisBudget: assembly.maskingAnalysisBudget,
-		Decisions:             assembly.decisions,
-		Evaluations:           assembly.evidence.Evaluations,
-		NotEvaluatedDecisions: assembly.evidence.NotEvaluatedDecisions,
-		Clauses:               assembly.clauses,
-		NoMatches:             assembly.noMatches,
-		ClauseObservations:    assembly.evidence.ClauseObservations,
-		C0:                    assembly.c0,
-		RunStatus:             overallStatus,
-		FailureKind:           overallFailure,
-		Results: report.RunResults{
-			Test:        testResultStatus(overallStatus),
-			Measurement: passFailResult(!assembly.analysisIncomplete && !assembly.interrupted),
-			Integrity:   passFailResult(!assembly.integrityFailure),
-			Strict:      report.ResultNotRequested,
-			Threshold:   report.ResultNotRequested,
-		},
+		Context:                assembly.context,
+		ToolVersion:            assembly.toolVersion,
+		ModulePath:             assembly.loaded.ModulePath,
+		SourceFiles:            sourceFileInputs(assembly.sources),
+		Coverage:               assembly.coverage,
+		MaskingAnalysisBudget:  assembly.maskingAnalysisBudget,
+		Decisions:              assembly.decisions,
+		Evaluations:            assembly.evidence.Evaluations,
+		NotEvaluatedDecisions:  assembly.evidence.NotEvaluatedDecisions,
+		Clauses:                assembly.clauses,
+		NoMatches:              assembly.noMatches,
+		ClauseObservations:     assembly.evidence.ClauseObservations,
+		C0:                     assembly.c0,
+		RunStatus:              overallStatus,
+		FailureKind:            overallFailure,
+		Results:                results,
 		MeasurementMode:        measurementMode(assembly.standardCoverRequested, assembly.astRequested),
 		Measurements:           measurementRuns(measurementName, assembly.testResult),
 		ProducerOutcomes:       assembly.producerOutcomes,
@@ -100,14 +94,17 @@ func assembleReportInput(assembly reportAssembly) report.Input {
 		BackendProducers:       backend.OrchestratedProducers(),
 		InstrumentationUnknown: assembly.instrumentationUnknown,
 		Errors:                 errors,
-		Complete:               overallStatus == cover.RunPassed && !assembly.integrityFailure && !assembly.analysisIncomplete,
+		Complete:               overallStatus == cover.RunPassed && results.Measurement == report.ResultPassed && results.Integrity == report.ResultPassed,
 		PackageStatuses:        packageStatuses,
 		ASTPackageStatuses:     astPackageStatuses,
 	}
 }
 
-func testResultStatus(status cover.RunStatus) report.ResultStatus {
-	switch status {
+func testResultStatus(result *gotest.Result) report.ResultStatus {
+	if result == nil {
+		return report.ResultNotRun
+	}
+	switch result.Status {
 	case cover.RunPassed:
 		return report.ResultPassed
 	case cover.RunFailed:
@@ -165,6 +162,9 @@ func requestedMeasurementName(standardCoverRequested, astRequested bool) string 
 
 func packageStatuses(loaded loader.Result, result *gotest.Result, overall cover.RunStatus) map[string]string {
 	statuses := make(map[string]string, len(loaded.PackageImportSet))
+	if result == nil {
+		return statuses
+	}
 	for _, packagePath := range loaded.PackageImportSet {
 		statuses[packagePath] = string(overall)
 	}

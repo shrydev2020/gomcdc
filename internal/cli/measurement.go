@@ -49,6 +49,7 @@ type measurementOutcome struct {
 	c0               *c0.Report
 	producerOutcomes []report.ProducerOutcome
 	integrityFailure bool
+	integrityChecked bool
 	interrupted      bool
 	diagnostics      []measurementDiagnostic
 }
@@ -62,17 +63,44 @@ type measurementDiagnostic struct {
 type measurementWorkspace struct {
 	measurement string
 	workspace   *workspace.Workspace
+	finalized   bool
+	finalizeErr error
 }
 
-func (item *measurementWorkspace) cleanup(stderr io.Writer) error {
+// finalize commits the workspace retention/removal decision exactly once.
+// Its stable result lets the caller finalize before report publication while
+// retaining an unconditional deferred finalizer for early returns.
+func (item *measurementWorkspace) finalize(stderr io.Writer) error {
+	if item.finalized {
+		return item.finalizeErr
+	}
+	item.finalized = true
 	if err := item.workspace.Cleanup(); err != nil {
+		item.finalizeErr = err
 		fmt.Fprintf(stderr, "gomcdc: %s workspace cleanup failed: %v\n", item.measurement, err)
-		return err
+		return item.finalizeErr
 	}
 	if item.workspace.IsKept() {
 		fmt.Fprintf(stderr, "gomcdc: kept %s workspace: %s\n", item.measurement, item.workspace.RootDir)
 	}
 	return nil
+}
+
+// results derives the three execution-owned D28 axes from recorded facts.
+// Policy axes are filled after the coverage hierarchy is built.
+func (outcome measurementOutcome) results(analysisIncomplete bool, finalizationErr error) report.RunResults {
+	measurementPassed := !analysisIncomplete && !outcome.interrupted && finalizationErr == nil
+	integrity := report.ResultNotRun
+	if outcome.integrityChecked {
+		integrity = passFailResult(!outcome.integrityFailure)
+	}
+	return report.RunResults{
+		Test:        testResultStatus(outcome.testResult),
+		Measurement: passFailResult(measurementPassed),
+		Integrity:   integrity,
+		Strict:      report.ResultNotRequested,
+		Threshold:   report.ResultNotRequested,
+	}
 }
 
 // measure performs source-copy setup, one requested test run, evidence
@@ -90,9 +118,10 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 		})
 	}
 	work, err := workspace.Create(request.context, workspace.Options{
-		SourceDir:  request.loaded.ModuleRoot,
-		TempParent: request.workDirParent,
-		Keep:       request.keepWorkDir,
+		SourceDir:      request.loaded.ModuleRoot,
+		ModuleSettings: request.loaded.ModuleSettings,
+		TempParent:     request.workDirParent,
+		Keep:           request.keepWorkDir,
 	})
 	if err != nil {
 		return outcome, nil, fmt.Errorf("temporary workspace creation failed: %w", err)
@@ -165,7 +194,11 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 	}
 	if !outcome.interrupted {
 		fmt.Fprintf(stderr, "gomcdc: measurement %s\n", measurementName)
-		environment := map[string]string{"GOWORK": "off"}
+		goWorkPath := work.GoWorkPath
+		if goWorkPath == "" {
+			goWorkPath = "off"
+		}
+		environment := map[string]string{"GOWORK": goWorkPath}
 		if request.needsAST {
 			environment[runtimecov.RunIDEnv] = runID
 		}
@@ -210,6 +243,7 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 	recorded := runtimecov.RecordedEvidence{}
 	var collectionErr error
 	if request.needsAST {
+		outcome.integrityChecked = true
 		recorded, collectionErr = runtimecov.CollectDetailed(recoveryContext, work.EventDir)
 	}
 	if collectionErr != nil {
@@ -270,6 +304,7 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 	}
 
 	if request.needsC0 {
+		outcome.integrityChecked = true
 		coverProfile := filepath.Join(work.RootDir, "cover.out")
 		profile, profileReadErr := readCoverProfile(coverProfile)
 		plans, planErr := sourceCoveragePlans(recoveryContext, request.sources, instrumentationResults)

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -70,6 +71,79 @@ func TestGoFilesInDirectoryFiltersDirectoriesAndNonGoFiles(t *testing.T) {
 	}
 	if _, err := goFilesInDirectory(t.Context(), filepath.Join(directory, "missing")); err == nil {
 		t.Fatal("goFilesInDirectory accepted a missing directory")
+	}
+}
+
+func TestSingleModuleGoWorkSettingsApplyToAnalysisAndTest(t *testing.T) {
+	root := t.TempDir()
+	module := filepath.Join(root, "module")
+	dependency := filepath.Join(root, "dependency")
+	writeIntegrationFile(t, filepath.Join(module, "go.mod"), "module example.test/workmodule\n\ngo 1.26\n\nrequire example.test/dependency v0.0.0\n")
+	writeIntegrationFile(t, filepath.Join(module, "value.go"), "package workmodule\n\nimport \"example.test/dependency\"\n\nfunc Value() bool { return dependency.Value() }\n")
+	writeIntegrationFile(t, filepath.Join(module, "value_test.go"), "package workmodule\n\nimport \"testing\"\n\nfunc TestValue(t *testing.T) { if !Value() { t.Fatal(\"false\") } }\n")
+	writeIntegrationFile(t, filepath.Join(dependency, "go.mod"), "module example.test/dependency\n\ngo 1.26\n")
+	writeIntegrationFile(t, filepath.Join(dependency, "value.go"), "package dependency\n\nfunc Value() bool { return true }\n")
+	goWork := filepath.Join(root, "go.work")
+	writeIntegrationFile(t, goWork, "go 1.26\n\nuse ./module\n\nreplace example.test/dependency => ./dependency\n")
+	t.Setenv("GOWORK", goWork)
+
+	built, stderr, code := runFixture(t, module, "--coverage=statement", "--format=json", ".")
+	if code != ExitSuccess {
+		t.Fatalf("single-module go.work exit=%d\nstderr:\n%s", code, stderr)
+	}
+	if built.Module != "example.test/workmodule" || built.Run.Results.Test != report.ResultPassed || built.Run.Results.Measurement != report.ResultPassed {
+		t.Fatalf("single-module go.work report = module %q run %#v", built.Module, built.Run)
+	}
+}
+
+func TestCleanupFailureIsPublishedInReportBeforeExit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory removal permissions differ on Windows")
+	}
+	module := t.TempDir()
+	workParent := t.TempDir()
+	writeIntegrationFile(t, filepath.Join(module, "go.mod"), "module example.test/cleanup\n\ngo 1.26\n")
+	writeIntegrationFile(t, filepath.Join(module, "value.go"), "package cleanup\n\nfunc Value() bool { return true }\n")
+	writeIntegrationFile(t, filepath.Join(module, "value_test.go"), `package cleanup
+
+import (
+	"os"
+	"testing"
+)
+
+func TestValue(t *testing.T) {
+	if !Value() { t.Fatal("false") }
+	if err := os.Chmod(os.Getenv("GOMCDC_CLEANUP_PARENT"), 0o500); err != nil { t.Fatal(err) }
+}
+`)
+	t.Setenv("GOWORK", "off")
+	t.Setenv("GOMCDC_CLEANUP_PARENT", workParent)
+	var stdout, stderr bytes.Buffer
+	code := runAt(context.Background(), module, []string{
+		"test", "--coverage=statement", "--format=json", "--workdir=" + workParent, ".",
+	}, &stdout, &stderr)
+	if err := os.Chmod(workParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var built report.Report
+	if err := json.Unmarshal(stdout.Bytes(), &built); err != nil {
+		t.Fatalf("decode cleanup-failure report (exit %d): %v\nstdout:\n%s\nstderr:\n%s", code, err, stdout.String(), stderr.String())
+	}
+	if code != ExitMeasurementFailed {
+		t.Fatalf("cleanup failure exit=%d, want %d\nstderr:\n%s", code, ExitMeasurementFailed, stderr.String())
+	}
+	if built.Run.Results.Test != report.ResultPassed || built.Run.Results.Measurement != report.ResultFailed || built.Run.Complete {
+		t.Fatalf("cleanup failure run = %#v", built.Run)
+	}
+	found := false
+	for _, reportErr := range built.Errors {
+		if reportErr.Code == "workspace-cleanup-failed" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("cleanup failure missing from report errors: %#v", built.Errors)
 	}
 }
 
@@ -1353,6 +1427,16 @@ func fixturePath(t *testing.T, name string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func writeIntegrationFile(t *testing.T, path, contents string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func reportMetrics(summary report.Summary) map[string]report.MetricSummary {

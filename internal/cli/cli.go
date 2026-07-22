@@ -264,8 +264,10 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	}, stderr)
 	if measurementWork != nil {
 		defer func() {
-			if cleanupErr := measurementWork.cleanup(stderr); cleanupErr != nil {
-				exitCode = ExitMeasurementFailed
+			if finalizationErr := measurementWork.finalize(stderr); finalizationErr != nil {
+				if exitCode != ExitInterrupted {
+					exitCode = ExitMeasurementFailed
+				}
 			}
 		}()
 	}
@@ -277,6 +279,15 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		fmt.Fprintf(stderr, "gomcdc: %v\n", measurementErr)
 		return ExitMeasurementFailed
 	}
+	var finalizationErr error
+	if measurementWork != nil {
+		finalizationErr = measurementWork.finalize(stderr)
+		if finalizationErr != nil {
+			reportErrors = append(reportErrors, report.ReportError{
+				Phase: "cleanup", Code: "workspace-cleanup-failed", Message: "temporary workspace cleanup failed",
+			})
+		}
+	}
 
 	input := assembleReportInput(reportAssembly{
 		context:     ctx,
@@ -287,9 +298,10 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		evidence: measurement.evidence, c0: measurement.c0, testResult: measurement.testResult, measurementName: measurement.measurementName,
 		standardCoverRequested: needsC0, astRequested: needsASTRun,
 		producerOutcomes:       measurement.producerOutcomes,
-		instrumentationUnknown: analysisUnknown, integrityFailure: measurement.integrityFailure, analysisIncomplete: analysisIncomplete,
-		interrupted: measurement.interrupted,
-		errors:      reportErrors, measurementDiagnostics: measurement.diagnostics,
+		instrumentationUnknown: analysisUnknown,
+		results:                measurement.results(analysisIncomplete, finalizationErr),
+		interrupted:            measurement.interrupted,
+		errors:                 reportErrors, measurementDiagnostics: measurement.diagnostics,
 	})
 	built := report.Build(input)
 	strictFailure := opts.strict && (built.Instrumentation.HasGaps() || summaryUnknown(built.Summary) > 0 || summaryAnalysisIncomplete(built.Summary) > 0)
@@ -318,6 +330,9 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		return ExitInterrupted
 	}
 	if measurement.integrityFailure {
+		return classifyExit(false, true, false, false)
+	}
+	if finalizationErr != nil {
 		return classifyExit(false, true, false, false)
 	}
 	if strictFailure {

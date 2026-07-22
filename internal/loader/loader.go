@@ -9,12 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 
-	"github.com/shrydev2020/gomcdc/internal/processgroup"
+	"github.com/shrydev2020/gomcdc/internal/modulecontext"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -39,6 +38,7 @@ type Result struct {
 	ModuleRoot       string
 	WorkingDir       string
 	RelativeWorkDir  string
+	ModuleSettings   modulecontext.Settings
 	Files            []File
 	PackageImportSet []string
 	// CoverPackageImportSet contains production packages whose initial load had
@@ -59,7 +59,8 @@ func Load(ctx context.Context, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("resolve working directory: %w", err)
 	}
-	if err := rejectActiveGoWorkspace(ctx, dir); err != nil {
+	moduleSettings, err := modulecontext.Discover(ctx, dir)
+	if err != nil {
 		return Result{}, err
 	}
 
@@ -84,12 +85,22 @@ func Load(ctx context.Context, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("load packages: %w", err)
 	}
+	if err := moduleSettings.AssertSourceUnchanged(); err != nil {
+		return Result{}, err
+	}
 	if len(pkgs) == 0 {
 		return Result{}, errors.New("load packages: no packages matched")
 	}
 	modulePath, moduleRoot, err := commonMainModule(pkgs)
 	if err != nil {
 		return Result{}, err
+	}
+	if err := moduleSettings.AssertMainModule(moduleRoot); err != nil {
+		return Result{}, err
+	}
+	workingDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return Result{}, fmt.Errorf("resolve working directory links: %w", err)
 	}
 	files := make(map[string]File)
 	imports := make(map[string]struct{})
@@ -111,6 +122,9 @@ func Load(ctx context.Context, opts Options) (Result, error) {
 		if loadErr != nil && len(testPkgs) == 0 {
 			return Result{}, fmt.Errorf("load test package metadata: %w", loadErr)
 		}
+		if err := moduleSettings.AssertSourceUnchanged(); err != nil {
+			return Result{}, err
+		}
 		// Do not promote test-package diagnostics to an instrumentation error.
 		// The actual go test command owns compile/test failures and can still
 		// leave useful events from other packages behind.
@@ -120,16 +134,17 @@ func Load(ctx context.Context, opts Options) (Result, error) {
 	if len(files) == 0 {
 		return Result{}, errors.New("load packages: matched packages contain no instrumentable Go files")
 	}
-	relWork, err := filepath.Rel(moduleRoot, dir)
+	relWork, err := filepath.Rel(moduleRoot, workingDir)
 	if err != nil || relWork == ".." || strings.HasPrefix(relWork, ".."+string(filepath.Separator)) {
-		return Result{}, fmt.Errorf("working directory %q is outside module root %q", dir, moduleRoot)
+		return Result{}, fmt.Errorf("working directory %q is outside module root %q", workingDir, moduleRoot)
 	}
 
 	result := Result{
 		ModulePath:      modulePath,
 		ModuleRoot:      moduleRoot,
-		WorkingDir:      dir,
+		WorkingDir:      workingDir,
 		RelativeWorkDir: relWork,
+		ModuleSettings:  moduleSettings,
 	}
 	for _, file := range files {
 		result.Files = append(result.Files, file)
@@ -157,21 +172,6 @@ func overrideEnvironment(key, value string) []string {
 	return append(environment, prefix+value)
 }
 
-func rejectActiveGoWorkspace(ctx context.Context, dir string) error {
-	command := exec.CommandContext(ctx, "go", "env", "GOWORK")
-	processgroup.ConfigureCancellation(command)
-	command.Dir = dir
-	output, err := command.Output()
-	if err != nil {
-		return fmt.Errorf("inspect Go workspace: %w", err)
-	}
-	workspacePath := strings.TrimSpace(string(output))
-	if workspacePath != "" && workspacePath != "off" {
-		return fmt.Errorf("active go.work %q is unsupported; run one module at a time with GOWORK=off", workspacePath)
-	}
-	return nil
-}
-
 func commonMainModule(pkgs []*packages.Package) (modulePath, moduleRoot string, err error) {
 	for _, pkg := range pkgs {
 		if pkg.Module == nil || !pkg.Module.Main {
@@ -180,6 +180,10 @@ func commonMainModule(pkgs []*packages.Package) (modulePath, moduleRoot string, 
 		root, absErr := filepath.Abs(pkg.Module.Dir)
 		if absErr != nil {
 			return "", "", fmt.Errorf("resolve module root for %q: %w", pkg.PkgPath, absErr)
+		}
+		root, absErr = filepath.EvalSymlinks(root)
+		if absErr != nil {
+			return "", "", fmt.Errorf("resolve module root links for %q: %w", pkg.PkgPath, absErr)
 		}
 		if modulePath == "" {
 			modulePath, moduleRoot = pkg.Module.Path, root
@@ -214,6 +218,10 @@ func addPackageFiles(
 				continue
 			}
 			abs, err := filepath.Abs(name)
+			if err != nil {
+				continue
+			}
+			abs, err = filepath.EvalSymlinks(abs)
 			if err != nil || !within(moduleRoot, abs) {
 				continue
 			}

@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/shrydev2020/gomcdc/internal/modulecontext"
 )
 
 func TestCreateRejectsCanceledWork(t *testing.T) {
@@ -32,8 +34,14 @@ func TestCreateCopiesModuleTree(t *testing.T) {
 	if err := os.Symlink(filepath.Join("..", "assets", "message.txt"), filepath.Join(source, "scripts", "message-link")); err != nil {
 		t.Fatalf("create source symlink: %v", err)
 	}
+	if err := os.Symlink(filepath.Join(source, "assets", "message.txt"), filepath.Join(source, "scripts", "absolute-message-link")); err != nil {
+		t.Fatalf("create absolute source symlink: %v", err)
+	}
+	if err := os.Link(filepath.Join(source, "assets", "message.txt"), filepath.Join(source, "assets", "message-hardlink")); err != nil {
+		t.Fatalf("create source hardlink: %v", err)
+	}
 
-	workspace, err := Create(context.Background(), Options{SourceDir: source, TempParent: t.TempDir()})
+	workspace, err := Create(context.Background(), Options{SourceDir: source, ModuleSettings: snapshotModule(t, source), TempParent: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Create(context.Background(), ) error = %v", err)
 	}
@@ -83,6 +91,36 @@ func TestCreateCopiesModuleTree(t *testing.T) {
 	} else if want := filepath.Join("..", "assets", "message.txt"); got != want {
 		t.Errorf("copied symlink target = %q, want %q", got, want)
 	}
+	absoluteLink := filepath.Join(workspace.ModuleDir, "scripts", "absolute-message-link")
+	if err := os.WriteFile(absoluteLink, []byte("copy only\n"), 0o644); err != nil {
+		t.Fatalf("write through relocated absolute symlink: %v", err)
+	}
+	if original, err := os.ReadFile(filepath.Join(source, "assets", "message.txt")); err != nil {
+		t.Fatal(err)
+	} else if string(original) != "non-Go asset\n" {
+		t.Fatalf("write through copied symlink changed original source: %q", original)
+	}
+
+	copiedHardlink := filepath.Join(workspace.ModuleDir, "assets", "message-hardlink")
+	sourceHardlinkInfo, err := os.Stat(filepath.Join(source, "assets", "message-hardlink"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	copiedHardlinkInfo, err := os.Stat(copiedHardlink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(sourceHardlinkInfo, copiedHardlinkInfo) {
+		t.Fatal("copied regular file retained a hardlink to the source tree")
+	}
+	if err := os.WriteFile(copiedHardlink, []byte("copy hardlink only\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if original, err := os.ReadFile(filepath.Join(source, "assets", "message-hardlink")); err != nil {
+		t.Fatal(err)
+	} else if string(original) != "non-Go asset\n" {
+		t.Fatalf("write to copied former hardlink changed original source: %q", original)
+	}
 
 	// Windows does not expose Unix permission bits with the same semantics.
 	if runtime.GOOS != "windows" {
@@ -104,6 +142,56 @@ func TestCreateCopiesModuleTree(t *testing.T) {
 	}
 }
 
+func TestCreateRejectsSymlinkThatResolvesOutsideSourceTree(t *testing.T) {
+	source := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	writeFile(t, filepath.Join(source, "go.mod"), "module example.test/source\n", 0o644)
+	writeFile(t, outside, "outside\n", 0o644)
+	if err := os.Symlink(outside, filepath.Join(source, "outside-link")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Create(context.Background(), Options{SourceDir: source, ModuleSettings: snapshotModule(t, source), TempParent: t.TempDir()})
+	if err == nil || !strings.Contains(err.Error(), "resolves outside source tree") {
+		t.Fatalf("Create() error = %v, want outside-symlink rejection", err)
+	}
+	if contents, readErr := os.ReadFile(outside); readErr != nil {
+		t.Fatal(readErr)
+	} else if string(contents) != "outside\n" {
+		t.Fatalf("outside file changed: %q", contents)
+	}
+}
+
+func TestCreateRewritesSingleModuleGoWorkForCopiedModule(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "module")
+	dependency := filepath.Join(root, "dependency")
+	writeFile(t, filepath.Join(source, "go.mod"), "module example.test/source\n\ngo 1.26\n\nrequire example.test/dependency v0.0.0\n", 0o644)
+	writeFile(t, filepath.Join(source, "source.go"), "package source\n", 0o644)
+	writeFile(t, filepath.Join(dependency, "go.mod"), "module example.test/dependency\n\ngo 1.26\n", 0o644)
+	goWork := filepath.Join(root, "go.work")
+	writeFile(t, goWork, "go 1.26\n\nuse ./module\n\nreplace example.test/dependency => ./dependency\n", 0o644)
+	t.Setenv("GOWORK", goWork)
+	settings, err := modulecontext.Discover(context.Background(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	work, err := Create(context.Background(), Options{SourceDir: source, ModuleSettings: settings, TempParent: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = work.Remove() })
+	contents, err := os.ReadFile(work.GoWorkPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(contents)
+	if !strings.Contains(text, "use ./module") || !strings.Contains(text, "=> "+canonicalPath(t, dependency)) {
+		t.Fatalf("rewritten go.work does not preserve the single-module settings:\n%s", text)
+	}
+}
+
 func TestCreateRewritesRelativeModuleReplacementsOnlyInCopy(t *testing.T) {
 	parent := t.TempDir()
 	source := filepath.Join(parent, "source")
@@ -118,7 +206,7 @@ func TestCreateRewritesRelativeModuleReplacementsOnlyInCopy(t *testing.T) {
 	writeFile(t, filepath.Join(source, "go.mod"), original, 0o644)
 	writeFile(t, filepath.Join(dependency, "go.mod"), "module example.test/dependency\n\ngo 1.26\n", 0o644)
 
-	work, err := Create(context.Background(), Options{SourceDir: source, TempParent: t.TempDir()})
+	work, err := Create(context.Background(), Options{SourceDir: source, ModuleSettings: snapshotModule(t, source), TempParent: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,6 +229,7 @@ func TestCreateRewritesRelativeModuleReplacementsOnlyInCopy(t *testing.T) {
 
 func TestCreateRejectsTempParentInsideSourceTree(t *testing.T) {
 	source := t.TempDir()
+	writeFile(t, filepath.Join(source, "go.mod"), "module example.test/source\n", 0o644)
 	inside := filepath.Join(source, "tmp")
 	if err := os.Mkdir(inside, 0o755); err != nil {
 		t.Fatalf("create inner temp parent: %v", err)
@@ -148,7 +237,7 @@ func TestCreateRejectsTempParentInsideSourceTree(t *testing.T) {
 
 	for _, parent := range []string{source, inside} {
 		t.Run(filepath.Base(parent), func(t *testing.T) {
-			if _, err := Create(context.Background(), Options{SourceDir: source, TempParent: parent}); err == nil {
+			if _, err := Create(context.Background(), Options{SourceDir: source, ModuleSettings: snapshotModule(t, source), TempParent: parent}); err == nil {
 				t.Fatal("Create(context.Background(), ) error = nil, want containment error")
 			}
 		})
@@ -157,6 +246,7 @@ func TestCreateRejectsTempParentInsideSourceTree(t *testing.T) {
 
 func TestCreateRejectsSymlinkedTempParentInsideSourceTree(t *testing.T) {
 	source := t.TempDir()
+	writeFile(t, filepath.Join(source, "go.mod"), "module example.test/source\n", 0o644)
 	inside := filepath.Join(source, "tmp")
 	if err := os.Mkdir(inside, 0o755); err != nil {
 		t.Fatalf("create inner temp parent: %v", err)
@@ -166,7 +256,7 @@ func TestCreateRejectsSymlinkedTempParentInsideSourceTree(t *testing.T) {
 		t.Fatalf("create temp parent symlink: %v", err)
 	}
 
-	if _, err := Create(context.Background(), Options{SourceDir: source, TempParent: alias}); err == nil {
+	if _, err := Create(context.Background(), Options{SourceDir: source, ModuleSettings: snapshotModule(t, source), TempParent: alias}); err == nil {
 		t.Fatal("Create(context.Background(), ) error = nil, want containment error through symlink")
 	}
 }
@@ -176,7 +266,7 @@ func TestWorkspaceCleanupAndKeep(t *testing.T) {
 		t.Helper()
 		source := t.TempDir()
 		writeFile(t, filepath.Join(source, "go.mod"), "module example.test/source\n", 0o644)
-		workspace, err := Create(context.Background(), Options{SourceDir: source, TempParent: t.TempDir(), Keep: keep})
+		workspace, err := Create(context.Background(), Options{SourceDir: source, ModuleSettings: snapshotModule(t, source), TempParent: t.TempDir(), Keep: keep})
 		if err != nil {
 			t.Fatalf("Create(context.Background(), ) error = %v", err)
 		}
@@ -260,6 +350,15 @@ func writeFile(t *testing.T, path, content string, mode os.FileMode) {
 	if err := os.Chmod(path, mode); err != nil {
 		t.Fatalf("chmod %q: %v", path, err)
 	}
+}
+
+func snapshotModule(t *testing.T, source string) modulecontext.Settings {
+	t.Helper()
+	settings, err := modulecontext.SnapshotModule(filepath.Join(source, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return settings
 }
 
 func canonicalPath(t *testing.T, path string) string {

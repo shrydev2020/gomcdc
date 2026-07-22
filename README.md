@@ -27,14 +27,20 @@ that same execution; there is no production dual-run fallback.
 The compiler-aware instrumentation validates exact anchors in the selected Go
 1.26.x compiler source and fails explicitly if that source is incompatible.
 
-## Install
+## Install the v2 development version
+
+The v2 contract documented here has not been published as a versioned release.
+Install it from a checkout of the default branch:
 
 ```sh
-go install github.com/shrydev2020/gomcdc@v1.0.1
+git clone https://github.com/shrydev2020/gomcdc.git
+cd gomcdc
+go install .
 ```
 
-Use `@latest` instead to follow the newest release. Verify the installed build
-with `gomcdc version`.
+The latest tagged release is v1.1.2 and does not implement the v2 schema and
+CLI contract described by this README. Verify a development build with
+`gomcdc version`.
 
 ## Quick start
 
@@ -141,7 +147,7 @@ gomcdc test --exclude='internal/generated/**' ./...
 gomcdc test --include-tests ./...
 
 # Forward arguments to go test after --
-gomcdc test ./... -- -count=1 -run TestCritical
+gomcdc test ./... -- -run TestCritical
 ```
 
 | Option | Purpose |
@@ -192,6 +198,8 @@ gomcdc test \
 - Package patterns must resolve to packages in the main module. The standard
   library, external modules, `vendor`, and files marked with Go's generated-code
   comment are excluded.
+- An active `go.work` is supported when it contains exactly one main module.
+  Workspaces with multiple main modules are rejected explicitly.
 - `_test.go` decisions enter AST metrics only with `--include-tests`;
   Statement and Function Coverage remain based on standard Go coverage.
 - Windows, assembly internals, cgo internals, compiler-IR obligations, path
