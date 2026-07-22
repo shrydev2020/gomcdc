@@ -65,7 +65,7 @@ func TestInstrumentationModesPreserveProgramSemantics(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(result.SourceMaps) != 1 || len(result.CoveragePlans) != 1 {
+			if len(result.Transformations) != 1 || len(result.CoveragePlans) != 1 {
 				t.Fatalf("instrumentation result = %#v", result)
 			}
 			if _, err := result.CoveragePlans[0].Correspondence.ProjectableRegions(); err != nil {

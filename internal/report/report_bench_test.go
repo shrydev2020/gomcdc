@@ -76,6 +76,22 @@ func BenchmarkReportBuildMetricSelection(b *testing.B) {
 	}
 }
 
+func BenchmarkReportBuildMaskingDecisionParallelism(b *testing.B) {
+	input := reportBuildBenchmarkInput()
+	input.Coverage = config.CoverageSet{
+		config.MetricDecision: true, config.MetricCondition: true, config.MetricMCDCMasking: true,
+	}
+	for _, workers := range []int{1, 4} {
+		b.Run(fmt.Sprintf("workers=%d", workers), func(b *testing.B) {
+			input.MaxMaskingDecisionWorkers = workers
+			b.ReportAllocs()
+			for range b.N {
+				benchmarkReportSink = report.Build(input)
+			}
+		})
+	}
+}
+
 func reportBuildBenchmarkInput() report.Input {
 	const (
 		decisionCount  = 24

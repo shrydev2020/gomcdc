@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"context"
+
 	"github.com/shrydev2020/gomcdc/internal/backend"
 	"github.com/shrydev2020/gomcdc/internal/c0"
 	"github.com/shrydev2020/gomcdc/internal/config"
@@ -15,6 +17,7 @@ import (
 // and report construction. It contains no workspace or writer ownership: the
 // caller owns those resources and supplies only their results here.
 type reportAssembly struct {
+	context                context.Context
 	toolVersion            string
 	loaded                 loader.Result
 	sources                []sourceInstrumentation
@@ -68,6 +71,7 @@ func assembleReportInput(assembly reportAssembly) report.Input {
 	errors = append(errors, measurementRunErrors(measurementName, assembly.testResult)...)
 
 	return report.Input{
+		Context:               assembly.context,
 		ToolVersion:           assembly.toolVersion,
 		ModulePath:            assembly.loaded.ModulePath,
 		SourceFiles:           sourceFileInputs(assembly.sources),

@@ -24,6 +24,7 @@ import (
 	"github.com/shrydev2020/gomcdc/internal/analyzer"
 	"github.com/shrydev2020/gomcdc/internal/c0"
 	cover "github.com/shrydev2020/gomcdc/internal/coverage"
+	"github.com/shrydev2020/gomcdc/internal/transformmap"
 )
 
 const defaultHelperBase = "__gomcdcHooks"
@@ -71,30 +72,33 @@ type PackageOptions struct {
 // PackageResult identifies the generated bridge and helper used by rewritten
 // files.
 type PackageResult struct {
-	HelperName     string
-	BridgePath     string
-	GeneratedFiles []string
-	SourceMaps     []SourceMap
-	CoveragePlans  []FileCoveragePlan
+	HelperName      string
+	BridgePath      string
+	GeneratedFiles  []string
+	Transformations []FileTransformation
+	CoveragePlans   []FileCoveragePlan
 }
 
-// SourceMap identifies the original logical filename used by printer.SourcePos,
-// the virtual filename requested for synthetic statements, and the manifest
-// needed when Go cover retains the physical filename despite //line directives.
-type SourceMap struct {
+// FileTransformation joins coordinate history with the generated-statement
+// and user-//line manifests for one rewritten file. History records byte
+// provenance only; neither it nor the manifests decide coverage acceptance.
+type FileTransformation struct {
 	InstrumentedFile string
 	OriginalFile     string
 	GeneratedFile    string
 	CompilerFile     string
+	History          transformmap.Map
 	GeneratedRegions []GeneratedRegion
 	LineMappings     []analyzer.LineMapping
 }
 
-// FileCoveragePlan keeps coverage acceptance authority separate from SourceMap
-// coordinate translation. Correspondence is planned before Go cover executes.
+// FileCoveragePlan associates an immutable transformation with the independent
+// Go-cover correspondence planned before Go cover executes. Correspondence,
+// not History, remains coverage acceptance authority.
 type FileCoveragePlan struct {
 	WorkspaceFile  string
 	OriginalPath   string
+	Transformation transformmap.Map
 	Correspondence c0.CoverageCorrespondence
 }
 
@@ -146,9 +150,9 @@ func InstrumentPackage(options PackageOptions) (PackageResult, error) {
 		path string
 		mode os.FileMode
 		data []byte
-		map_ SourceMap
 	}
 	transformed := make([]transformedFile, 0, len(options.Files))
+	transformations := make([]FileTransformation, 0, len(options.Files))
 	coveragePlans := make([]FileCoveragePlan, 0, len(options.Files))
 	for _, mapping := range options.Files {
 		if err := ctx.Err(); err != nil {
@@ -167,14 +171,19 @@ func InstrumentPackage(options PackageOptions) (PackageResult, error) {
 			}
 		}
 		if len(mapping.Analysis.Decisions) == 0 && len(mapping.Analysis.Clauses) == 0 {
+			contents, err := os.ReadFile(mapping.CopyPath)
+			if err != nil {
+				return PackageResult{}, fmt.Errorf("inspect unchanged copied file %q: read: %w", mapping.CopyPath, err)
+			}
+			if hash := sha256.Sum256(contents); hash != mapping.Analysis.SourceHash {
+				return PackageResult{}, fmt.Errorf("inspect unchanged copied file %q: copy differs from analyzed original", mapping.CopyPath)
+			}
+			transformation, err := buildFileTransformation(mapping.CopyPath, mapping.Analysis, contents, helperName, "", "", nil)
+			if err != nil {
+				return PackageResult{}, fmt.Errorf("record unchanged copied file %q: %w", mapping.CopyPath, err)
+			}
+			transformations = append(transformations, transformation)
 			if planCoverage {
-				contents, err := os.ReadFile(mapping.CopyPath)
-				if err != nil {
-					return PackageResult{}, fmt.Errorf("plan coverage for copied file %q: read: %w", mapping.CopyPath, err)
-				}
-				if hash := sha256.Sum256(contents); hash != mapping.Analysis.SourceHash {
-					return PackageResult{}, fmt.Errorf("plan coverage for copied file %q: copy differs from analyzed original", mapping.CopyPath)
-				}
 				correspondence, err := planRewrittenCoverageCorrespondence(
 					ctx, options.PackagePath, mapping.Analysis.RelativePath, originalInventory, contents, nil,
 				)
@@ -182,19 +191,20 @@ func InstrumentPackage(options PackageOptions) (PackageResult, error) {
 					return PackageResult{}, fmt.Errorf("plan coverage for copied file %q: %w", mapping.CopyPath, err)
 				}
 				coveragePlans = append(coveragePlans, FileCoveragePlan{
-					WorkspaceFile: mapping.CopyPath, OriginalPath: mapping.Analysis.RelativePath, Correspondence: correspondence,
+					WorkspaceFile: mapping.CopyPath, OriginalPath: mapping.Analysis.RelativePath,
+					Transformation: transformation.History, Correspondence: correspondence,
 				})
 			}
 			continue
 		}
-		data, mode, sourceMap, err := transformCopiedFile(mapping.CopyPath, mapping.Analysis, helperName, options.CompilerClauseSelection)
+		data, mode, transformation, err := transformCopiedFile(mapping.CopyPath, mapping.Analysis, helperName, options.CompilerClauseSelection)
 		if err != nil {
 			return PackageResult{}, err
 		}
 		if planCoverage {
 			generatedProfileFiles := []string{
-				filepath.ToSlash(filepath.Join(filepath.Dir(mapping.Analysis.RelativePath), sourceMap.GeneratedFile)),
-				filepath.ToSlash(filepath.Join(filepath.Dir(mapping.Analysis.RelativePath), sourceMap.CompilerFile)),
+				filepath.ToSlash(filepath.Join(filepath.Dir(mapping.Analysis.RelativePath), transformation.GeneratedFile)),
+				filepath.ToSlash(filepath.Join(filepath.Dir(mapping.Analysis.RelativePath), transformation.CompilerFile)),
 			}
 			correspondence, err := planRewrittenCoverageCorrespondence(
 				ctx, options.PackagePath, mapping.Analysis.RelativePath, originalInventory, data, generatedProfileFiles,
@@ -203,13 +213,15 @@ func InstrumentPackage(options PackageOptions) (PackageResult, error) {
 				return PackageResult{}, fmt.Errorf("instrument copied file %q: %w", mapping.CopyPath, err)
 			}
 			coveragePlans = append(coveragePlans, FileCoveragePlan{
-				WorkspaceFile: mapping.CopyPath, OriginalPath: mapping.Analysis.RelativePath, Correspondence: correspondence,
+				WorkspaceFile: mapping.CopyPath, OriginalPath: mapping.Analysis.RelativePath,
+				Transformation: transformation.History, Correspondence: correspondence,
 			})
 		}
 		if err := ctx.Err(); err != nil {
 			return PackageResult{}, err
 		}
-		transformed = append(transformed, transformedFile{path: mapping.CopyPath, mode: mode, data: data, map_: sourceMap})
+		transformed = append(transformed, transformedFile{path: mapping.CopyPath, mode: mode, data: data})
+		transformations = append(transformations, transformation)
 	}
 	for _, file := range transformed {
 		if err := ctx.Err(); err != nil {
@@ -234,13 +246,10 @@ func InstrumentPackage(options PackageOptions) (PackageResult, error) {
 	if err != nil {
 		return PackageResult{}, err
 	}
-	result := PackageResult{
-		HelperName: helperName, BridgePath: bridgePath, GeneratedFiles: []string{bridgePath}, CoveragePlans: coveragePlans,
-	}
-	for _, file := range transformed {
-		result.SourceMaps = append(result.SourceMaps, file.map_)
-	}
-	return result, nil
+	return PackageResult{
+		HelperName: helperName, BridgePath: bridgePath, GeneratedFiles: []string{bridgePath},
+		Transformations: transformations, CoveragePlans: coveragePlans,
+	}, nil
 }
 
 func planRewrittenCoverageCorrespondence(
@@ -418,62 +427,251 @@ type %sEvaluationID = %sRuntime.EvaluationID
 	}
 }
 
-func transformCopiedFile(copyPath string, analysis analyzer.File, helperName string, compilerClauseSelection bool) ([]byte, os.FileMode, SourceMap, error) {
+func transformCopiedFile(copyPath string, analysis analyzer.File, helperName string, compilerClauseSelection bool) ([]byte, os.FileMode, FileTransformation, error) {
 	if copyPath == "" {
-		return nil, 0, SourceMap{}, errors.New("instrument copied file: copy path is empty")
+		return nil, 0, FileTransformation{}, errors.New("instrument copied file: copy path is empty")
 	}
 	if err := ensureDistinctCopy(copyPath, analysis.OriginalPath); err != nil {
-		return nil, 0, SourceMap{}, fmt.Errorf("instrument copied file %q: %w", copyPath, err)
+		return nil, 0, FileTransformation{}, fmt.Errorf("instrument copied file %q: %w", copyPath, err)
 	}
 	info, err := os.Stat(copyPath)
 	if err != nil {
-		return nil, 0, SourceMap{}, fmt.Errorf("instrument copied file %q: stat: %w", copyPath, err)
+		return nil, 0, FileTransformation{}, fmt.Errorf("instrument copied file %q: stat: %w", copyPath, err)
 	}
 	contents, err := os.ReadFile(copyPath)
 	if err != nil {
-		return nil, 0, SourceMap{}, fmt.Errorf("instrument copied file %q: read: %w", copyPath, err)
+		return nil, 0, FileTransformation{}, fmt.Errorf("instrument copied file %q: read: %w", copyPath, err)
 	}
 	if hash := sha256.Sum256(contents); hash != analysis.SourceHash {
-		return nil, 0, SourceMap{}, fmt.Errorf("instrument copied file %q: copy differs from analyzed original", copyPath)
+		return nil, 0, FileTransformation{}, fmt.Errorf("instrument copied file %q: copy differs from analyzed original", copyPath)
 	}
 
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, filepath.ToSlash(analysis.RelativePath), contents, parser.ParseComments|parser.AllErrors)
 	if err != nil {
-		return nil, 0, SourceMap{}, fmt.Errorf("instrument copied file %q: parse: %w", copyPath, err)
+		return nil, 0, FileTransformation{}, fmt.Errorf("instrument copied file %q: parse: %w", copyPath, err)
 	}
 	transformer, err := newFileTransformer(fset, helperName, analysis, compilerClauseSelection)
 	if err != nil {
-		return nil, 0, SourceMap{}, fmt.Errorf("instrument copied file %q: %w", copyPath, err)
+		return nil, 0, FileTransformation{}, fmt.Errorf("instrument copied file %q: %w", copyPath, err)
 	}
 	if err := transformer.transform(file); err != nil {
-		return nil, 0, SourceMap{}, fmt.Errorf("instrument copied file %q: %w", copyPath, err)
+		return nil, 0, FileTransformation{}, fmt.Errorf("instrument copied file %q: %w", copyPath, err)
 	}
 
 	var output bytes.Buffer
 	config := printer.Config{Mode: printer.SourcePos | printer.TabIndent | printer.UseSpaces, Tabwidth: 8}
 	if err := config.Fprint(&output, fset, file); err != nil {
-		return nil, 0, SourceMap{}, fmt.Errorf("instrument copied file %q: print with source positions: %w", copyPath, err)
+		return nil, 0, FileTransformation{}, fmt.Errorf("instrument copied file %q: print with source positions: %w", copyPath, err)
 	}
 	generatedIdentity := sha256.Sum256(append(append([]byte(nil), analysis.RelativePath...), analysis.SourceHash[:]...))
-	sourceMap := SourceMap{
-		InstrumentedFile: copyPath,
-		OriginalFile:     filepath.ToSlash(analysis.RelativePath),
-		GeneratedFile:    filepath.ToSlash(filepath.Join(".gomcdc", "generated", fmt.Sprintf("%x.go", generatedIdentity[:12]))),
-		CompilerFile:     filepath.ToSlash(filepath.Join(".gomcdc", "compiler", fmt.Sprintf("%x.go", generatedIdentity[:12]))),
-		GeneratedRegions: append([]GeneratedRegion(nil), transformer.generatedRegions...),
-		LineMappings:     append([]analyzer.LineMapping(nil), analysis.LineMappings...),
-	}
+	originalFile := filepath.ToSlash(analysis.RelativePath)
+	generatedFile := filepath.ToSlash(filepath.Join(".gomcdc", "generated", fmt.Sprintf("%x.go", generatedIdentity[:12])))
+	compilerFile := filepath.ToSlash(filepath.Join(".gomcdc", "compiler", fmt.Sprintf("%x.go", generatedIdentity[:12])))
 	formatted, err := mapGeneratedStatements(
-		output.Bytes(), helperName, sourceMap.OriginalFile, sourceMap.GeneratedFile, sourceMap.CompilerFile, analysis.Source,
+		output.Bytes(), helperName, originalFile, generatedFile, compilerFile, analysis.Source,
 	)
 	if err != nil {
-		return nil, 0, SourceMap{}, fmt.Errorf("instrument copied file %q: map generated coverage lines: %w", copyPath, err)
+		return nil, 0, FileTransformation{}, fmt.Errorf("instrument copied file %q: map generated coverage lines: %w", copyPath, err)
 	}
 	if _, err := parser.ParseFile(token.NewFileSet(), copyPath, formatted, parser.ParseComments|parser.AllErrors); err != nil {
-		return nil, 0, SourceMap{}, fmt.Errorf("instrument copied file %q: validate transformed source: %w", copyPath, err)
+		return nil, 0, FileTransformation{}, fmt.Errorf("instrument copied file %q: validate transformed source: %w", copyPath, err)
 	}
-	return append([]byte(nil), formatted...), info.Mode().Perm(), sourceMap, nil
+	transformation, err := buildFileTransformation(
+		copyPath, analysis, formatted, helperName, generatedFile, compilerFile, transformer.generatedRegions,
+	)
+	if err != nil {
+		return nil, 0, FileTransformation{}, fmt.Errorf("instrument copied file %q: record transformation: %w", copyPath, err)
+	}
+	return append([]byte(nil), formatted...), info.Mode().Perm(), transformation, nil
+}
+
+func buildFileTransformation(
+	copyPath string,
+	analysis analyzer.File,
+	instrumented []byte,
+	helperName string,
+	generatedFile string,
+	compilerFile string,
+	generatedRegions []GeneratedRegion,
+) (FileTransformation, error) {
+	originalFile := filepath.ToSlash(analysis.RelativePath)
+	sourceRevision, err := transformmap.NewRevision("original-byte:"+originalFile, analysis.Source)
+	if err != nil {
+		return FileTransformation{}, err
+	}
+	targetRevision, err := transformmap.NewRevision("instrumented-byte:"+originalFile, instrumented)
+	if err != nil {
+		return FileTransformation{}, err
+	}
+	relations, err := transformationRelations(
+		analysis.Source, instrumented, helperName, generatedFile, compilerFile,
+	)
+	if err != nil {
+		return FileTransformation{}, err
+	}
+	history, err := transformmap.New(sourceRevision, targetRevision, relations)
+	if err != nil {
+		return FileTransformation{}, err
+	}
+	return FileTransformation{
+		InstrumentedFile: copyPath,
+		OriginalFile:     originalFile,
+		GeneratedFile:    generatedFile,
+		CompilerFile:     compilerFile,
+		History:          history,
+		GeneratedRegions: append([]GeneratedRegion(nil), generatedRegions...),
+		LineMappings:     append([]analyzer.LineMapping(nil), analysis.LineMappings...),
+	}, nil
+}
+
+// transformationRelations deliberately records AST-printer output as lossy
+// unless the complete file is byte-identical. Reserved generated statements
+// and their synthetic //line directives are separated from source-derived
+// output. Coverage correspondence may prove more about statement obligations,
+// but it must not upgrade this byte-provenance relation.
+func transformationRelations(
+	original []byte,
+	instrumented []byte,
+	helperName string,
+	generatedFile string,
+	compilerFile string,
+) ([]transformmap.Relation, error) {
+	if bytes.Equal(original, instrumented) {
+		if len(original) == 0 {
+			return nil, nil
+		}
+		return []transformmap.Relation{{
+			Kind:    transformmap.Preserved,
+			Sources: []transformmap.Range{{Start: 0, End: uint64(len(original))}},
+			Targets: []transformmap.Range{{Start: 0, End: uint64(len(instrumented))}},
+		}}, nil
+	}
+
+	synthetic, err := syntheticInstrumentedRanges(original, instrumented, helperName, generatedFile, compilerFile)
+	if err != nil {
+		return nil, err
+	}
+	derived := complementTransformRanges(uint64(len(instrumented)), synthetic)
+	relations := make([]transformmap.Relation, 0, 2)
+	switch {
+	case len(original) > 0 && len(derived) > 0:
+		relations = append(relations, transformmap.Relation{
+			Kind:    transformmap.Lossy,
+			Sources: []transformmap.Range{{Start: 0, End: uint64(len(original))}},
+			Targets: derived,
+		})
+	case len(original) > 0:
+		relations = append(relations, transformmap.Relation{
+			Kind:    transformmap.Deleted,
+			Sources: []transformmap.Range{{Start: 0, End: uint64(len(original))}},
+		})
+	case len(derived) > 0:
+		synthetic = append(synthetic, derived...)
+		sort.Slice(synthetic, func(i, j int) bool { return synthetic[i].Start < synthetic[j].Start })
+		synthetic = mergeTransformRanges(synthetic)
+	}
+	if len(synthetic) > 0 {
+		relations = append(relations, transformmap.Relation{Kind: transformmap.Synthetic, Targets: synthetic})
+	}
+	return relations, nil
+}
+
+type physicalLineRange struct {
+	line       int
+	start, end uint64
+	text       string
+}
+
+func syntheticInstrumentedRanges(
+	original []byte,
+	instrumented []byte,
+	helperName string,
+	generatedFile string,
+	compilerFile string,
+) ([]transformmap.Range, error) {
+	generatedLines, err := generatedStatementLineKinds(instrumented, helperName)
+	if err != nil {
+		return nil, fmt.Errorf("classify generated statement ranges: %w", err)
+	}
+	originalDirectives := make(map[logicalLine]int)
+	for _, line := range physicalLineRanges(original) {
+		if file, logical, column, directive := parseLineDirective(line.text); directive {
+			originalDirectives[logicalLine{file: normalizeLogicalFilename(file), line: logical, column: column}]++
+		}
+	}
+	generatedFile = normalizeLogicalFilename(generatedFile)
+	compilerFile = normalizeLogicalFilename(compilerFile)
+	var ranges []transformmap.Range
+	for _, line := range physicalLineRanges(instrumented) {
+		synthetic := generatedLines[line.line] != generatedLineNone
+		if file, logical, column, directive := parseLineDirective(line.text); directive {
+			normalized := normalizeLogicalFilename(file)
+			identity := logicalLine{file: normalized, line: logical, column: column}
+			existed := originalDirectives[identity] > 0
+			if existed {
+				originalDirectives[identity]--
+			}
+			if normalized == generatedFile || normalized == compilerFile || !existed {
+				synthetic = true
+			}
+		}
+		if synthetic {
+			ranges = append(ranges, transformmap.Range{Start: line.start, End: line.end})
+		}
+	}
+	return mergeTransformRanges(ranges), nil
+}
+
+func physicalLineRanges(source []byte) []physicalLineRange {
+	lines := make([]physicalLineRange, 0, bytes.Count(source, []byte{'\n'})+1)
+	for line, start := 1, 0; start < len(source); line++ {
+		end := bytes.IndexByte(source[start:], '\n')
+		if end < 0 {
+			end = len(source)
+		} else {
+			end += start + 1
+		}
+		textEnd := end
+		for textEnd > start && (source[textEnd-1] == '\n' || source[textEnd-1] == '\r') {
+			textEnd--
+		}
+		lines = append(lines, physicalLineRange{
+			line: line, start: uint64(start), end: uint64(end), text: string(source[start:textEnd]),
+		})
+		start = end
+	}
+	return lines
+}
+
+func complementTransformRanges(size uint64, excluded []transformmap.Range) []transformmap.Range {
+	position := uint64(0)
+	result := make([]transformmap.Range, 0, len(excluded)+1)
+	for _, current := range excluded {
+		if position < current.Start {
+			result = append(result, transformmap.Range{Start: position, End: current.Start})
+		}
+		position = current.End
+	}
+	if position < size {
+		result = append(result, transformmap.Range{Start: position, End: size})
+	}
+	return result
+}
+
+func mergeTransformRanges(ranges []transformmap.Range) []transformmap.Range {
+	if len(ranges) == 0 {
+		return nil
+	}
+	result := make([]transformmap.Range, 0, len(ranges))
+	for _, current := range ranges {
+		if len(result) > 0 && result[len(result)-1].End == current.Start {
+			result[len(result)-1].End = current.End
+			continue
+		}
+		result = append(result, current)
+	}
+	return result
 }
 
 type logicalLine struct {
@@ -485,8 +683,9 @@ type logicalLine struct {
 // mapGeneratedStatements requests a virtual filename for every inserted
 // statement while retaining printer.SourcePos's logical line for the next
 // original line. Some Go cover versions retain the physical filename anyway;
-// SourceMap.GeneratedRegions is the authoritative exclusion mechanism when the
-// compiler profile retains physical filenames.
+// GeneratedRegions retains a diagnostic manifest for the transformation. The
+// independently validated CoverageCorrespondence remains coverage acceptance
+// authority when Go cover retains physical filenames.
 func mapGeneratedStatements(source []byte, helperName, originalFile, generatedFile, compilerFile string, originalSource []byte) ([]byte, error) {
 	lines := strings.Split(string(source), "\n")
 	originalPositions := originalLogicalLines(originalSource, originalFile)
@@ -1314,9 +1513,11 @@ func (transformer *fileTransformer) recordGenerated(kind string, anchor ast.Node
 	transformer.generatedRegions = append(transformer.generatedRegions, GeneratedRegion{
 		Kind: kind,
 		Anchor: cover.SourceLocation{
-			File:  filepath.ToSlash(transformer.originalFile),
-			Start: cover.Position{Line: start.Line, Column: start.Column},
-			End:   cover.Position{Line: end.Line, Column: end.Column},
+			File:        filepath.ToSlash(transformer.originalFile),
+			Start:       cover.Position{Line: start.Line, Column: start.Column},
+			End:         cover.Position{Line: end.Line, Column: end.Column},
+			StartOffset: start.Offset,
+			EndOffset:   end.Offset,
 		},
 		StatementCount: count,
 	})

@@ -182,6 +182,16 @@ type MCDCStrategy interface {
 }
 ```
 
+When Masking MC/DC is selected, report construction may analyze independent
+Decisions with a bounded worker pool. The effective worker count is at most the
+Decision count, `GOMAXPROCS`, and four. Each running Decision retains the D19
+per-obligation limits; those limits are not divided between workers and do not
+become a process-wide memory limit. Workers own their solver state, results are
+placed at the pre-sorted Decision index, and analysis parallelism cannot change
+status, witness selection, aggregation, or output order. Cancellation starts no
+new Masking analysis, preserves already accepted evidence and other metrics,
+and marks unscheduled Masking obligations `analysis-incomplete`.
+
 ## 6. Aggregation and evidence
 
 ### D20. Aggregation
@@ -197,6 +207,18 @@ producer output becomes coverage evidence only after integrity, provenance,
 producer compatibility, correspondence mapping, and execution completeness are
 validated. Accepted evidence is then projected to original Inventory
 obligations; generated statements never add obligations.
+
+Instrumentation separately records byte-coordinate transformation provenance
+between immutable source revisions. A revision exposes its stage identity,
+content digest, size, and zero-based byte unit. Its total half-open range
+relation distinguishes preserved, synthetic, deleted, ambiguous, and lossy
+bytes, including one-to-many and many-to-one history. AST-printer output is
+lossy unless the complete file is byte-identical. Composition requires the
+same intermediate identity, digest, and size and exactly aligned relation
+boundaries; it fails instead of approximating a partial match. This provenance
+model never accepts coverage evidence: Go-cover correspondence and the
+unchanged Inventory remain the independent acceptance and obligation
+authorities.
 
 Each requested producer reports four independent axes: `integrity` is `valid`,
 `valid-prefix`, `invalid`, or `unavailable`; `completeness` is `complete`,
