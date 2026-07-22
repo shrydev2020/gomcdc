@@ -256,7 +256,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 
 	jsonMode := goTestJSONEnabled(opts.goTestArgs)
 	measurement, measurementWork, measurementErr := measure(measurementRequest{
-		context: ctx, timeout: opts.timeout, goTestArgs: opts.goTestArgs, json: jsonMode,
+		context: ctx, timeout: opts.timeout, goTestArgs: opts.goTestArgs, goFlags: filteredGOFLAGS, json: jsonMode,
 		workDirParent: opts.workDirParent, keepWorkDir: opts.keepWorkDir,
 		loaded: loaded, sources: sources, generated: generatedFiles, ignoredCoverageFiles: ignoredCoverageFiles,
 		decisions: decisions, clauses: clauses, noMatches: noMatches,

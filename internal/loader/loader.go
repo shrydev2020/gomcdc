@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/shrydev2020/gomcdc/internal/goflags"
 	"github.com/shrydev2020/gomcdc/internal/modulecontext"
 	"golang.org/x/tools/go/packages"
 )
@@ -33,11 +34,22 @@ type File struct {
 	PackageName string
 }
 
+// WorkingDirectoryBase identifies which frozen source root owns
+// RelativeWorkDir. Module is the ordinary case; Workspace is used when a
+// single-module go.work command starts above the module directory.
+type WorkingDirectoryBase uint8
+
+const (
+	WorkingDirectoryModule WorkingDirectoryBase = iota
+	WorkingDirectoryWorkspace
+)
+
 type Result struct {
 	ModulePath       string
 	ModuleRoot       string
 	WorkingDir       string
 	RelativeWorkDir  string
+	WorkingDirBase   WorkingDirectoryBase
 	ModuleSettings   modulecontext.Settings
 	Files            []File
 	PackageImportSet []string
@@ -59,9 +71,30 @@ func Load(ctx context.Context, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("resolve working directory: %w", err)
 	}
-	moduleSettings, err := modulecontext.Discover(ctx, dir)
+	goFlags := os.Getenv("GOFLAGS")
+	if opts.GOFLAGS != nil {
+		goFlags = *opts.GOFLAGS
+	}
+	moduleSettings, err := modulecontext.Discover(ctx, modulecontext.DiscoverOptions{
+		Dir:        dir,
+		BuildFlags: opts.BuildFlags,
+		GOFLAGS:    goFlags,
+	})
 	if err != nil {
 		return Result{}, err
+	}
+	packageGOFLAGS := goFlags
+	packageBuildFlags := append([]string(nil), opts.BuildFlags...)
+	if moduleSettings.HasAlternateModFile() {
+		// x/tools/go/packages performs a preliminary `go env` invocation.
+		// cmd/go rejects -modfile for that verb, so normalize the effective
+		// selection into the list/build flags and keep it out of that env call.
+		packageGOFLAGS, err = goflags.Without(goFlags, map[string]bool{"modfile": true})
+		if err != nil {
+			return Result{}, fmt.Errorf("parse GOFLAGS for package loading: %w", err)
+		}
+		packageBuildFlags = withoutBuildFlag(packageBuildFlags, "modfile")
+		packageBuildFlags = append(packageBuildFlags, "-modfile="+moduleSettings.AlternateModFilePath())
 	}
 
 	mode := packages.NeedName |
@@ -75,11 +108,11 @@ func Load(ctx context.Context, opts Options) (Result, error) {
 		Context:    ctx,
 		Mode:       mode,
 		Dir:        dir,
-		BuildFlags: append([]string(nil), opts.BuildFlags...),
+		BuildFlags: packageBuildFlags,
 		Tests:      false,
 	}
-	if opts.GOFLAGS != nil {
-		cfg.Env = overrideEnvironment("GOFLAGS", *opts.GOFLAGS)
+	if opts.GOFLAGS != nil || moduleSettings.HasAlternateModFile() {
+		cfg.Env = overrideEnvironment("GOFLAGS", packageGOFLAGS)
 	}
 	pkgs, err := packages.Load(cfg, opts.Patterns...)
 	if err != nil {
@@ -134,9 +167,17 @@ func Load(ctx context.Context, opts Options) (Result, error) {
 	if len(files) == 0 {
 		return Result{}, errors.New("load packages: matched packages contain no instrumentable Go files")
 	}
-	relWork, err := filepath.Rel(moduleRoot, workingDir)
-	if err != nil || relWork == ".." || strings.HasPrefix(relWork, ".."+string(filepath.Separator)) {
-		return Result{}, fmt.Errorf("working directory %q is outside module root %q", workingDir, moduleRoot)
+	workBase := WorkingDirectoryModule
+	relWork, err := relativeWithin(moduleRoot, workingDir)
+	if err != nil && moduleSettings.Active() {
+		workspaceRoot := filepath.Dir(moduleSettings.GoWorkPath())
+		if workingDir == workspaceRoot {
+			relWork, err = ".", nil
+			workBase = WorkingDirectoryWorkspace
+		}
+	}
+	if err != nil {
+		return Result{}, fmt.Errorf("working directory %q is outside the active module and is not the single-module workspace root", workingDir)
 	}
 
 	result := Result{
@@ -144,6 +185,7 @@ func Load(ctx context.Context, opts Options) (Result, error) {
 		ModuleRoot:      moduleRoot,
 		WorkingDir:      workingDir,
 		RelativeWorkDir: relWork,
+		WorkingDirBase:  workBase,
 		ModuleSettings:  moduleSettings,
 	}
 	for _, file := range files {
@@ -159,6 +201,29 @@ func Load(ctx context.Context, opts Options) (Result, error) {
 	sort.Strings(result.PackageImportSet)
 	sort.Strings(result.CoverPackageImportSet)
 	return result, nil
+}
+
+func withoutBuildFlag(flags []string, name string) []string {
+	result := make([]string, 0, len(flags))
+	for index := 0; index < len(flags); index++ {
+		flag := flags[index]
+		if goflags.Name(flag) == name {
+			if !strings.Contains(flag, "=") && index+1 < len(flags) {
+				index++
+			}
+			continue
+		}
+		result = append(result, flag)
+	}
+	return result
+}
+
+func relativeWithin(root, candidate string) (string, error) {
+	relative, err := filepath.Rel(root, candidate)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("%q is outside %q", candidate, root)
+	}
+	return relative, nil
 }
 
 func overrideEnvironment(key, value string) []string {

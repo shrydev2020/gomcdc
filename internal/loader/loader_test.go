@@ -1,7 +1,6 @@
 package loader
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -17,7 +16,7 @@ func TestLoadModulePackages(t *testing.T) {
 	writeLoaderFile(t, filepath.Join(root, "alpha", "alpha_test.go"), "package alpha\n")
 	writeLoaderFile(t, filepath.Join(root, "beta", "beta.go"), "package beta\n")
 
-	withoutTests, err := Load(context.Background(), Options{Dir: root, Patterns: []string{"./..."}})
+	withoutTests, err := Load(t.Context(), Options{Dir: root, Patterns: []string{"./..."}})
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -31,7 +30,7 @@ func TestLoadModulePackages(t *testing.T) {
 		t.Fatalf("package count = %d, want 2", got)
 	}
 
-	withTests, err := Load(context.Background(), Options{Dir: root, Patterns: []string{"./..."}, IncludeTests: true})
+	withTests, err := Load(t.Context(), Options{Dir: root, Patterns: []string{"./..."}, IncludeTests: true})
 	if err != nil {
 		t.Fatalf("Load(include tests) error = %v", err)
 	}
@@ -48,7 +47,7 @@ func TestLoadHonorsBuildTags(t *testing.T) {
 	writeLoaderFile(t, filepath.Join(root, "custom.go"), "//go:build customtag\n\npackage tags\n")
 	writeLoaderFile(t, filepath.Join(root, "other.go"), "//go:build !customtag\n\npackage tags\n")
 
-	result, err := Load(context.Background(), Options{
+	result, err := Load(t.Context(), Options{
 		Dir: root, Patterns: []string{"."}, BuildFlags: []string{"-tags=customtag"},
 	})
 	if err != nil {
@@ -69,12 +68,47 @@ func TestLoadAcceptsActiveSingleModuleWorkspace(t *testing.T) {
 	writeLoaderFile(t, filepath.Join(module, "go.mod"), "module example.test/workmodule\n\ngo 1.26\n")
 	writeLoaderFile(t, filepath.Join(module, "value.go"), "package workmodule\n")
 	writeLoaderFile(t, filepath.Join(root, "go.work"), "go 1.26\n\nuse ./module\n")
-	result, err := Load(context.Background(), Options{Dir: module, Patterns: []string{"."}})
+	result, err := Load(t.Context(), Options{Dir: module, Patterns: []string{"."}})
 	if err != nil {
 		t.Fatalf("Load() error = %v, want single-module go.work support", err)
 	}
 	if result.ModuleSettings.GoWorkPath() != canonicalLoaderPath(t, filepath.Join(root, "go.work")) {
 		t.Fatalf("GoWorkPath = %q, want %q", result.ModuleSettings.GoWorkPath(), canonicalLoaderPath(t, filepath.Join(root, "go.work")))
+	}
+}
+
+func TestLoadAcceptsSingleModuleWorkspaceFromWorkspaceRoot(t *testing.T) {
+	t.Setenv("GOWORK", "")
+	root := t.TempDir()
+	module := filepath.Join(root, "module")
+	writeLoaderFile(t, filepath.Join(module, "go.mod"), "module example.test/workmodule\n\ngo 1.26\n")
+	writeLoaderFile(t, filepath.Join(module, "value.go"), "package workmodule\n")
+	writeLoaderFile(t, filepath.Join(root, "go.work"), "go 1.26\n\nuse ./module\n")
+
+	result, err := Load(t.Context(), Options{Dir: root, Patterns: []string{"./module"}})
+	if err != nil {
+		t.Fatalf("Load() error = %v, want workspace-root support", err)
+	}
+	if result.WorkingDirBase != WorkingDirectoryWorkspace || result.RelativeWorkDir != "." {
+		t.Fatalf("working directory mapping = base %d relative %q, want workspace/.", result.WorkingDirBase, result.RelativeWorkDir)
+	}
+}
+
+func TestLoadRejectsUncopiedWorkspaceSubdirectory(t *testing.T) {
+	t.Setenv("GOWORK", "")
+	root := t.TempDir()
+	module := filepath.Join(root, "module")
+	invocationDir := filepath.Join(root, "tools")
+	writeLoaderFile(t, filepath.Join(module, "go.mod"), "module example.test/workmodule\n\ngo 1.26\n")
+	writeLoaderFile(t, filepath.Join(module, "value.go"), "package workmodule\n")
+	writeLoaderFile(t, filepath.Join(root, "go.work"), "go 1.26\n\nuse ./module\n")
+	if err := os.MkdirAll(invocationDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(t.Context(), Options{Dir: invocationDir, Patterns: []string{"../module"}})
+	if err == nil || !strings.Contains(err.Error(), "is not the single-module workspace root") {
+		t.Fatalf("Load() error = %v, want unmapped workspace-subdirectory rejection", err)
 	}
 }
 
@@ -89,7 +123,7 @@ func TestLoadRejectsActiveMultiModuleWorkspace(t *testing.T) {
 	writeLoaderFile(t, filepath.Join(second, "value.go"), "package second\n")
 	writeLoaderFile(t, filepath.Join(root, "go.work"), "go 1.26\n\nuse (\n\t./first\n\t./second\n)\n")
 
-	_, err := Load(context.Background(), Options{Dir: first, Patterns: []string{"."}})
+	_, err := Load(t.Context(), Options{Dir: first, Patterns: []string{"."}})
 	if err == nil || !strings.Contains(err.Error(), "has 2 main modules") {
 		t.Fatalf("Load() error = %v, want explicit multi-module rejection", err)
 	}
@@ -101,7 +135,7 @@ func TestLoadDoesNotExposeSyntheticExternalTestPackageAsTarget(t *testing.T) {
 	writeLoaderFile(t, filepath.Join(root, "go.mod"), "module example.test/external\n\ngo 1.26\n")
 	writeLoaderFile(t, filepath.Join(root, "value.go"), "package external\n")
 	writeLoaderFile(t, filepath.Join(root, "value_test.go"), "package external_test\n")
-	result, err := Load(context.Background(), Options{Dir: root, Patterns: []string{"."}, IncludeTests: true})
+	result, err := Load(t.Context(), Options{Dir: root, Patterns: []string{"."}, IncludeTests: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +152,7 @@ func TestLoadRetainsProductionFilesWithTypeErrorsForPartialGoTestRun(t *testing.
 	root := t.TempDir()
 	writeLoaderFile(t, filepath.Join(root, "go.mod"), "module example.test/broken\n\ngo 1.26\n")
 	writeLoaderFile(t, filepath.Join(root, "broken.go"), "package broken\nvar Value string = 42\n")
-	result, err := Load(context.Background(), Options{Dir: root, Patterns: []string{"."}})
+	result, err := Load(t.Context(), Options{Dir: root, Patterns: []string{"."}})
 	if err != nil {
 		t.Fatalf("Load() error = %v; go test must own the build failure", err)
 	}

@@ -5,8 +5,9 @@
 
 ## 修正結果
 
-7件すべてを、個別箇所への例外追加ではなく、対応する公開契約のauthorityと
-不変条件を明示する形で修正した。
+前回の7件は、個別箇所への例外追加ではなく、対応する公開契約のauthorityと
+不変条件を明示する形で修正した。現在の総合判定は後述の「再レビュー結果」と
+「再判定」を正とする。
 
 | Finding | 本質的な対応 | 回帰証拠 |
 | --- | --- | --- |
@@ -17,6 +18,32 @@
 | test前割り込みの結果軸 | test、measurement、integrityの結果はreport組立時にboolから推測せず、measurementが記録した実行事実から一度だけ生成する。未開始testと未開始integrityは`not-run`のまま保持する。 | `TestMeasurementResultsPreserveIndependentExecutionFacts`、`TestAssembleReportInputClassifiesCallerInterruption` |
 | cleanupとreport公開順 | workspace finalizationをexactly-onceの状態遷移にし、通常経路ではreport構築前に確定する。失敗は`measurement=failed`と`workspace-cleanup-failed`へ格納してからreportを公開し、早期returnだけdeferで回収する。 | `TestCleanupFailureIsPublishedInReportBeforeExit`、`TestAssembleReportInputRecordsCleanupAsMeasurementFailure` |
 | coverage alias | `--coverage`をD27のtokenとの完全一致grammarとし、大小文字、前後空白、空tokenをCLI errorにする。 | `TestParseCoverageCanonicalNames`、`TestParseCoverageRejectsUnknownAndEmpty` |
+| 代替modfile | effectiveな`-modfile`選択を明示引数優先で一度だけ確定し、対応する`.mod`/`.sum`をfreezeして変更検出対象へ含める。test側はlocal replacementを作業用moduleへ再配置したsnapshotだけを選択し、source側の指定を再利用しない。 | `TestDiscoverFreezesAndRelocatesAlternateModFileAndSum`、`TestAlternateModFileExplicitFlagOverridesGOFLAGS`、`TestCreateMaterializesAlternateModFileAndSum`、`TestAlternateModFileAppliesSameSnapshotToAnalysisAndTest` |
+| go.work root起動 | source moduleの所有rootと呼び出し位置のrootを別fieldとして保持する。module外でも単一module `go.work`のroot内なら、その相対起動位置を作業用workspace rootへ写像する。 | `TestLoadAcceptsSingleModuleWorkspaceFromWorkspaceRoot`、`TestSingleModuleGoWorkSettingsApplyToAnalysisAndTest/workspace-root` |
+
+## 再レビュー結果
+
+前回7件への修正は維持されている。追加で確認したmodule設定の2境界も、設定の
+単一authorityと作業用workspaceへの写像へ統合した。以下の2件は再レビューで確認した
+修正前の状態と、今回満たした修正条件を記録する。
+
+### [P1] 代替modfileがmodule設定のauthorityに含まれていない
+
+- **場所:** [`internal/loader/flags.go:49-59`](../internal/loader/flags.go#L49-L59)、[`internal/modulecontext/context.go:18-27`](../internal/modulecontext/context.go#L18-L27)、[`internal/modulecontext/context.go:145-195`](../internal/modulecontext/context.go#L145-L195)、[`internal/workspace/workspace.go:100-110`](../internal/workspace/workspace.go#L100-L110)
+- **違反する要件:** D26は、`--`以降の非競合引数を解析と全runへ同じ意味で適用し、解析とtestで同じmodule設定を使用するよう要求している（[`docs/specification.ja.md:245-247`](../docs/specification.ja.md#L245-L247)）。
+- **観察:** `-modfile`はbuild flagとして受理されるが、freeze、変更検出、作業用workspaceへの再配置は通常の`go.mod`と`go.work`だけを対象とする。`GOFLAGS`から指定した場合も同じauthority外になる。
+- **外部影響:** 解析時に有効だった代替modfileの相対module設定が、作業用workspaceのtestでは別の意味になり得る。通常の`go test`が成功する構成でも、gomcdc側だけがtest failureを返す。
+- **必要な修正条件:** effective module configurationのauthorityに、選択された代替modfileと対応するsum fileを含める。解析とtestの双方が、同じsnapshotから検証・再配置された設定と選択情報だけを使用する。
+- **解消:** `modulecontext.Settings`がprimary `go.mod`、代替`.mod`、対応`.sum`を同じrequest snapshotとして所有する。package load前後の変更を検出し、コピー側では専用configuration directoryへ再配置した`.mod`/`.sum`だけをtestへ明示指定する。`GOFLAGS`指定も明示引数指定へ正規化し、両方ある場合はcmd/goと同じく明示引数を優先する。
+
+### [P1] 単一-module go.workをworkspace rootから利用できない
+
+- **場所:** [`internal/loader/loader.go:101-103`](../internal/loader/loader.go#L101-L103)、[`internal/loader/loader.go:137-147`](../internal/loader/loader.go#L137-L147)、[`internal/cli/integration_test.go:77-97`](../internal/cli/integration_test.go#L77-L97)
+- **違反する要件:** D26が対象外とするのはactiveな複数main moduleを持つ`go.work`であり、単一main moduleの正当なpackage patternをmodule内起動に限定する要件はない（[`docs/specification.ja.md:245-247`](../docs/specification.ja.md#L245-L247)）。
+- **観察:** package loadが単一main moduleを正しく選択した後も、呼び出し元directoryがmodule root外なら拒否する。このため、go.work rootから配下moduleのpackage patternを指定する標準的な呼び出しを処理できない。既存integration testはmodule directory内からの起動だけを検証している。
+- **外部影響:** 同じgo.workとpackage patternで通常の`go test`が成功しても、gomcdcはpackage load failureとして終了する。
+- **必要な修正条件:** source moduleの所有範囲と呼び出し元directoryの意味を分離し、元のgo.work rootに対する呼び出し位置を作業用workspaceへ写像する。module内起動とworkspace root起動の双方をintegration testで固定する。
+- **解消:** loader resultに呼び出し位置の基準rootを保持し、module内起動はコピーmoduleへ、単一module workspace内起動はコピーworkspaceへ写像する。integration testは同じfixtureをmodule directoryとworkspace rootの双方から実行し、解析・test・reportの成功を固定する。
 
 ## Findings
 
@@ -79,9 +106,10 @@
 
 ## 再判定
 
-**上記7件に未解消findingはない。** workspace分離はlink種別ごとのcopy invariant、
-module設定はfreeze済みの単一authority、終了結果は実行事実から生成する独立軸として
-実装され、公開READMEとCLI grammarも実行可能な契約へ一致した。
+**本レビューで確認したP0/P1/P2 findingはすべて解消済みと再判定する。**
+workspace分離、終了結果の独立軸、公開README、CLI grammarへの修正を維持し、
+module設定の単一authorityは代替modfileとgo.work rootからの起動も包含した。
+D26について、解析とtestのmodule設定および起動位置に既知の未解消差分はない。
 
 `v2.0.0` tag/releaseの作成自体はこの修正に含めていない。READMEはv2をrelease済みと
 主張せず、tag付きv1 binaryをv2文書の実装として案内しないため、配布物と文書の
@@ -110,3 +138,10 @@ commandを同時に更新する必要がある。
 - cleanup failureをreport公開前に`measurement=failed`と`errors`へ反映するintegration test
 - 日英READMEの転送例をCLI parserへ通すtest
 - canonical coverage tokenだけを受理するparser test
+- 明示`-modfile`、`GOFLAGS`、両方指定時の明示優先を解析とtestの統合経路で確認するtest
+- 代替modfileと対応sum fileのsnapshot、変更検出、local replacement再配置test
+- 単一-module `go.work`をmodule directoryとworkspace rootの双方から実行するintegration test
+- CIと同じself-MC/DC report生成およびcritical-package baseline判定
+
+再レビューでは上記受け入れcommandが引き続き成功し、全suiteだけでは検出できなかった
+代替modfileとgo.work root起動の2境界も専用fixtureで固定されたことを確認した。

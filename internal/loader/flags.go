@@ -30,7 +30,10 @@ func BuildFlags(goTestArgs []string) ([]string, error) {
 		if i+1 >= len(goTestArgs) {
 			return nil, fmt.Errorf("go test argument %s requires a value", arg)
 		}
-		flags = append(flags, arg, goTestArgs[i+1])
+		// Canonicalize valued build flags so each returned element is one
+		// semantic flag. This prevents a value beginning with "-" from being
+		// mistaken for a following build flag by module-context discovery.
+		flags = append(flags, arg+"="+goTestArgs[i+1])
 		i++
 	}
 	return flags, nil

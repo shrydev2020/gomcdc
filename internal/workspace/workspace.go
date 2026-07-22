@@ -36,11 +36,12 @@ type Options struct {
 // directory. Its paths remain available after cleanup so they can be reported
 // to the user.
 type Workspace struct {
-	SourceDir  string
-	RootDir    string
-	ModuleDir  string
-	EventDir   string
-	GoWorkPath string
+	SourceDir   string
+	RootDir     string
+	ModuleDir   string
+	EventDir    string
+	GoWorkPath  string
+	ModFilePath string
 
 	mu      sync.Mutex
 	keep    bool
@@ -109,6 +110,27 @@ func Create(ctx context.Context, options Options) (_ *Workspace, err error) {
 	if err := os.WriteFile(goModPath, goMod, goModInfo.Mode().Perm()); err != nil {
 		return nil, fmt.Errorf("write copied go.mod: %w", err)
 	}
+	modFilePath := ""
+	if options.ModuleSettings.HasAlternateModFile() {
+		configDir := filepath.Join(rootDir, "module-config")
+		if err := os.Mkdir(configDir, 0o700); err != nil {
+			return nil, fmt.Errorf("create alternate module configuration directory: %w", err)
+		}
+		modContents, sumContents, sumSet, relocateErr := options.ModuleSettings.RelocatedAlternateMod(ctx, moduleDir)
+		if relocateErr != nil {
+			return nil, fmt.Errorf("relocate alternate modfile: %w", relocateErr)
+		}
+		modFilePath = filepath.Join(configDir, "gomcdc.mod")
+		if err := os.WriteFile(modFilePath, modContents, 0o600); err != nil {
+			return nil, fmt.Errorf("write alternate modfile: %w", err)
+		}
+		if sumSet {
+			sumPath := strings.TrimSuffix(modFilePath, ".mod") + ".sum"
+			if err := os.WriteFile(sumPath, sumContents, 0o600); err != nil {
+				return nil, fmt.Errorf("write alternate sum file: %w", err)
+			}
+		}
+	}
 	goWorkPath := ""
 	if options.ModuleSettings.Active() {
 		goWorkPath = filepath.Join(rootDir, "go.work")
@@ -128,12 +150,13 @@ func Create(ctx context.Context, options Options) (_ *Workspace, err error) {
 
 	removeOnError = false
 	return &Workspace{
-		SourceDir:  sourceDir,
-		RootDir:    rootDir,
-		ModuleDir:  moduleDir,
-		EventDir:   eventDir,
-		GoWorkPath: goWorkPath,
-		keep:       options.Keep,
+		SourceDir:   sourceDir,
+		RootDir:     rootDir,
+		ModuleDir:   moduleDir,
+		EventDir:    eventDir,
+		GoWorkPath:  goWorkPath,
+		ModFilePath: modFilePath,
+		keep:        options.Keep,
 	}, nil
 }
 

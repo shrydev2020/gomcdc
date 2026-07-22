@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -21,10 +22,22 @@ import (
 	"github.com/shrydev2020/gomcdc/internal/runtimecov"
 )
 
+func TestWithRelocatedModFilePreservesOnlyCopiedSelectionAndBinaryArgs(t *testing.T) {
+	t.Parallel()
+	got := withRelocatedModFile(
+		[]string{"-run", "TestOne", "-modfile", "/source/analysis.mod", "-args", "-fixture", "value"},
+		"/workspace/config/gomcdc.mod",
+	)
+	want := []string{"-run", "TestOne", "-modfile=/workspace/config/gomcdc.mod", "-args", "-fixture", "value"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("withRelocatedModFile() = %#v, want %#v", got, want)
+	}
+}
+
 func TestRecoveryContextSurvivesRequestCancellationUntilDeadline(t *testing.T) {
 	t.Parallel()
 
-	request, cancelRequest := context.WithCancel(context.Background())
+	request, cancelRequest := context.WithCancel(t.Context())
 	recovery, cancelRecovery := newRecoveryContext(request, 30*time.Millisecond)
 	defer cancelRecovery()
 	cancelRequest()
@@ -58,7 +71,7 @@ func TestMeasureUsesOneCombinedWorkspaceWhenInterrupted(t *testing.T) {
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	time.AfterFunc(20*time.Millisecond, cancel)
 	outcome, measurementWork, err := measure(measurementRequest{
 		context: ctx,
@@ -90,7 +103,7 @@ func TestMeasureUsesOneCombinedWorkspaceWhenInterrupted(t *testing.T) {
 func TestRecoveryContextStartsWithDeadlineAfterInterruption(t *testing.T) {
 	t.Parallel()
 
-	request, cancelRequest := context.WithCancel(context.Background())
+	request, cancelRequest := context.WithCancel(t.Context())
 	cancelRequest()
 	recovery, cancelRecovery := newRecoveryContext(request, time.Second)
 	defer cancelRecovery()
@@ -171,32 +184,32 @@ func TestSourceCoveragePlansUseInventoryAuthority(t *testing.T) {
 		},
 		inventory: &inventory,
 	}
-	plans, err := sourceCoveragePlans(context.Background(), []sourceInstrumentation{source}, nil)
+	plans, err := sourceCoveragePlans(t.Context(), []sourceInstrumentation{source}, nil)
 	if err != nil || len(plans) != 1 || plans[0].OriginalPath != "p/p.go" {
 		t.Fatalf("identity plans = %#v, %v", plans, err)
 	}
 	instrumented := []instrument.PackageResult{{CoveragePlans: []instrument.FileCoveragePlan{{
 		OriginalPath: "p/p.go", Correspondence: plans[0].Correspondence,
 	}}}}
-	plans, err = sourceCoveragePlans(context.Background(), []sourceInstrumentation{source}, instrumented)
+	plans, err = sourceCoveragePlans(t.Context(), []sourceInstrumentation{source}, instrumented)
 	if err != nil || len(plans) != 1 {
 		t.Fatalf("instrumented plans = %#v, %v", plans, err)
 	}
-	if _, err := sourceCoveragePlans(context.Background(), []sourceInstrumentation{source}, append(instrumented, instrumented...)); err == nil {
+	if _, err := sourceCoveragePlans(t.Context(), []sourceInstrumentation{source}, append(instrumented, instrumented...)); err == nil {
 		t.Fatal("duplicate correspondence was accepted")
 	}
 	unknown := []instrument.PackageResult{{CoveragePlans: []instrument.FileCoveragePlan{{
 		OriginalPath: "other/other.go", Correspondence: plans[0].Correspondence,
 	}}}}
-	if _, err := sourceCoveragePlans(context.Background(), []sourceInstrumentation{source}, unknown); err == nil {
+	if _, err := sourceCoveragePlans(t.Context(), []sourceInstrumentation{source}, unknown); err == nil {
 		t.Fatal("correspondence without original inventory was accepted")
 	}
 	withoutInventory := source
 	withoutInventory.inventory = nil
-	if plans, err := sourceCoveragePlans(context.Background(), []sourceInstrumentation{withoutInventory}, nil); err != nil || len(plans) != 0 {
+	if plans, err := sourceCoveragePlans(t.Context(), []sourceInstrumentation{withoutInventory}, nil); err != nil || len(plans) != 0 {
 		t.Fatalf("source without C0 inventory produced plans: %#v, %v", plans, err)
 	}
-	canceled, cancel := context.WithCancel(context.Background())
+	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
 	if _, err := sourceCoveragePlans(canceled, []sourceInstrumentation{source}, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled coverage planning error = %v", err)
@@ -335,7 +348,7 @@ func TestRuntimeAcceptancePreservesProducerOwnership(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			_, issues := acceptRuntimeEvidenceByProducer(
-				context.Background(), decisions, clauses, test.recorded, "run", nil,
+				t.Context(), decisions, clauses, test.recorded, "run", nil,
 			)
 			if got := issues.astErr() != nil; got != test.wantAST {
 				t.Fatalf("AST mapping error = %t, want %t (%v)", got, test.wantAST, issues.astErr())
