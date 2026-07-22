@@ -47,6 +47,15 @@ func renderText(report Report) string {
 		report.Run.Results.Threshold,
 	)
 	fmt.Fprintf(&output, "Measurement mode: %s\n", report.MeasurementMode)
+	if limits := report.MaskingAnalysisLimits; limits != nil {
+		fmt.Fprintf(
+			&output,
+			"Masking analysis limits (per condition obligation): evaluation-pairs=%d search-states=%d solver-bytes=%d\n",
+			limits.MaxEvaluationPairs,
+			limits.MaxSearchStates,
+			limits.MaxSolverBytes,
+		)
+	}
 	for _, measurement := range report.Measurements {
 		fmt.Fprintf(
 			&output,

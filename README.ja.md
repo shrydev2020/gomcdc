@@ -114,10 +114,13 @@ gomcdc test --format html --output coverage-html ./...
 tailが発生しても、信頼できるevidenceが残ればpartial reportを生成します。
 
 Masking MC/DCはexact searchします。組み込みのcondition obligationごとの上限は、
-candidate evaluation pair 1,000,000件、search state 4,000,000件、search workspace
-64 MiBです。いずれかを超える探索が必要な場合は`analysis-incomplete`とし、
-`not-covered`や`infeasible`へ変換しません。現時点では、これらの上限を変更する
-CLI optionはありません。
+candidate evaluation pair 1,000,000件、search state 4,000,000件、主要solver backing
+array 64 MiBです。solver byte上限には検証済みinput、result witness、goroutine stack、
+その他のprocess memoryを含まず、process全体のheap、RSS、総memory上限ではありません。
+いずれかを超える探索が必要な場合は`analysis-incomplete`とし、`not-covered`や
+`infeasible`へ変換しません。3つの`--mcdc-masking-max-*` optionで正のobligation単位
+上限を変更できます。値を増やすとconditionとdecisionの数に応じて総処理量が増えます。
+reportは実効値を`maskingAnalysisLimits`として記録します。
 
 ## 主なoption
 
@@ -144,6 +147,9 @@ gomcdc test ./... -- -count=1 -run TestCritical
 | `--output=<path>` | fileへ出力。HTMLの場合はdirectory |
 | `--strict` | requested entityにunsupported、unknown、analysis-incomplete、未計装があれば失敗 |
 | `--fail-under-<metric>=<percent>` | 有効な一指標がthreshold未満なら失敗 |
+| `--mcdc-masking-max-evaluation-pairs=<count>` | Masking condition obligationごとのcandidate evaluation pair上限。default 1,000,000 |
+| `--mcdc-masking-max-search-states=<count>` | Masking condition obligationごとの新規search state上限。default 4,000,000 |
+| `--mcdc-masking-max-solver-bytes=<bytes>` | Masking condition obligationごとの主要solver backing array上限。default 67,108,864 bytes |
 | `--timeout=<duration>` | `go test` subprocessのtimeout。defaultは10分 |
 | `--keep-workdir` | 診断用に計装済みtemporary workspaceを保持 |
 | `--workdir=<directory>` | temporary workspaceの親directoryを指定 |

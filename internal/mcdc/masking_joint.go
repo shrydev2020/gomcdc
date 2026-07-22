@@ -13,23 +13,12 @@ type maskingSearchBudget struct {
 	limits          AnalysisBudget
 	evaluationPairs uint64
 	searchStates    uint64
-	workspaceBytes  uint64
+	solverBytes     uint64
 	exceededReason  string
 }
 
 func newMaskingSearchBudget(configured AnalysisBudget) *maskingSearchBudget {
-	limits := configured
-	defaults := DefaultMaskingAnalysisBudget()
-	if limits.MaxEvaluationPairs == 0 {
-		limits.MaxEvaluationPairs = defaults.MaxEvaluationPairs
-	}
-	if limits.MaxSearchStates == 0 {
-		limits.MaxSearchStates = defaults.MaxSearchStates
-	}
-	if limits.MaxWorkspaceBytes == 0 {
-		limits.MaxWorkspaceBytes = defaults.MaxWorkspaceBytes
-	}
-	return &maskingSearchBudget{limits: limits}
+	return &maskingSearchBudget{limits: EffectiveMaskingAnalysisBudget(configured)}
 }
 
 func (budget *maskingSearchBudget) consumeEvaluationPair() bool {
@@ -50,13 +39,13 @@ func (budget *maskingSearchBudget) consumeSearchState() bool {
 	return true
 }
 
-func (budget *maskingSearchBudget) requireWorkspace(bytes uint64) bool {
-	if bytes > budget.limits.MaxWorkspaceBytes {
-		budget.exceed("workspace byte")
+func (budget *maskingSearchBudget) requireSolverBytes(bytes uint64) bool {
+	if bytes > budget.limits.MaxSolverBytes {
+		budget.exceed("solver byte")
 		return false
 	}
-	if bytes > budget.workspaceBytes {
-		budget.workspaceBytes = bytes
+	if bytes > budget.solverBytes {
+		budget.solverBytes = bytes
 	}
 	return true
 }
@@ -78,7 +67,7 @@ func (budget *maskingSearchBudget) stats() maskingSearchStats {
 	return maskingSearchStats{
 		EvaluationPairs: budget.evaluationPairs,
 		SearchStates:    budget.searchStates,
-		WorkspaceBytes:  budget.workspaceBytes,
+		SolverBytes:     budget.solverBytes,
 	}
 }
 
@@ -141,17 +130,17 @@ func expressionNodeCount(expression *cover.BooleanExpression) int {
 	}
 }
 
-// jointWorkspaceBytes is the exact byte size of the primary backing arrays
+// jointSolverBytes is the exact byte size of the primary backing arrays
 // allocated by newJointWorkspace on the current architecture. It deliberately
 // excludes validated input data, result witnesses, and goroutine stack space.
-func jointWorkspaceBytes(nodeCount, conditionCount int) uint64 {
+func jointSolverBytes(nodeCount, conditionCount int) uint64 {
 	return uint64(nodeCount)*uint64(unsafe.Sizeof(jointNode{})) +
 		uint64(nodeCount*jointStateCount)*uint64(unsafe.Sizeof(jointMemoEntry{})) +
 		uint64(conditionCount*2)*uint64(unsafe.Sizeof(bool(false)))
 }
 
-func maskingWorkspaceBytes(nodeCount, conditionCount, candidateIndexes int) uint64 {
-	return jointWorkspaceBytes(nodeCount, conditionCount) +
+func maskingSolverBytes(nodeCount, conditionCount, candidateIndexes int) uint64 {
+	return jointSolverBytes(nodeCount, conditionCount) +
 		uint64(candidateIndexes)*uint64(unsafe.Sizeof(int(0)))
 }
 

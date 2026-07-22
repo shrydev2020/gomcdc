@@ -4,14 +4,17 @@ import (
 	"sort"
 
 	"github.com/shrydev2020/gomcdc/internal/backend"
+	"github.com/shrydev2020/gomcdc/internal/config"
 	cover "github.com/shrydev2020/gomcdc/internal/coverage"
+	"github.com/shrydev2020/gomcdc/internal/mcdc"
 )
 
 // buildContext is the normalized input side of report assembly. Build consumes
 // these indexes to construct the package/file/function tree; evidence grouping
 // and deterministic ordering are kept out of that phase.
 type buildContext struct {
-	report Report
+	report                Report
+	maskingAnalysisBudget mcdc.AnalysisBudget
 
 	decisions []cover.DecisionMetadata
 	clauses   []cover.ClauseMetadata
@@ -41,6 +44,7 @@ func newBuildContext(input Input) *buildContext {
 			producerCapabilities = []backend.ProducerCapabilities{{Backend: "configured", Capabilities: capabilities.Clone()}}
 		}
 	}
+	maskingAnalysisBudget := mcdc.EffectiveMaskingAnalysisBudget(input.MaskingAnalysisBudget)
 	report := Report{
 		SchemaVersion:    SchemaVersion,
 		ToolVersion:      normalizedToolVersion(input.ToolVersion),
@@ -55,6 +59,13 @@ func newBuildContext(input Input) *buildContext {
 		Summary:          newSummary(input.Coverage),
 		Packages:         make([]PackageReport, 0),
 		Errors:           cloneReportErrors(input.Errors),
+	}
+	if input.Coverage.Enabled(config.MetricMCDCMasking) {
+		report.MaskingAnalysisLimits = &MaskingAnalysisLimits{
+			MaxEvaluationPairs: maskingAnalysisBudget.MaxEvaluationPairs,
+			MaxSearchStates:    maskingAnalysisBudget.MaxSearchStates,
+			MaxSolverBytes:     maskingAnalysisBudget.MaxSolverBytes,
+		}
 	}
 	astEvidenceUnusable := producerRejectsEvidence(input.ProducerOutcomes, ProducerASTRuntime)
 	compilerEvidenceUnusable := producerRejectsEvidence(input.ProducerOutcomes, ProducerCompilerSelection)
@@ -181,7 +192,7 @@ func newBuildContext(input Input) *buildContext {
 	}
 
 	return &buildContext{
-		report: report, decisions: decisions, clauses: clauses,
+		report: report, maskingAnalysisBudget: maskingAnalysisBudget, decisions: decisions, clauses: clauses,
 		evaluationsByDecision: evaluationsByDecision, notEvaluatedByDecision: notEvaluatedByDecision,
 		observationCounts: observationCounts, selectedAlternatives: selectedAlternatives, noMatchObservations: noMatchObservations,
 		packageEvidence: packageEvidence, astPackageEvidence: astPackageEvidence,

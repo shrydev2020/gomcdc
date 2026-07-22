@@ -7,6 +7,7 @@ import (
 	cover "github.com/shrydev2020/gomcdc/internal/coverage"
 	"github.com/shrydev2020/gomcdc/internal/gotest"
 	"github.com/shrydev2020/gomcdc/internal/loader"
+	"github.com/shrydev2020/gomcdc/internal/mcdc"
 	"github.com/shrydev2020/gomcdc/internal/report"
 )
 
@@ -17,6 +18,7 @@ func TestAssembleReportInputUsesOneCombinedMeasurement(t *testing.T) {
 		testResult:             &gotest.Result{Status: cover.RunFailed, FailureKind: cover.RunFailureTest, Packages: map[string]gotest.PackageStatus{"example.test/m/p": gotest.PackageFailed}},
 		standardCoverRequested: true,
 		astRequested:           true,
+		maskingAnalysisBudget:  mcdc.AnalysisBudget{MaxSearchStates: 123},
 		evidence:               acceptedRuntimeEvidence{},
 	})
 
@@ -37,6 +39,9 @@ func TestAssembleReportInputUsesOneCombinedMeasurement(t *testing.T) {
 	}
 	if len(input.Measurements) != 1 || input.Measurements[0].Name != "combined" {
 		t.Fatalf("measurements = %#v", input.Measurements)
+	}
+	if input.MaskingAnalysisBudget.MaxSearchStates != 123 {
+		t.Fatalf("Masking analysis budget = %#v", input.MaskingAnalysisBudget)
 	}
 	if len(input.Errors) != 1 || input.Errors[0].Message != "combined go test failed" {
 		t.Fatalf("combined measurement errors = %#v", input.Errors)

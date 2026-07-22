@@ -165,8 +165,10 @@ product. Each condition obligation has default limits of 1,000,000 candidate
 evaluation pairs, 4,000,000 newly expanded joint-search states, and 64 MiB for
 the primary solver backing arrays (the flattened expression, memo table,
 completion buffers, and candidate evaluation indexes). Validated input data,
-result witnesses, and goroutine stack space are outside the workspace unit. A
-search that would exceed a limit is `analysis-incomplete`; reaching a witness
+result witnesses, goroutine stack space, and all other process memory are
+outside solver-byte accounting. The value is not a process-wide heap, RSS, or
+total-memory limit. A search that would exceed a limit is
+`analysis-incomplete`; reaching a witness
 at the exact limit is `covered`. `infeasible` is used only when a separate
 structure-only check proves that the target can never be pivotal.
 
@@ -262,6 +264,13 @@ condition, mcdc-unique, mcdc-masking, all
 
 Each metric has exactly one `--fail-under-<metric>` threshold flag. A threshold for an unselected metric is a CLI error. A threshold over a zero total fails. Comparison uses the unrounded integer ratio.
 
+The per-condition-obligation Masking MC/DC limits can be changed with
+`--mcdc-masking-max-evaluation-pairs`, `--mcdc-masking-max-search-states`, and
+`--mcdc-masking-max-solver-bytes`. Each supplied value is a positive decimal
+integer; supplying one without selecting `mcdc-masking` is a CLI error. Every
+unspecified field independently uses its D19 default. Raising a limit can
+multiply total work across conditions and decisions.
+
 ### D28. Exit result
 
 ```text
@@ -280,7 +289,7 @@ Precedence for ordinary completion is `4 > 2 > 1 > 3 > 0`. A handled termination
 
 ### D29. JSON
 
-The root contains `schemaVersion`, `toolVersion`, `module`, `run`, `measurementMode`, `measurements`, `producerOutcomes`, `capabilities`, `backendCapabilities`, `instrumentationCoverage`, `summary`, `packages`, and `errors`. `schemaVersion` is the report compatibility contract and is `2.0`; tool interruption adds `interrupted` to `failureKind` without conflating it with timeout or a command failure. `toolVersion` is the build identity from `gomcdc version`. `producerOutcomes` carries the four D21 evidence axes for every requested producer. `capabilities` is the tool-wide aggregate, while `backendCapabilities` exposes per-producer instrumentation authority.
+The root contains `schemaVersion`, `toolVersion`, `module`, `run`, `measurementMode`, `measurements`, `producerOutcomes`, `capabilities`, `backendCapabilities`, `instrumentationCoverage`, `summary`, `packages`, and `errors`. When Masking MC/DC is requested, the optional `maskingAnalysisLimits` field records the three effective D19 limits. `schemaVersion` is the report compatibility contract and is `2.0`; tool interruption adds `interrupted` to `failureKind` without conflating it with timeout or a command failure. `toolVersion` is the build identity from `gomcdc version`. `producerOutcomes` carries the four D21 evidence axes for every requested producer. `capabilities` is the tool-wide aggregate, while `backendCapabilities` exposes per-producer instrumentation authority.
 
 [`schema/report-v2.0.schema.json`](../schema/report-v2.0.schema.json) is the machine-readable JSON Schema for every current public field, required and optional key, type, enum, and nullability rule. Schemas 1.0 and 1.1 remain checked in as immutable preceding contracts.
 
@@ -335,7 +344,7 @@ An implementation conforms only when all conditions hold.
 
 ## 10. Acceptance verification
 
-The acceptance suite includes AND, OR, NOT, nested expressions, side effects, evaluation order, conditionless switch, expression switch, type switch, select, empty bodies, fallthrough, direct selection, no-match, recursion, nested decisions, loops, multiple goroutines, panic, recover, defer, `runtime.Goexit`, multiple packages, external test packages, build tags, test/build failure, timeout, caller interruption, truncated events, partial recovery, provenance mutation, source mapping, user `//line`, generated-code exclusion, JSON Schema contract mutation, and all eleven thresholds. A deterministic all-metric fixture must match the semantic projection of the v1 C0-plus-AST dual-run oracle while executing each package test binary once. For `a && b`, Unique-Cause yields `a=infeasible` and `b=covered`, while Masking covers both conditions.
+The acceptance suite includes AND, OR, NOT, nested expressions, a fixed-seed semantic oracle with four or more conditions, side effects, evaluation order, conditionless switch, expression switch, type switch, select, empty bodies, fallthrough, direct selection, no-match, recursion, nested decisions, loops, multiple goroutines, panic, recover, defer, `runtime.Goexit`, multiple packages, external test packages, build tags, test/build failure, timeout, caller interruption, truncated events, partial recovery, provenance mutation, source mapping, user `//line`, generated-code exclusion, JSON Schema contract mutation, and all eleven thresholds. A deterministic all-metric fixture must match the semantic projection of the v1 C0-plus-AST dual-run oracle while executing each package test binary once. For `a && b`, Unique-Cause yields `a=infeasible` and `b=covered`, while Masking covers both conditions.
 
 Completion requires successful `go test -count=1 ./...`, `go test -race -count=1 ./...`, and `go vet ./...`, and integer equality between fixture-module aggregation and the sum of its package aggregations.
 

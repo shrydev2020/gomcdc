@@ -12,6 +12,7 @@ import (
 	"github.com/shrydev2020/gomcdc/internal/c0"
 	"github.com/shrydev2020/gomcdc/internal/config"
 	cover "github.com/shrydev2020/gomcdc/internal/coverage"
+	"github.com/shrydev2020/gomcdc/internal/mcdc"
 	"github.com/shrydev2020/gomcdc/internal/report"
 )
 
@@ -178,7 +179,7 @@ func TestJSONSchemaUsesExactSpecificationKeys(t *testing.T) {
 	assertJSONKeys(t, "root", root, []string{
 		"schemaVersion", "toolVersion", "module", "run", "measurementMode", "measurements",
 		"producerOutcomes", "capabilities", "backendCapabilities", "instrumentationCoverage",
-		"summary", "packages", "errors",
+		"maskingAnalysisLimits", "summary", "packages", "errors",
 	})
 	var run map[string]json.RawMessage
 	if err := json.Unmarshal(root["run"], &run); err != nil {
@@ -264,6 +265,76 @@ func TestMCDCAnalysisIncompleteIsSeparateFromUnknownSupport(t *testing.T) {
 	metric := built.Summary.MCDCMasking
 	if metric.AnalysisIncomplete != 1 || metric.Unknown != 0 || metric.Total != 0 {
 		t.Fatalf("MC/DC analysis-incomplete summary = %#v", metric)
+	}
+}
+
+func TestMaskingAnalysisLimitsAreEffectiveAndReproducible(t *testing.T) {
+	t.Parallel()
+	decision := andDecision(10, "example.com/m/p", "p.go", "Allow")
+	input := report.Input{
+		ModulePath: "example.com/m",
+		Coverage:   config.CoverageSet{config.MetricMCDCMasking: true},
+		MaskingAnalysisBudget: mcdc.AnalysisBudget{
+			MaxEvaluationPairs: 17,
+			MaxSearchStates:    23,
+			MaxSolverBytes:     1,
+		},
+		Decisions: []cover.DecisionMetadata{decision},
+		Evaluations: []cover.DecisionEvaluation{
+			completedEvaluation(10, 1, false, cover.ConditionFalse, cover.ConditionNotEvaluated),
+			completedEvaluation(10, 2, true, cover.ConditionTrue, cover.ConditionTrue),
+		},
+	}
+
+	built := report.Build(input)
+	if built.MaskingAnalysisLimits == nil || *built.MaskingAnalysisLimits != (report.MaskingAnalysisLimits{
+		MaxEvaluationPairs: 17, MaxSearchStates: 23, MaxSolverBytes: 1,
+	}) {
+		t.Fatalf("effective Masking limits = %#v", built.MaskingAnalysisLimits)
+	}
+	if built.Summary.MCDCMasking.AnalysisIncomplete == 0 {
+		t.Fatalf("custom solver limit did not reach analysis-incomplete: %#v", built.Summary.MCDCMasking)
+	}
+
+	encoded, err := report.RenderJSON(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range [][]byte{
+		[]byte(`"maskingAnalysisLimits"`),
+		[]byte(`"maxEvaluationPairs": 17`),
+		[]byte(`"maxSearchStates": 23`),
+		[]byte(`"maxSolverBytes": 1`),
+	} {
+		if !bytes.Contains(encoded, required) {
+			t.Fatalf("JSON report omits effective limit %s:\n%s", required, encoded)
+		}
+	}
+	if text := report.RenderText(input); !strings.Contains(text, "evaluation-pairs=17 search-states=23 solver-bytes=1") {
+		t.Fatalf("text report omits effective Masking limits:\n%s", text)
+	}
+	var html bytes.Buffer
+	if err := report.WriteHTML(&html, input); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(html.String(), "17 evaluation pairs · 23 search states · 1 solver bytes") {
+		t.Fatalf("HTML report omits effective Masking limits:\n%s", html.String())
+	}
+}
+
+func TestMaskingAnalysisLimitsUseDefaultsAndStayAbsentWhenDisabled(t *testing.T) {
+	t.Parallel()
+	defaults := mcdc.DefaultMaskingAnalysisBudget()
+	enabled := report.Build(report.Input{Coverage: config.CoverageSet{config.MetricMCDCMasking: true}})
+	if enabled.MaskingAnalysisLimits == nil || *enabled.MaskingAnalysisLimits != (report.MaskingAnalysisLimits{
+		MaxEvaluationPairs: defaults.MaxEvaluationPairs,
+		MaxSearchStates:    defaults.MaxSearchStates,
+		MaxSolverBytes:     defaults.MaxSolverBytes,
+	}) {
+		t.Fatalf("default Masking limits = %#v", enabled.MaskingAnalysisLimits)
+	}
+	if disabled := report.Build(report.Input{}); disabled.MaskingAnalysisLimits != nil {
+		t.Fatalf("disabled Masking limits = %#v, want nil", disabled.MaskingAnalysisLimits)
 	}
 }
 

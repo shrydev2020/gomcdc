@@ -32,6 +32,7 @@ type Input struct {
 	ModulePath            string
 	SourceFiles           []SourceFileInput
 	Coverage              config.CoverageSet
+	MaskingAnalysisBudget mcdc.AnalysisBudget
 	Decisions             []cover.DecisionMetadata
 	Evaluations           []cover.DecisionEvaluation
 	NotEvaluatedDecisions []cover.DecisionNotEvaluatedObservation
@@ -58,19 +59,30 @@ type Input struct {
 
 // Report is the deterministic module report.
 type Report struct {
-	SchemaVersion    string                         `json:"schemaVersion"`
-	ToolVersion      string                         `json:"toolVersion"`
-	Module           string                         `json:"module"`
-	Run              Run                            `json:"run"`
-	MeasurementMode  MeasurementMode                `json:"measurementMode"`
-	Measurements     []MeasurementRun               `json:"measurements"`
-	ProducerOutcomes []ProducerOutcome              `json:"producerOutcomes"`
-	Capabilities     backend.CapabilitySet          `json:"capabilities"`
-	Backends         []backend.ProducerCapabilities `json:"backendCapabilities"`
-	Instrumentation  backend.InstrumentationReport  `json:"instrumentationCoverage"`
-	Summary          Summary                        `json:"summary"`
-	Packages         []PackageReport                `json:"packages"`
-	Errors           []ReportError                  `json:"errors"`
+	SchemaVersion         string                         `json:"schemaVersion"`
+	ToolVersion           string                         `json:"toolVersion"`
+	Module                string                         `json:"module"`
+	Run                   Run                            `json:"run"`
+	MeasurementMode       MeasurementMode                `json:"measurementMode"`
+	Measurements          []MeasurementRun               `json:"measurements"`
+	ProducerOutcomes      []ProducerOutcome              `json:"producerOutcomes"`
+	Capabilities          backend.CapabilitySet          `json:"capabilities"`
+	Backends              []backend.ProducerCapabilities `json:"backendCapabilities"`
+	Instrumentation       backend.InstrumentationReport  `json:"instrumentationCoverage"`
+	MaskingAnalysisLimits *MaskingAnalysisLimits         `json:"maskingAnalysisLimits,omitempty"`
+	Summary               Summary                        `json:"summary"`
+	Packages              []PackageReport                `json:"packages"`
+	Errors                []ReportError                  `json:"errors"`
+}
+
+// MaskingAnalysisLimits records the effective resource limits used for each
+// Masking MC/DC condition obligation. MaxSolverBytes covers only the solver's
+// primary backing arrays; it is not a process-wide heap, RSS, or total-memory
+// limit.
+type MaskingAnalysisLimits struct {
+	MaxEvaluationPairs uint64 `json:"maxEvaluationPairs"`
+	MaxSearchStates    uint64 `json:"maxSearchStates"`
+	MaxSolverBytes     uint64 `json:"maxSolverBytes"`
 }
 
 // ReportError is one deterministic, machine-readable failure attached to a
@@ -376,7 +388,7 @@ func buildHierarchy(context *buildContext, input Input) {
 		if state == entityNormal && !supportedDecision(decision.Kind) {
 			state = entityUnsupported
 		}
-		decisionReport := buildDecisionReport(decision, evaluationsByDecision[decision.ID], notEvaluatedByDecision[decision.ID], state, input.Coverage)
+		decisionReport := buildDecisionReport(decision, evaluationsByDecision[decision.ID], notEvaluatedByDecision[decision.ID], state, input.Coverage, context.maskingAnalysisBudget)
 		function.report.Decisions = append(function.report.Decisions, decisionReport)
 		addSummary(&function.report.Summary, decisionReport.Summary)
 	}
@@ -676,6 +688,7 @@ func buildDecisionReport(
 	notEvaluated int,
 	state entityState,
 	coverage config.CoverageSet,
+	maskingBudget mcdc.AnalysisBudget,
 ) DecisionReport {
 	completed := completedEvaluations(evaluations)
 	trueCovered, falseCovered := false, false
@@ -696,7 +709,7 @@ func buildDecisionReport(
 	}
 	var maskingResult cover.MCDCResult
 	if maskingEnabled {
-		maskingResult = (mcdc.MaskingStrategy{Budget: mcdc.DefaultMaskingAnalysisBudget()}).Analyze(metadata, evaluations)
+		maskingResult = (mcdc.MaskingStrategy{Budget: maskingBudget}).Analyze(metadata, evaluations)
 	}
 	unique := buildMCDCAnalysis(uniqueResult, metadata.Conditions, state, uniqueEnabled)
 	masking := buildMCDCAnalysis(maskingResult, metadata.Conditions, state, maskingEnabled)

@@ -80,6 +80,36 @@ func TestParseOptionsStrictMode(t *testing.T) {
 	}
 }
 
+func TestParseOptionsMaskingAnalysisBudget(t *testing.T) {
+	t.Parallel()
+	opts, err := parseOptions([]string{
+		"--coverage=mcdc-masking",
+		"--mcdc-masking-max-evaluation-pairs=17",
+		"--mcdc-masking-max-search-states=23",
+		"--mcdc-masking-max-solver-bytes=4096",
+		"./...",
+	}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget := opts.maskingAnalysisBudget()
+	if budget.MaxEvaluationPairs != 17 || budget.MaxSearchStates != 23 || budget.MaxSolverBytes != 4096 {
+		t.Fatalf("masking analysis budget = %#v", budget)
+	}
+}
+
+func TestMaskingAnalysisBudgetRejectsZeroAndDisabledMetric(t *testing.T) {
+	t.Parallel()
+	for _, args := range [][]string{
+		{"--coverage=mcdc-masking", "--mcdc-masking-max-search-states=0", "./..."},
+		{"--coverage=decision", "--mcdc-masking-max-solver-bytes=4096", "./..."},
+	} {
+		if _, err := parseOptions(args, &bytes.Buffer{}); err == nil {
+			t.Errorf("invalid Masking analysis budget was accepted: %v", args)
+		}
+	}
+}
+
 func TestMeasurementFlagRecognizesEveryOwnedGoTestFlag(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"count", "cover", "coverprofile", "covermode", "coverpkg", "json", "overlay", "toolexec"} {

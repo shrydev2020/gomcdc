@@ -162,9 +162,10 @@ condition `i` は、completed evaluation pair `(p,q)` と completion `(x,y) ∈ 
 検証済みread-once AND/OR/NOT式modelに対し、Masking MC/DCはcompletionの直積を列挙せず、
 両completionをexact joint searchする。condition obligationごとのdefault上限は、candidate
 evaluation pair 1,000,000件、新しく展開するjoint search state 4,000,000件、主要solver
-backing array 64 MiBである。workspace単位にはflatten済み式、memo table、completion
+backing array 64 MiBである。solver byte単位にはflatten済み式、memo table、completion
 buffer、candidate evaluation indexを含め、検証済みinput data、result witness、goroutine
-stackは含めない。上限を超える探索が必要な場合は`analysis-incomplete`とし、上限ちょうどで
+stack、その他のprocess memoryは含めない。この値はprocess全体のheap、RSS、総memory上限ではない。
+上限を超える探索が必要な場合は`analysis-incomplete`とし、上限ちょうどで
 witnessへ到達した場合は`covered`とする。`infeasible`は、targetがpivotalになり得ないことを
 別の構造検査で証明した場合だけ使用する。
 
@@ -244,6 +245,11 @@ condition, mcdc-unique, mcdc-masking, all
 
 閾値 flag は各指標に一対一で対応する `--fail-under-<metric>` とする。選択されていない指標への閾値は CLI error、total が0の指標への閾値は未達とする。比較は丸め前の整数比で行う。
 
+Masking MC/DCのcondition obligation単位上限は、`--mcdc-masking-max-evaluation-pairs`、
+`--mcdc-masking-max-search-states`、`--mcdc-masking-max-solver-bytes`で変更できる。指定値は
+正の10進整数とし、`mcdc-masking`が選択されていない場合はCLI errorとする。未指定fieldはD19の
+defaultを個別に使用する。上限を増やすとconditionとdecisionの数に応じて総処理量が増え得る。
+
 ### D28. 終了結果
 
 ```text
@@ -262,7 +268,7 @@ condition, mcdc-unique, mcdc-masking, all
 
 ### D29. JSON
 
-root は `schemaVersion`、`toolVersion`、`module`、`run`、`measurementMode`、`measurements`、`producerOutcomes`、`capabilities`、`backendCapabilities`、`instrumentationCoverage`、`summary`、`packages`、`errors` を持つ。`schemaVersion` はreport互換性契約であり `2.0` とする。tool interruptionはtimeoutやcommand failureと混同せず、`failureKind` の `interrupted` で表す。`toolVersion` は `gomcdc version` が返すbuild identityである。`producerOutcomes` は要求された全producerについてD21の4 evidence軸を持つ。`capabilities` はtool全体のaggregate、`backendCapabilities` はproducer別instrumentation authorityを表す。
+root は `schemaVersion`、`toolVersion`、`module`、`run`、`measurementMode`、`measurements`、`producerOutcomes`、`capabilities`、`backendCapabilities`、`instrumentationCoverage`、`summary`、`packages`、`errors` を持つ。Masking MC/DC要求時は任意field `maskingAnalysisLimits`にD19で使用した3つの実効上限を記録する。`schemaVersion` はreport互換性契約であり `2.0` とする。tool interruptionはtimeoutやcommand failureと混同せず、`failureKind` の `interrupted` で表す。`toolVersion` は `gomcdc version` が返すbuild identityである。`producerOutcomes` は要求された全producerについてD21の4 evidence軸を持つ。`capabilities` はtool全体のaggregate、`backendCapabilities` はproducer別instrumentation authorityを表す。
 
 [`schema/report-v2.0.schema.json`](../schema/report-v2.0.schema.json) は現在の全公開field、必須・任意key、型、enum、nullabilityを定める機械可読JSON Schemaである。schema 1.0と1.1は不変の旧契約としてrepositoryに保持する。
 
@@ -317,7 +323,7 @@ HTMLは各producerのintegrity、completeness、mapping、usabilityをoverall ru
 
 ## 10. 受け入れ検証
 
-受け入れ suite は AND、OR、NOT、nested expression、side effect、evaluation order、conditionless switch、expression switch、type switch、select、empty body、fallthrough、direct selection、no-match、再帰、nested decision、loop、複数 goroutine、panic、recover、defer、`runtime.Goexit`、複数 package、external test package、build tag、test/build failure、timeout、caller interruption、truncated event、partial recovery、provenance mutation、source mapping、ユーザー `//line`、生成code除外、JSON Schema contract mutation、全11閾値を含む。決定的all-metric fixtureは各package test binaryを一度だけ実行しつつ、v1のC0＋AST dual-run oracleのsemantic projectionと一致しなければならない。`a && b` は Unique-Causeで `a=infeasible`、`b=covered`、Maskingで両condition coveredとなる。
+受け入れ suite は AND、OR、NOT、nested expression、4条件以上の固定seed semantic oracle、side effect、evaluation order、conditionless switch、expression switch、type switch、select、empty body、fallthrough、direct selection、no-match、再帰、nested decision、loop、複数 goroutine、panic、recover、defer、`runtime.Goexit`、複数 package、external test package、build tag、test/build failure、timeout、caller interruption、truncated event、partial recovery、provenance mutation、source mapping、ユーザー `//line`、生成code除外、JSON Schema contract mutation、全11閾値を含む。決定的all-metric fixtureは各package test binaryを一度だけ実行しつつ、v1のC0＋AST dual-run oracleのsemantic projectionと一致しなければならない。`a && b` は Unique-Causeで `a=infeasible`、`b=covered`、Maskingで両condition coveredとなる。
 
 `go test -count=1 ./...`、`go test -race -count=1 ./...`、`go vet ./...` が成功し、fixture module の module 集計と package 集計の整数和が一致することを完成条件とする。
 

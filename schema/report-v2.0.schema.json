@@ -39,6 +39,12 @@
       "items": { "$ref": "#/$defs/producerCapabilities" }
     },
     "instrumentationCoverage": { "$ref": "#/$defs/instrumentationReport" },
+    "maskingAnalysisLimits": {
+      "oneOf": [
+        { "$ref": "#/$defs/maskingAnalysisLimits" },
+        { "type": "null" }
+      ]
+    },
     "summary": { "$ref": "#/$defs/summary" },
     "packages": {
       "type": "array",
@@ -88,6 +94,16 @@
   ],
   "$defs": {
     "nonNegativeInteger": { "type": "integer", "minimum": 0 },
+    "maskingAnalysisLimits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxEvaluationPairs", "maxSearchStates", "maxSolverBytes"],
+      "properties": {
+        "maxEvaluationPairs": { "type": "integer", "minimum": 1 },
+        "maxSearchStates": { "type": "integer", "minimum": 1 },
+        "maxSolverBytes": { "type": "integer", "minimum": 1 }
+      }
+    },
     "uint16": { "type": "integer", "minimum": 0, "maximum": 65535 },
     "id": { "type": "string", "pattern": "^0x[0-9a-f]{16}$" },
     "resultStatus": {

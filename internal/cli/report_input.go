@@ -7,6 +7,7 @@ import (
 	cover "github.com/shrydev2020/gomcdc/internal/coverage"
 	"github.com/shrydev2020/gomcdc/internal/gotest"
 	"github.com/shrydev2020/gomcdc/internal/loader"
+	"github.com/shrydev2020/gomcdc/internal/mcdc"
 	"github.com/shrydev2020/gomcdc/internal/report"
 )
 
@@ -18,6 +19,7 @@ type reportAssembly struct {
 	loaded                 loader.Result
 	sources                []sourceInstrumentation
 	coverage               config.CoverageSet
+	maskingAnalysisBudget  mcdc.AnalysisBudget
 	decisions              []cover.DecisionMetadata
 	clauses                []cover.ClauseMetadata
 	noMatches              []cover.NoMatchMetadata
@@ -70,6 +72,7 @@ func assembleReportInput(assembly reportAssembly) report.Input {
 		ModulePath:            assembly.loaded.ModulePath,
 		SourceFiles:           sourceFileInputs(assembly.sources),
 		Coverage:              assembly.coverage,
+		MaskingAnalysisBudget: assembly.maskingAnalysisBudget,
 		Decisions:             assembly.decisions,
 		Evaluations:           assembly.evidence.Evaluations,
 		NotEvaluatedDecisions: assembly.evidence.NotEvaluatedDecisions,

@@ -119,9 +119,14 @@ survives.
 
 Masking MC/DC uses exact search. Its built-in limit for each condition obligation
 is 1,000,000 candidate evaluation pairs, 4,000,000 search states, and 64 MiB of
-search workspace. A search that would exceed a limit yields
-`analysis-incomplete`; it is never reported as `not-covered` or `infeasible`.
-These limits currently have no CLI override.
+primary solver backing arrays. The solver-byte limit excludes validated input,
+result witnesses, goroutine stacks, and all other process memory; it is not a
+process-wide heap, RSS, or total-memory limit. A search that would exceed a
+limit yields `analysis-incomplete`; it is never reported as `not-covered` or
+`infeasible`.
+The three `--mcdc-masking-max-*` options override these positive per-obligation
+limits. Raising them can multiply total work across conditions and decisions.
+Reports record the effective values as `maskingAnalysisLimits`.
 
 ## Common options
 
@@ -148,6 +153,9 @@ gomcdc test ./... -- -count=1 -run TestCritical
 | `--output=<path>` | Write a file, or a directory for HTML |
 | `--strict` | Fail on requested unsupported, unknown, analysis-incomplete, or uninstrumented entities |
 | `--fail-under-<metric>=<percent>` | Fail when one enabled metric is below a threshold |
+| `--mcdc-masking-max-evaluation-pairs=<count>` | Override candidate evaluation pairs per Masking condition obligation; default 1,000,000 |
+| `--mcdc-masking-max-search-states=<count>` | Override newly expanded search states per Masking condition obligation; default 4,000,000 |
+| `--mcdc-masking-max-solver-bytes=<bytes>` | Override primary solver backing-array bytes per Masking condition obligation; default 67,108,864 |
 | `--timeout=<duration>` | Set the `go test` subprocess timeout; default is 10 minutes |
 | `--keep-workdir` | Retain the instrumented temporary workspace for diagnosis |
 | `--workdir=<directory>` | Choose the parent directory for the temporary workspace |

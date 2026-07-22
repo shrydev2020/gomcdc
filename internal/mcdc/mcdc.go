@@ -27,13 +27,13 @@ type UniqueCauseStrategy struct{}
 type AnalysisBudget struct {
 	MaxEvaluationPairs uint64
 	MaxSearchStates    uint64
-	MaxWorkspaceBytes  uint64
+	MaxSolverBytes     uint64
 }
 
 const (
 	defaultMaxEvaluationPairs = uint64(1_000_000)
 	defaultMaxSearchStates    = uint64(4_000_000)
-	defaultMaxWorkspaceBytes  = uint64(64 * 1024 * 1024)
+	defaultMaxSolverBytes     = uint64(64 * 1024 * 1024)
 )
 
 // DefaultMaskingAnalysisBudget returns the deterministic resource limits used
@@ -42,8 +42,25 @@ func DefaultMaskingAnalysisBudget() AnalysisBudget {
 	return AnalysisBudget{
 		MaxEvaluationPairs: defaultMaxEvaluationPairs,
 		MaxSearchStates:    defaultMaxSearchStates,
-		MaxWorkspaceBytes:  defaultMaxWorkspaceBytes,
+		MaxSolverBytes:     defaultMaxSolverBytes,
 	}
+}
+
+// EffectiveMaskingAnalysisBudget fills each zero-valued limit with the
+// deterministic default used by MaskingStrategy. The returned value is safe
+// to persist in a report as the effective per-condition-obligation budget.
+func EffectiveMaskingAnalysisBudget(configured AnalysisBudget) AnalysisBudget {
+	defaults := DefaultMaskingAnalysisBudget()
+	if configured.MaxEvaluationPairs == 0 {
+		configured.MaxEvaluationPairs = defaults.MaxEvaluationPairs
+	}
+	if configured.MaxSearchStates == 0 {
+		configured.MaxSearchStates = defaults.MaxSearchStates
+	}
+	if configured.MaxSolverBytes == 0 {
+		configured.MaxSolverBytes = defaults.MaxSolverBytes
+	}
+	return configured
 }
 
 // MaskingStrategy uses the decision expression's Boolean difference. A target
@@ -179,7 +196,7 @@ func (strategy MaskingStrategy) Analyze(metadata cover.DecisionMetadata, evaluat
 type maskingSearchStats struct {
 	EvaluationPairs uint64
 	SearchStates    uint64
-	WorkspaceBytes  uint64
+	SolverBytes     uint64
 }
 
 func (strategy MaskingStrategy) analyze(
@@ -235,8 +252,8 @@ func (strategy MaskingStrategy) analyze(
 			}
 			continue
 		}
-		workspaceBytes := maskingWorkspaceBytes(nodeCount, count, candidateIndexes)
-		if search.requireWorkspace(workspaceBytes) {
+		solverBytes := maskingSolverBytes(nodeCount, count, candidateIndexes)
+		if search.requireSolverBytes(solverBytes) {
 			if workspace == nil {
 				workspace = newJointWorkspace(metadata.ExpressionTree, nodeCount, count)
 			}

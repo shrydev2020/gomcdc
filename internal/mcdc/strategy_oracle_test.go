@@ -2,6 +2,7 @@ package mcdc
 
 import (
 	"fmt"
+	"math/rand"
 	"reflect"
 	"slices"
 	"testing"
@@ -10,6 +11,8 @@ import (
 )
 
 const oracleDecisionID cover.DecisionID = 9001
+
+const randomizedOracleSeed int64 = 0x4d43444320260001
 
 // TestStrategiesAgainstGeneratedSemanticOracle checks the public strategy
 // boundary against a deliberately slow, independent truth-table oracle. The
@@ -59,6 +62,100 @@ func TestStrategiesAgainstGeneratedSemanticOracle(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestStrategiesAgainstRandomizedSemanticOracle extends the exhaustive small
+// oracle with bounded 4-6 condition cases. A fixed seed keeps CI deterministic
+// while random association, leaf order, operators, negation, and evidence
+// subsets cover shapes that are too numerous to enumerate exhaustively.
+func TestStrategiesAgainstRandomizedSemanticOracle(t *testing.T) {
+	random := rand.New(rand.NewSource(randomizedOracleSeed))
+	for caseIndex := 0; caseIndex < 12; caseIndex++ {
+		conditionCount := 4 + caseIndex%3
+		indexes := random.Perm(conditionCount)
+		expression := oracleRandomExpression(random, indexes)
+		evaluations := oracleEvaluations(expression, conditionCount)
+		scenario := "full"
+		if caseIndex%2 == 1 {
+			scenario = "random-subset"
+			evaluations = oracleRandomSubset(random, evaluations)
+		}
+		name := fmt.Sprintf(
+			"seed=%x/case=%02d/conditions=%d/%s",
+			randomizedOracleSeed,
+			caseIndex,
+			conditionCount,
+			scenario,
+		)
+		t.Run(name, func(t *testing.T) {
+			metadata := oracleMetadata(expression, conditionCount)
+			strategies := []struct {
+				name     string
+				strategy MCDCStrategy
+				masking  bool
+			}{
+				{name: "unique-cause", strategy: UniqueCauseStrategy{}},
+				{name: "masking", strategy: MaskingStrategy{}, masking: true},
+			}
+			for _, strategy := range strategies {
+				t.Run(strategy.name, func(t *testing.T) {
+					result := strategy.strategy.Analyze(metadata, evaluations)
+					oracleAssertStrategyResult(t, expression, conditionCount, evaluations, result, strategy.masking)
+
+					reversed := append([]cover.DecisionEvaluation(nil), evaluations...)
+					slices.Reverse(reversed)
+					reversedResult := strategy.strategy.Analyze(metadata, reversed)
+					if !reflect.DeepEqual(reversedResult, result) {
+						t.Fatalf(
+							"seed=%x case=%d expression=%s depends on evaluation order\nforward: %#v\nreverse: %#v",
+							randomizedOracleSeed,
+							caseIndex,
+							oracleExpressionString(expression),
+							result,
+							reversedResult,
+						)
+					}
+				})
+			}
+		})
+	}
+}
+
+func oracleRandomExpression(random *rand.Rand, indexes []int) *cover.BooleanExpression {
+	if len(indexes) == 1 {
+		expression := cover.NewConditionExpression(uint16(indexes[0]))
+		if random.Intn(3) == 0 {
+			return cover.NewNotExpression(expression)
+		}
+		return expression
+	}
+	split := 1 + random.Intn(len(indexes)-1)
+	kind := cover.BooleanExpressionAnd
+	if random.Intn(2) == 1 {
+		kind = cover.BooleanExpressionOr
+	}
+	expression := &cover.BooleanExpression{
+		Kind:  kind,
+		Left:  oracleRandomExpression(random, indexes[:split]),
+		Right: oracleRandomExpression(random, indexes[split:]),
+	}
+	if random.Intn(3) == 0 {
+		return cover.NewNotExpression(expression)
+	}
+	return expression
+}
+
+func oracleRandomSubset(random *rand.Rand, evaluations []cover.DecisionEvaluation) []cover.DecisionEvaluation {
+	result := make([]cover.DecisionEvaluation, 0, len(evaluations))
+	for _, evaluation := range evaluations {
+		if random.Intn(3) != 0 {
+			result = append(result, evaluation)
+		}
+	}
+	if len(result) == 0 && len(evaluations) > 0 {
+		result = append(result, evaluations[0])
+	}
+	return result
 }
 
 func oracleAssertStrategyResult(
