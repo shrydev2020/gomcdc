@@ -26,12 +26,17 @@ import (
 func TestWithRelocatedModFilePreservesOnlyCopiedSelectionAndBinaryArgs(t *testing.T) {
 	t.Parallel()
 	got := withRelocatedModFile(
-		[]string{"-run", "TestOne", "-modfile", "/source/analysis.mod", "-args", "-fixture", "value"},
+		parseGoTestArguments(t, "-run", "TestOne", "-modfile", "/source/analysis.mod", "-args", "-fixture", "value"),
 		"/workspace/config/gomcdc.mod",
 	)
 	want := []string{"-run", "TestOne", "-modfile=/workspace/config/gomcdc.mod", "-args", "-fixture", "value"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("withRelocatedModFile() = %#v, want %#v", got, want)
+	actual := got.Prefix()
+	if binary, boundary := got.BinaryArgs(); boundary {
+		actual = append(actual, "-args")
+		actual = append(actual, binary...)
+	}
+	if !reflect.DeepEqual(actual, want) {
+		t.Fatalf("withRelocatedModFile() = %#v, want %#v", actual, want)
 	}
 }
 

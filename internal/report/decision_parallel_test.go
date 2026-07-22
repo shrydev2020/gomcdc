@@ -41,7 +41,7 @@ func TestCanceledDecisionSchedulingRetainsEvidenceAndMarksMaskingIncomplete(t *t
 		t.Fatalf("cancellation leaked from Masking into Unique-Cause analysis: %#v", decision.MCDCUnique)
 	}
 	if decision.MCDCMasking.Status != string(cover.CoverageAnalysisIncomplete) ||
-		!strings.Contains(decision.MCDCMasking.Reason, "canceled before this decision started") {
+		!strings.Contains(decision.MCDCMasking.Reason, "analysis canceled") {
 		t.Fatalf("canceled Masking analysis = %#v", decision.MCDCMasking)
 	}
 }
@@ -52,7 +52,7 @@ func TestDecisionBuildPoolWaitsForWorkersBeforePropagatingPanic(t *testing.T) {
 	for index := range tasks {
 		tasks[index].metadata.ID = cover.DecisionID(index + 1)
 	}
-	build := func(task decisionBuildTask) DecisionReport {
+	build := func(_ context.Context, task decisionBuildTask) DecisionReport {
 		active.Add(1)
 		defer active.Add(-1)
 		if task.metadata.ID == 1 {
@@ -61,12 +61,9 @@ func TestDecisionBuildPoolWaitsForWorkersBeforePropagatingPanic(t *testing.T) {
 		time.Sleep(time.Millisecond)
 		return DecisionReport{DecisionID: formatID(uint64(task.metadata.ID))}
 	}
-	canceled := func(task decisionBuildTask) DecisionReport {
-		return DecisionReport{DecisionID: formatID(uint64(task.metadata.ID))}
-	}
 	recovered := func() (value any) {
 		defer func() { value = recover() }()
-		runDecisionBuildPool(t.Context(), tasks, 4, build, canceled)
+		runDecisionBuildPool(t.Context(), tasks, 4, build)
 		return nil
 	}()
 	if recovered != "decision-builder-panic" {
@@ -82,15 +79,18 @@ func TestCanceledDecisionBuildPoolLeavesNoWorkers(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	tasks := make([]decisionBuildTask, 64)
-	var built atomic.Int64
-	build := func(task decisionBuildTask) DecisionReport {
-		built.Add(1)
+	var started, canceled atomic.Int64
+	build := func(ctx context.Context, task decisionBuildTask) DecisionReport {
+		if ctx.Err() != nil {
+			canceled.Add(1)
+			return DecisionReport{}
+		}
+		started.Add(1)
 		return DecisionReport{}
 	}
-	canceled := func(task decisionBuildTask) DecisionReport { return DecisionReport{} }
-	results := runDecisionBuildPool(ctx, tasks, 4, build, canceled)
-	if len(results) != len(tasks) || built.Load() != 0 {
-		t.Fatalf("canceled pool built %d tasks and returned %d results", built.Load(), len(results))
+	results := runDecisionBuildPool(ctx, tasks, 4, build)
+	if len(results) != len(tasks) || started.Load() != 0 || canceled.Load() != int64(len(tasks)) {
+		t.Fatalf("canceled pool started %d analyses, finalized %d tasks, and returned %d results", started.Load(), canceled.Load(), len(results))
 	}
 	deadline := time.Now().Add(time.Second)
 	for runtime.NumGoroutine() > baseline+1 && time.Now().Before(deadline) {
@@ -109,17 +109,17 @@ func TestDecisionBuildPoolRetainsCompletedResultsAfterCancellation(t *testing.T)
 	ctx, cancel := context.WithCancel(t.Context())
 	started := make(chan cover.DecisionID, 2)
 	release := make(chan struct{})
-	build := func(task decisionBuildTask) DecisionReport {
+	build := func(ctx context.Context, task decisionBuildTask) DecisionReport {
+		if ctx.Err() != nil {
+			return DecisionReport{DecisionID: "canceled"}
+		}
 		started <- task.metadata.ID
 		<-release
 		return DecisionReport{DecisionID: "completed"}
 	}
-	canceled := func(task decisionBuildTask) DecisionReport {
-		return DecisionReport{DecisionID: "canceled"}
-	}
 	done := make(chan []DecisionReport, 1)
 	go func() {
-		done <- runDecisionBuildPool(ctx, tasks, 2, build, canceled)
+		done <- runDecisionBuildPool(ctx, tasks, 2, build)
 	}()
 	<-started
 	<-started

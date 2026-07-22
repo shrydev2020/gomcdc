@@ -21,6 +21,7 @@ import (
 	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
 	"github.com/shrydev2020/gomcdc/v2/internal/goflags"
 	"github.com/shrydev2020/gomcdc/v2/internal/gotest"
+	"github.com/shrydev2020/gomcdc/v2/internal/gotestargs"
 	"github.com/shrydev2020/gomcdc/v2/internal/instrument"
 	"github.com/shrydev2020/gomcdc/v2/internal/loader"
 	"github.com/shrydev2020/gomcdc/v2/internal/mcdc"
@@ -131,18 +132,14 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		writeMeasurementFlagError(stderr, conflict, "go test arguments")
 		return ExitInvalidUsage
 	}
-	buildFlags, err := loader.BuildFlags(opts.goTestArgs)
-	if err != nil {
-		fmt.Fprintf(stderr, "gomcdc: %v\n", err)
-		return ExitInvalidUsage
-	}
+	buildFlags := loader.BuildFlags(opts.goTestArgs)
 	rawGOFLAGS := os.Getenv("GOFLAGS")
 	goFlagWords, goFlagsErr := goflags.Split(rawGOFLAGS)
 	if goFlagsErr != nil {
 		fmt.Fprintf(stderr, "gomcdc: parse GOFLAGS: %v\n", goFlagsErr)
 		return ExitInvalidUsage
 	}
-	if conflict := measurementFlag(goFlagWords); conflict != "" {
+	if conflict := measurementGOFLAG(goFlagWords); conflict != "" {
 		writeMeasurementFlagError(stderr, conflict, "GOFLAGS")
 		return ExitInvalidUsage
 	}
@@ -306,9 +303,8 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		noMatches = append(noMatches, item.analysis.NoMatches...)
 	}
 
-	jsonMode := goTestJSONEnabled(opts.goTestArgs)
 	measurement, measurementErr := measure(measurementRequest{
-		context: ctx, timeout: opts.timeout, goTestArgs: opts.goTestArgs, goFlags: filteredGOFLAGS, json: jsonMode,
+		context: ctx, timeout: opts.timeout, goTestArgs: opts.goTestArgs, goFlags: filteredGOFLAGS,
 		loaded: loaded, sources: sources, generated: generatedFiles, ignoredCoverageFiles: ignoredCoverageFiles,
 		decisions: decisions, clauses: clauses, noMatches: noMatches,
 		needsC0: needsC0, needsAST: needsASTRun, compilerClauseSelection: needsCompilerSelection,
@@ -618,15 +614,25 @@ var measurementFlags = map[string]struct{}{
 	"coverpkg": {}, "json": {}, "overlay": {}, "toolexec": {},
 }
 
-func measurementFlag(arguments []string) string {
-	for _, argument := range arguments {
-		if argument == "-args" || argument == "--args" {
-			break
+func measurementFlag(arguments gotestargs.Arguments) string {
+	for _, flag := range arguments.Flags() {
+		name := flag.CanonicalName()
+		if _, forbidden := measurementFlags[name]; forbidden {
+			return name
 		}
-		if !strings.HasPrefix(argument, "-") {
-			continue
+	}
+	return ""
+}
+
+func measurementGOFLAG(words []string) string {
+	for _, word := range words {
+		name := goflags.Name(word)
+		switch name {
+		case "test.count":
+			name = "count"
+		case "test.coverprofile":
+			name = "coverprofile"
 		}
-		name := goflags.Name(argument)
 		if _, forbidden := measurementFlags[name]; forbidden {
 			return name
 		}
@@ -640,23 +646,6 @@ func writeMeasurementFlagError(stderr io.Writer, name, source string) {
 		return
 	}
 	fmt.Fprintf(stderr, "gomcdc: go test -%s from %s conflicts with gomcdc measurement ownership\n", name, source)
-}
-
-func goTestJSONEnabled(arguments []string) bool {
-	enabled := false
-	for _, argument := range arguments {
-		if argument == "-args" || argument == "--args" {
-			break
-		}
-		name := strings.TrimLeft(argument, "-")
-		switch {
-		case name == "json", name == "json=true":
-			enabled = true
-		case name == "json=false":
-			enabled = false
-		}
-	}
-	return enabled
 }
 
 func collectC0(

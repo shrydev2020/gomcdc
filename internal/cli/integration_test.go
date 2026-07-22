@@ -1178,6 +1178,8 @@ func TestRejectsMeasurementOwnedFlagsFromExplicitFlagsAndGOFLAGS(t *testing.T) {
 		{name: "explicit-toolexec", args: []string{"test", ".", "--", "-toolexec=/tmp/tool"}, want: "-toolexec"},
 		{name: "GOFLAGS-toolexec", goFlags: "-toolexec=/tmp/tool", args: []string{"test", "."}, want: "-toolexec"},
 		{name: "explicit-count", args: []string{"test", ".", "--", "-count=2"}, want: "-count"},
+		{name: "explicit-test-count", args: []string{"test", ".", "--", "-test.count=2"}, want: "-count"},
+		{name: "GOFLAGS-test-count", goFlags: "-test.count=2", args: []string{"test", "."}, want: "-count"},
 		{name: "GOFLAGS-coverprofile", goFlags: "-coverprofile=user.out", args: []string{"test", "."}, want: "-coverprofile"},
 		{name: "explicit-json", args: []string{"test", ".", "--", "-json=false"}, want: "-json"},
 	} {
@@ -1187,6 +1189,53 @@ func TestRejectsMeasurementOwnedFlagsFromExplicitFlagsAndGOFLAGS(t *testing.T) {
 			code := runAt(t.Context(), t.TempDir(), test.args, &stdout, &stderr)
 			if code != ExitInvalidUsage || !strings.Contains(stderr.String(), test.want) {
 				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
+func TestValueAwareGoTestArgumentsRetainGoMeaning(t *testing.T) {
+	module := t.TempDir()
+	writeIntegrationFile(t, filepath.Join(module, "go.mod"), "module example.test/testargs\n\ngo 1.26\n")
+	writeIntegrationFile(t, filepath.Join(module, "value.go"), "package testargs\n\nfunc Value() bool { return true }\n")
+	writeIntegrationFile(t, filepath.Join(module, "value_test.go"), `package testargs
+
+import (
+	"flag"
+	"testing"
+)
+
+var fixture = flag.String("fixture", "", "fixture value")
+
+func TestValue(t *testing.T) {
+	if !Value() {
+		t.Fatal("false")
+	}
+	if *fixture != "" && *fixture != "ok" {
+		t.Fatalf("fixture = %q", *fixture)
+	}
+}
+`)
+	t.Setenv("GOWORK", "off")
+
+	for _, test := range []struct {
+		name      string
+		arguments []string
+	}{
+		{name: "run value count", arguments: []string{"-run", "-count"}},
+		{name: "run value tags", arguments: []string{"-run", "-tags"}},
+		{name: "run value args", arguments: []string{"-run", "-args"}},
+		{name: "actual args boundary", arguments: []string{"-args", "-fixture=ok"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			arguments := []string{"--coverage=statement", "--format=json", ".", "--"}
+			arguments = append(arguments, test.arguments...)
+			built, stderr, code := runFixture(t, module, arguments...)
+			if code != ExitSuccess {
+				t.Fatalf("value-aware go test args exit=%d\nstderr:\n%s", code, stderr)
+			}
+			if built.Run.Results.Test != report.ResultPassed || built.Run.Results.Measurement != report.ResultPassed {
+				t.Fatalf("value-aware go test args run = %#v", built.Run)
 			}
 		})
 	}

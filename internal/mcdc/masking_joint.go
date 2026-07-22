@@ -1,6 +1,7 @@
 package mcdc
 
 import (
+	"context"
 	"unsafe"
 
 	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
@@ -11,19 +12,26 @@ import (
 // the primary solver buffers. Each budget belongs to one condition obligation.
 type maskingSearchBudget struct {
 	limits          AnalysisBudget
+	ctx             context.Context
 	evaluationPairs uint64
 	searchStates    uint64
 	solverBytes     uint64
-	exceededReason  string
+	stopReason      string
+	canceled        bool
 }
 
-func newMaskingSearchBudget(configured AnalysisBudget) *maskingSearchBudget {
-	return &maskingSearchBudget{limits: EffectiveMaskingAnalysisBudget(configured)}
+const maskingCancellationCheckInterval uint64 = 1024
+
+func newMaskingSearchBudget(ctx context.Context, configured AnalysisBudget) *maskingSearchBudget {
+	return &maskingSearchBudget{limits: EffectiveMaskingAnalysisBudget(configured), ctx: ctx}
 }
 
 func (budget *maskingSearchBudget) consumeEvaluationPair() bool {
 	if budget.evaluationPairs >= budget.limits.MaxEvaluationPairs {
 		budget.exceed("evaluation-pair count")
+		return false
+	}
+	if budget.evaluationPairs != 0 && budget.evaluationPairs%maskingCancellationCheckInterval == 0 && budget.cancelIfRequested() {
 		return false
 	}
 	budget.evaluationPairs++
@@ -33,6 +41,9 @@ func (budget *maskingSearchBudget) consumeEvaluationPair() bool {
 func (budget *maskingSearchBudget) consumeSearchState() bool {
 	if budget.searchStates >= budget.limits.MaxSearchStates {
 		budget.exceed("search-state count")
+		return false
+	}
+	if budget.searchStates != 0 && budget.searchStates%maskingCancellationCheckInterval == 0 && budget.cancelIfRequested() {
 		return false
 	}
 	budget.searchStates++
@@ -51,16 +62,35 @@ func (budget *maskingSearchBudget) requireSolverBytes(bytes uint64) bool {
 }
 
 func (budget *maskingSearchBudget) exceed(resource string) {
-	if budget.exceededReason == "" {
-		budget.exceededReason = resource
+	if budget.stopReason == "" {
+		budget.stopReason = "masking MC/DC joint search exceeded configured " + resource + " limit"
 	}
 }
 
 func (budget *maskingSearchBudget) reason() string {
-	if budget.exceededReason == "" {
+	if budget.stopReason == "" {
 		return "masking MC/DC joint search did not finish"
 	}
-	return "masking MC/DC joint search exceeded configured " + budget.exceededReason + " limit"
+	return budget.stopReason
+}
+
+func (budget *maskingSearchBudget) stopped() bool {
+	return budget.stopReason != ""
+}
+
+func (budget *maskingSearchBudget) cancelIfRequested() bool {
+	if budget.stopReason != "" {
+		return budget.canceled
+	}
+	if budget.ctx == nil {
+		return false
+	}
+	if budget.ctx.Err() == nil {
+		return false
+	}
+	budget.canceled = true
+	budget.stopReason = maskingCancellationReason
+	return true
 }
 
 func (budget *maskingSearchBudget) stats() maskingSearchStats {
@@ -251,7 +281,7 @@ func (solver *jointSolver) solve(nodeIndex int, state uint8) bool {
 		panic("mcdc: joint workspace contains an unsupported node")
 	}
 
-	if solver.budget.exceededReason != "" {
+	if solver.budget.stopped() {
 		return false
 	}
 	if possible {
@@ -268,7 +298,7 @@ func (solver *jointSolver) solveBinary(node jointNode, state uint8, entry *joint
 	secondChoices := jointChildValues(node.kind, secondValue)
 	for _, firstChoice := range firstChoices {
 		for _, secondChoice := range secondChoices {
-			if solver.budget.exceededReason != "" {
+			if solver.budget.stopped() {
 				return false
 			}
 			leftFirstActive, rightFirstActive := jointChildActivity(

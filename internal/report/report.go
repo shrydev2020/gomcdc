@@ -707,13 +707,13 @@ func addC0Function(builder *functionBuilder, filePath string, source c0.Function
 }
 
 func buildDecisionReport(
+	ctx context.Context,
 	metadata cover.DecisionMetadata,
 	evaluations []cover.DecisionEvaluation,
 	notEvaluated int,
 	state entityState,
 	coverage config.CoverageSet,
 	maskingBudget mcdc.AnalysisBudget,
-	maskingCanceled bool,
 ) DecisionReport {
 	completed := completedEvaluations(evaluations)
 	trueCovered, falseCovered := false, false
@@ -734,11 +734,7 @@ func buildDecisionReport(
 	}
 	var maskingResult cover.MCDCResult
 	if maskingEnabled {
-		if maskingCanceled {
-			maskingResult = canceledMaskingResult(metadata)
-		} else {
-			maskingResult = (mcdc.MaskingStrategy{Budget: maskingBudget}).Analyze(metadata, evaluations)
-		}
+		maskingResult = (mcdc.MaskingStrategy{Budget: maskingBudget}).AnalyzeContext(ctx, metadata, evaluations)
 	}
 	unique := buildMCDCAnalysis(uniqueResult, metadata.Conditions, state, uniqueEnabled)
 	masking := buildMCDCAnalysis(maskingResult, metadata.Conditions, state, maskingEnabled)

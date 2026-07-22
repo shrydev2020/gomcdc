@@ -22,7 +22,7 @@ type decisionBuildTask struct {
 	state        entityState
 }
 
-type decisionBuildFunc func(decisionBuildTask) DecisionReport
+type decisionBuildFunc func(context.Context, decisionBuildTask) DecisionReport
 
 func effectiveMaskingDecisionWorkers(configured, decisionCount int) int {
 	if decisionCount <= 1 {
@@ -53,29 +53,18 @@ func buildDecisionReports(
 	maskingBudget mcdc.AnalysisBudget,
 	workers int,
 ) []DecisionReport {
-	build := func(task decisionBuildTask) DecisionReport {
+	build := func(analysisContext context.Context, task decisionBuildTask) DecisionReport {
 		return buildDecisionReport(
+			analysisContext,
 			task.metadata,
 			task.evaluations,
 			task.notEvaluated,
 			task.state,
 			coverage,
 			maskingBudget,
-			false,
 		)
 	}
-	canceled := func(task decisionBuildTask) DecisionReport {
-		return buildDecisionReport(
-			task.metadata,
-			task.evaluations,
-			task.notEvaluated,
-			task.state,
-			coverage,
-			maskingBudget,
-			true,
-		)
-	}
-	return runDecisionBuildPool(ctx, tasks, workers, build, canceled)
+	return runDecisionBuildPool(ctx, tasks, workers, build)
 }
 
 // runDecisionBuildPool writes each result to its sorted task index. Workers
@@ -86,7 +75,6 @@ func runDecisionBuildPool(
 	tasks []decisionBuildTask,
 	workers int,
 	build decisionBuildFunc,
-	canceled decisionBuildFunc,
 ) []DecisionReport {
 	if ctx == nil {
 		ctx = context.Background()
@@ -98,11 +86,7 @@ func runDecisionBuildPool(
 	}
 	if workers <= 1 {
 		for index, task := range tasks {
-			if ctx.Err() != nil {
-				results[index] = canceled(task)
-				continue
-			}
-			results[index] = build(task)
+			results[index] = build(ctx, task)
 		}
 		return results
 	}
@@ -143,7 +127,7 @@ func runDecisionBuildPool(
 					if poolContext.Err() != nil {
 						return
 					}
-					results[index] = build(tasks[index])
+					results[index] = build(poolContext, tasks[index])
 					completed[index] = true
 				}
 			}
@@ -157,31 +141,8 @@ func runDecisionBuildPool(
 	}
 	for index, done := range completed {
 		if !done {
-			results[index] = canceled(tasks[index])
+			results[index] = build(poolContext, tasks[index])
 		}
 	}
 	return results
-}
-
-func canceledMaskingResult(metadata cover.DecisionMetadata) cover.MCDCResult {
-	const reason = "Masking MC/DC analysis was canceled before this decision started"
-	conditions := make([]cover.MCDCConditionResult, 0, len(metadata.Conditions))
-	for _, condition := range metadata.Conditions {
-		conditions = append(conditions, cover.MCDCConditionResult{
-			ConditionIndex: condition.Index,
-			Outcome:        cover.CoverageOutcomeUnknown,
-			Support:        cover.SupportSupported,
-			Analysis:       cover.AnalysisIncomplete,
-			Reason:         reason,
-		})
-	}
-	return cover.MCDCResult{
-		DecisionID: metadata.ID,
-		Metric:     cover.CoverageMetricMCDCMasking,
-		Outcome:    cover.CoverageOutcomeUnknown,
-		Support:    cover.SupportSupported,
-		Analysis:   cover.AnalysisIncomplete,
-		Conditions: conditions,
-		Reason:     reason,
-	}
 }

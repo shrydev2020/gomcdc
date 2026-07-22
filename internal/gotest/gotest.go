@@ -14,13 +14,14 @@ import (
 
 	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
 	"github.com/shrydev2020/gomcdc/v2/internal/goflags"
+	"github.com/shrydev2020/gomcdc/v2/internal/gotestargs"
 	"github.com/shrydev2020/gomcdc/v2/internal/processgroup"
 )
 
 type Options struct {
 	Dir      string
 	Patterns []string
-	Args     []string
+	Args     gotestargs.Arguments
 	// CoverProfile, when non-empty, is forced in place of any user-supplied
 	// -coverprofile flag. The same rule applies to -count: coverage always runs
 	// exactly once with -count=1 so cached results can never satisfy the run.
@@ -58,11 +59,10 @@ type Result struct {
 // Run disables the Go test result cache because cached tests cannot emit
 // runtime coverage observations into this run's fresh data directory.
 func Run(ctx context.Context, opts Options) Result {
-	goArgs, binaryArgs := splitBinaryArgs(opts.Args)
-	goArgs = removeForcedFlags(goArgs)
+	arguments := opts.Args.Without("count", "cover", "coverprofile", "covermode", "coverpkg", "json")
 	args := []string{"test"}
 	args = append(args, opts.Patterns...)
-	args = append(args, goArgs...)
+	args = append(args, arguments.Prefix()...)
 	if opts.CoverProfile != "" {
 		args = append(args, "-coverprofile="+opts.CoverProfile)
 		if len(opts.CoverPackages) > 0 {
@@ -88,7 +88,7 @@ func Run(ctx context.Context, opts Options) Result {
 		args = append(args, "-toolexec="+quoted)
 	}
 	args = append(args, "-count=1")
-	if len(binaryArgs) > 0 {
+	if binaryArgs, boundary := arguments.BinaryArgs(); boundary {
 		args = append(args, "-args")
 		args = append(args, binaryArgs...)
 	}
@@ -174,34 +174,6 @@ func quoteGoCommandArgument(argument string) (string, error) {
 		return `"` + argument + `"`, nil
 	}
 	return "", fmt.Errorf("argument %q contains whitespace and both quote characters", argument)
-}
-
-func splitBinaryArgs(arguments []string) (goArguments, binaryArguments []string) {
-	for index, argument := range arguments {
-		if argument == "-args" || argument == "--args" {
-			return append([]string(nil), arguments[:index]...), append([]string(nil), arguments[index+1:]...)
-		}
-	}
-	return append([]string(nil), arguments...), nil
-}
-
-func removeForcedFlags(arguments []string) []string {
-	result := make([]string, 0, len(arguments))
-	for index := 0; index < len(arguments); index++ {
-		argument := arguments[index]
-		name := goflags.Name(argument)
-		if name == "json" || name == "cover" {
-			continue
-		}
-		if name == "count" || name == "covermode" || name == "coverprofile" || name == "coverpkg" {
-			if !strings.Contains(argument, "=") && index+1 < len(arguments) {
-				index++
-			}
-			continue
-		}
-		result = append(result, argument)
-	}
-	return result
 }
 
 func environmentValue(environment []string, key string) string {

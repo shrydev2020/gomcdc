@@ -12,7 +12,17 @@ import (
 	"time"
 
 	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
+	"github.com/shrydev2020/gomcdc/v2/internal/gotestargs"
 )
+
+func testArguments(t *testing.T, arguments ...string) gotestargs.Arguments {
+	t.Helper()
+	parsed, err := gotestargs.Parse(arguments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed
+}
 
 func TestRunForcesFreshTestAndSeparatesOutput(t *testing.T) {
 	bin := t.TempDir()
@@ -23,7 +33,7 @@ func TestRunForcesFreshTestAndSeparatesOutput(t *testing.T) {
 	result := Run(t.Context(), Options{
 		Dir:        t.TempDir(),
 		Patterns:   []string{"./..."},
-		Args:       []string{"-run", "TestOne"},
+		Args:       testArguments(t, "-run", "TestOne"),
 		DataDirEnv: "GOMCDC_DATA_DIR",
 		DataDir:    "/tmp/events with spaces",
 		Output:     &output,
@@ -183,7 +193,7 @@ func TestRunOverridesCountAndCoverProfile(t *testing.T) {
 	result := Run(t.Context(), Options{
 		Dir:           t.TempDir(),
 		Patterns:      []string{"example.test/p"},
-		Args:          []string{"-count=4", "-coverprofile", "user.out", "-run", "TestX", "-args", "-custom"},
+		Args:          testArguments(t, "-count=4", "-coverprofile", "user.out", "-run", "TestX", "-args", "-custom"),
 		CoverProfile:  "/tmp/tool.out",
 		CoverPackages: []string{"example.test/p", "example.test/shared"},
 		Environment:   map[string]string{"RUN_ID": "abc"},
@@ -223,14 +233,6 @@ func TestQuoteGoCommandArgument(t *testing.T) {
 	}
 }
 
-func TestRemoveForcedFlagsOverridesExplicitJSONValue(t *testing.T) {
-	t.Parallel()
-	got := removeForcedFlags([]string{"-json=false", "-run", "TestX"})
-	if want := []string{"-run", "TestX"}; strings.Join(got, "\x00") != strings.Join(want, "\x00") {
-		t.Fatalf("removeForcedFlags = %q, want %q", got, want)
-	}
-}
-
 func TestRunASTMeasurementOwnsAllCoverageFlags(t *testing.T) {
 	bin := t.TempDir()
 	writeExecutable(t, filepath.Join(bin, "go"), "#!/bin/sh\nprintf 'goflags=%s args=%s\\n' \"$GOFLAGS\" \"$*\"\nprintf 'ok\\texample.test/p\\t0.001s\\n'\n")
@@ -240,7 +242,7 @@ func TestRunASTMeasurementOwnsAllCoverageFlags(t *testing.T) {
 	result := Run(t.Context(), Options{
 		Dir:          t.TempDir(),
 		Patterns:     []string{"example.test/p"},
-		Args:         []string{"-cover", "-covermode", "count", "-coverprofile=user.out", "-run", "TestX"},
+		Args:         testArguments(t, "-cover", "-covermode", "count", "-coverprofile=user.out", "-run", "TestX"),
 		DisableCover: true,
 		Output:       &output,
 	})

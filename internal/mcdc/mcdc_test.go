@@ -1,6 +1,7 @@
 package mcdc
 
 import (
+	"context"
 	"reflect"
 	"slices"
 	"strings"
@@ -399,6 +400,116 @@ func TestMaskingStrategy(t *testing.T) {
 				t.Fatalf("InvalidEvaluations = %d, want %d", got.InvalidEvaluations, test.wantInvalid)
 			}
 		})
+	}
+}
+
+func TestMaskingAnalyzeContextPreCanceledMarksEveryObligationIncomplete(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	metadata := decisionMetadata(and(condition(0), condition(1)))
+	result := (MaskingStrategy{}).AnalyzeContext(ctx, metadata, []cover.DecisionEvaluation{
+		completed(1, []cover.ConditionState{conditionFalse, notEvaluated}, false),
+		completed(2, []cover.ConditionState{conditionTrue, conditionTrue}, true),
+	})
+	for _, condition := range result.Conditions {
+		if condition.Outcome != cover.CoverageOutcomeUnknown || condition.Analysis != cover.AnalysisIncomplete ||
+			condition.Reason != maskingCancellationReason {
+			t.Fatalf("canceled condition = %#v", condition)
+		}
+	}
+	if result.Analysis != cover.AnalysisIncomplete || result.Reason != maskingCancellationReason {
+		t.Fatalf("canceled result = %#v", result)
+	}
+}
+
+func TestMaskingAnalyzeContextMatchesPureAnalyzeWithoutCancellation(t *testing.T) {
+	t.Parallel()
+	metadata := decisionMetadata(and(condition(0), condition(1)))
+	evaluations := []cover.DecisionEvaluation{
+		completed(1, []cover.ConditionState{conditionFalse, notEvaluated}, false),
+		completed(2, []cover.ConditionState{conditionTrue, conditionTrue}, true),
+	}
+	pure := (MaskingStrategy{}).Analyze(metadata, evaluations)
+	interruptible := (MaskingStrategy{}).AnalyzeContext(t.Context(), metadata, evaluations)
+	if !reflect.DeepEqual(interruptible, pure) {
+		t.Fatalf("AnalyzeContext changed uncanceled semantics\ncontext: %#v\npure: %#v", interruptible, pure)
+	}
+}
+
+func TestMaskingAnalyzeContextPreservesCompletedConditionAndStopsRemaining(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	metadata := decisionMetadata(and(condition(0), or(condition(1), condition(2))))
+	evaluations := []cover.DecisionEvaluation{
+		completed(1, []cover.ConditionState{conditionFalse, notEvaluated, notEvaluated}, false),
+		completed(2, []cover.ConditionState{conditionTrue, conditionTrue, notEvaluated}, true),
+		completed(3, []cover.ConditionState{conditionTrue, conditionFalse, conditionFalse}, false),
+		completed(4, []cover.ConditionState{conditionTrue, conditionFalse, conditionTrue}, true),
+	}
+	result := (MaskingStrategy{}).analyzeContext(ctx, metadata, evaluations, func(target uint16, _ maskingSearchStats) {
+		if target == 0 {
+			cancel()
+		}
+	})
+	if result.Conditions[0].Outcome != cover.CoverageOutcomeCovered || result.Conditions[0].Witness == nil {
+		t.Fatalf("completed condition was not preserved: %#v", result.Conditions[0])
+	}
+	for _, condition := range result.Conditions[1:] {
+		if condition.Outcome != cover.CoverageOutcomeUnknown || condition.Analysis != cover.AnalysisIncomplete ||
+			condition.Reason != maskingCancellationReason {
+			t.Fatalf("unscheduled condition = %#v", condition)
+		}
+	}
+}
+
+func TestMaskingAnalyzeContextStopsAnActiveJointSearch(t *testing.T) {
+	base, cancel := context.WithCancel(t.Context())
+	ctx := &cancelOnErrCheckContext{Context: base, cancel: cancel, cancelAt: 3}
+	expression, evaluations, _ := benchmarkGuardedNoWitness(24)
+	metadata := oracleMetadata(expression, 24)
+	result := (MaskingStrategy{}).AnalyzeContext(ctx, metadata, evaluations)
+	if ctx.checks < ctx.cancelAt {
+		t.Fatalf("context checks = %d, want at least %d", ctx.checks, ctx.cancelAt)
+	}
+	for _, condition := range result.Conditions {
+		if condition.Outcome != cover.CoverageOutcomeUnknown || condition.Analysis != cover.AnalysisIncomplete ||
+			condition.Reason != maskingCancellationReason {
+			t.Fatalf("active-search cancellation = %#v", condition)
+		}
+	}
+}
+
+type cancelOnErrCheckContext struct {
+	context.Context
+	cancel   context.CancelFunc
+	cancelAt int
+	checks   int
+}
+
+func (ctx *cancelOnErrCheckContext) Err() error {
+	ctx.checks++
+	if ctx.checks == ctx.cancelAt {
+		ctx.cancel()
+	}
+	return ctx.Context.Err()
+}
+
+func TestMaskingSearchBudgetChecksCancellationPeriodically(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(t.Context())
+	budget := newMaskingSearchBudget(ctx, AnalysisBudget{})
+	budget.evaluationPairs = maskingCancellationCheckInterval
+	cancel()
+	if budget.consumeEvaluationPair() || !budget.canceled || budget.reason() != maskingCancellationReason {
+		t.Fatalf("evaluation-pair cancellation = %#v", budget)
+	}
+
+	ctx, cancel = context.WithCancel(t.Context())
+	budget = newMaskingSearchBudget(ctx, AnalysisBudget{})
+	budget.searchStates = maskingCancellationCheckInterval
+	cancel()
+	if budget.consumeSearchState() || !budget.canceled || budget.reason() != maskingCancellationReason {
+		t.Fatalf("search-state cancellation = %#v", budget)
 	}
 }
 

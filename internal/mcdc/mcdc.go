@@ -3,6 +3,7 @@
 package mcdc
 
 import (
+	"context"
 	"fmt"
 	"sort"
 
@@ -190,7 +191,17 @@ func (UniqueCauseStrategy) Analyze(metadata cover.DecisionMetadata, evaluations 
 // allowing arbitrary non-target differences is insufficient: the target must
 // be pivotal (its Boolean difference must be true) in both completed vectors.
 func (strategy MaskingStrategy) Analyze(metadata cover.DecisionMetadata, evaluations []cover.DecisionEvaluation) cover.MCDCResult {
-	return strategy.analyze(metadata, evaluations, nil)
+	return strategy.analyzeContext(nil, metadata, evaluations, nil)
+}
+
+// AnalyzeContext preserves Analyze's deterministic result semantics while
+// allowing report construction to stop unfinished Masking obligations.
+func (strategy MaskingStrategy) AnalyzeContext(
+	ctx context.Context,
+	metadata cover.DecisionMetadata,
+	evaluations []cover.DecisionEvaluation,
+) cover.MCDCResult {
+	return strategy.analyzeContext(ctx, metadata, evaluations, nil)
 }
 
 type maskingSearchStats struct {
@@ -204,6 +215,20 @@ func (strategy MaskingStrategy) analyze(
 	evaluations []cover.DecisionEvaluation,
 	observe func(target uint16, stats maskingSearchStats),
 ) cover.MCDCResult {
+	return strategy.analyzeContext(nil, metadata, evaluations, observe)
+}
+
+const maskingCancellationReason = "masking MC/DC analysis canceled"
+
+func (strategy MaskingStrategy) analyzeContext(
+	ctx context.Context,
+	metadata cover.DecisionMetadata,
+	evaluations []cover.DecisionEvaluation,
+	observe func(target uint16, stats maskingSearchStats),
+) cover.MCDCResult {
+	if ctx != nil && ctx.Err() != nil {
+		return canceledMaskingAnalysis(metadata)
+	}
 	count, indexes, issue := conditionLayout(metadata, evaluations)
 	result := baseResult(metadata.ID, cover.CoverageMetricMCDCMasking, indexes)
 	if issue != nil {
@@ -231,6 +256,10 @@ func (strategy MaskingStrategy) analyze(
 	var workspace *jointWorkspace
 
 	for conditionPosition, target := range indexes {
+		if ctx != nil && ctx.Err() != nil {
+			markMaskingCanceled(&result, conditionPosition)
+			break
+		}
 		conditionResult := &result.Conditions[conditionPosition]
 		if !structurallyPivotal(metadata.ExpressionTree, target, count) {
 			conditionResult.Analysis = cover.AnalysisInfeasible
@@ -241,7 +270,7 @@ func (strategy MaskingStrategy) analyze(
 			continue
 		}
 
-		search := newMaskingSearchBudget(strategy.Budget)
+		search := newMaskingSearchBudget(ctx, strategy.Budget)
 		bucketCounts, candidateIndexes, hasCandidatePair := maskingCandidateBucketCounts(
 			prepared.evaluations, target,
 		)
@@ -264,6 +293,10 @@ func (strategy MaskingStrategy) analyze(
 			if observe != nil {
 				observe(target, search.stats())
 			}
+			if search.canceled {
+				markMaskingCanceled(&result, conditionPosition+1)
+				break
+			}
 			continue
 		}
 		buckets := maskingCandidateBuckets(prepared.evaluations, target, bucketCounts)
@@ -281,7 +314,7 @@ func (strategy MaskingStrategy) analyze(
 				}
 				right := prepared.evaluations[second]
 				firstCompletion, secondCompletion, covered := workspace.solvePair(left, right, target, search)
-				if search.exceededReason != "" {
+				if search.stopped() {
 					break searchPairs
 				}
 				if covered {
@@ -294,7 +327,7 @@ func (strategy MaskingStrategy) analyze(
 			}
 		}
 		if conditionResult.Witness == nil {
-			if search.exceededReason != "" {
+			if search.stopped() {
 				conditionResult.Outcome = cover.CoverageOutcomeUnknown
 				conditionResult.Analysis = cover.AnalysisIncomplete
 				conditionResult.Reason = search.reason()
@@ -305,10 +338,40 @@ func (strategy MaskingStrategy) analyze(
 		if observe != nil {
 			observe(target, search.stats())
 		}
+		if search.canceled {
+			markMaskingCanceled(&result, conditionPosition+1)
+			break
+		}
 	}
 
 	finishResult(&result)
 	return result
+}
+
+func canceledMaskingAnalysis(metadata cover.DecisionMetadata) cover.MCDCResult {
+	indexes := make([]uint16, len(metadata.Conditions))
+	for index, condition := range metadata.Conditions {
+		indexes[index] = condition.Index
+	}
+	result := baseResult(metadata.ID, cover.CoverageMetricMCDCMasking, indexes)
+	markMaskingCanceled(&result, 0)
+	finishResult(&result)
+	return result
+}
+
+func markMaskingCanceled(result *cover.MCDCResult, start int) {
+	if start < 0 {
+		start = 0
+	}
+	for index := start; index < len(result.Conditions); index++ {
+		condition := &result.Conditions[index]
+		condition.Outcome = cover.CoverageOutcomeUnknown
+		condition.Support = cover.SupportSupported
+		condition.Analysis = cover.AnalysisIncomplete
+		condition.Witness = nil
+		condition.Reason = maskingCancellationReason
+	}
+	result.Reason = maskingCancellationReason
 }
 
 // uniqueCauseWitness indexes evaluations by every non-target condition state.

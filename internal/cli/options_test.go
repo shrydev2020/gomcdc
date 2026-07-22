@@ -54,7 +54,7 @@ func TestParseOptions(t *testing.T) {
 	if !reflect.DeepEqual(opts.patterns, []string{"./...", "./cmd/..."}) {
 		t.Fatalf("patterns = %#v", opts.patterns)
 	}
-	if !reflect.DeepEqual(opts.goTestArgs, []string{"-run", "TestOne"}) {
+	if !reflect.DeepEqual(opts.goTestArgs.Prefix(), []string{"-run", "TestOne"}) {
 		t.Fatalf("goTestArgs = %#v", opts.goTestArgs)
 	}
 	if opts.format != "json" || len(opts.excludes) != 1 {
@@ -113,12 +113,21 @@ func TestMaskingAnalysisBudgetRejectsZeroAndDisabledMetric(t *testing.T) {
 func TestMeasurementFlagRecognizesEveryOwnedGoTestFlag(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"count", "cover", "coverprofile", "covermode", "coverpkg", "json", "overlay", "toolexec"} {
-		if got := measurementFlag([]string{"-" + name + "=value"}); got != name {
+		arguments := parseGoTestArguments(t, "-"+name+"=value")
+		if got := measurementFlag(arguments); got != name {
 			t.Errorf("measurementFlag(-%s) = %q", name, got)
 		}
 	}
-	if got := measurementFlag([]string{"-run=TestX", "-args", "-count=2"}); got != "" {
+	if got := measurementFlag(parseGoTestArguments(t, "-run=TestX", "-args", "-count=2")); got != "" {
 		t.Fatalf("test-binary argument was treated as a go test conflict: %q", got)
+	}
+	for _, value := range []string{"-count", "-tags", "-args"} {
+		if got := measurementFlag(parseGoTestArguments(t, "-run", value)); got != "" {
+			t.Errorf("-run value %q was treated as a go test conflict: %q", value, got)
+		}
+	}
+	if got := measurementFlag(parseGoTestArguments(t, "-test.count=2")); got != "count" {
+		t.Fatalf("test.count alias conflict = %q, want count", got)
 	}
 }
 

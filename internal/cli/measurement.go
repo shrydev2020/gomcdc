@@ -17,6 +17,7 @@ import (
 	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
 	"github.com/shrydev2020/gomcdc/v2/internal/goflags"
 	"github.com/shrydev2020/gomcdc/v2/internal/gotest"
+	"github.com/shrydev2020/gomcdc/v2/internal/gotestargs"
 	"github.com/shrydev2020/gomcdc/v2/internal/instrument"
 	"github.com/shrydev2020/gomcdc/v2/internal/loader"
 	"github.com/shrydev2020/gomcdc/v2/internal/report"
@@ -27,9 +28,8 @@ import (
 type measurementRequest struct {
 	context                 context.Context
 	timeout                 time.Duration
-	goTestArgs              []string
+	goTestArgs              gotestargs.Arguments
 	goFlags                 string
-	json                    bool
 	loaded                  loader.Result
 	sources                 []sourceInstrumentation
 	generated               []c0map.GeneratedFile
@@ -230,7 +230,6 @@ func measure(request measurementRequest, work *workspace.Workspace, stderr io.Wr
 			DataDir:       work.EventDir,
 			Environment:   environment,
 			Toolexec:      compilerToolchain.Toolexec,
-			JSON:          request.json,
 			DisableCover:  !request.needsC0,
 			Output:        stderr,
 		})
@@ -365,25 +364,8 @@ func measure(request measurementRequest, work *workspace.Workspace, stderr io.Wr
 
 // withRelocatedModFile removes every source -modfile selection before the test
 // binary argument boundary and inserts the one workspace-owned snapshot.
-func withRelocatedModFile(arguments []string, path string) []string {
-	goArguments, binaryArguments := splitMeasurementBinaryArgs(arguments)
-	filtered := make([]string, 0, len(goArguments)+1)
-	for index := 0; index < len(goArguments); index++ {
-		argument := goArguments[index]
-		if goflags.Name(argument) != "modfile" {
-			filtered = append(filtered, argument)
-			continue
-		}
-		if !strings.Contains(argument, "=") && index+1 < len(goArguments) {
-			index++
-		}
-	}
-	filtered = append(filtered, "-modfile="+path)
-	if binaryArguments != nil {
-		filtered = append(filtered, "-args")
-		filtered = append(filtered, binaryArguments...)
-	}
-	return filtered
+func withRelocatedModFile(arguments gotestargs.Arguments, path string) gotestargs.Arguments {
+	return arguments.WithValue("modfile", path)
 }
 
 // withRelocatedBuildModFile replaces every source -modfile build flag with the
@@ -396,15 +378,6 @@ func withRelocatedBuildModFile(flags []string, path string) []string {
 		}
 	}
 	return append(result, "-modfile="+path)
-}
-
-func splitMeasurementBinaryArgs(arguments []string) (goArguments, binaryArguments []string) {
-	for index, argument := range arguments {
-		if argument == "-args" || argument == "--args" {
-			return append([]string(nil), arguments[:index]...), append([]string{}, arguments[index+1:]...)
-		}
-	}
-	return append([]string(nil), arguments...), nil
 }
 
 func runtimeProducerOutcome(

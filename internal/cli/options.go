@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/shrydev2020/gomcdc/v2/internal/config"
+	"github.com/shrydev2020/gomcdc/v2/internal/gotestargs"
 	"github.com/shrydev2020/gomcdc/v2/internal/mcdc"
 )
 
@@ -40,7 +41,7 @@ type options struct {
 	maskingMaxSearchStates             optionalUint64
 	maskingMaxSolverBytes              optionalUint64
 	patterns                           []string
-	goTestArgs                         []string
+	goTestArgs                         gotestargs.Arguments
 }
 
 type stringList []string
@@ -134,7 +135,11 @@ func parseOptions(args []string, errOut io.Writer) (options, error) {
 			return options{}, fmt.Errorf("tool flags must appear before package patterns; put go test flags after --: %q", pattern)
 		}
 	}
-	opts.goTestArgs = goTestArgs
+	parsedGoTestArgs, err := gotestargs.Parse(goTestArgs)
+	if err != nil {
+		return options{}, err
+	}
+	opts.goTestArgs = parsedGoTestArgs
 
 	metrics, err := config.ParseCoverage(opts.coverage)
 	if err != nil {
