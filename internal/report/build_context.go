@@ -1,6 +1,7 @@
 package report
 
 import (
+	"context"
 	"sort"
 
 	"github.com/shrydev2020/gomcdc/internal/backend"
@@ -13,8 +14,10 @@ import (
 // these indexes to construct the package/file/function tree; evidence grouping
 // and deterministic ordering are kept out of that phase.
 type buildContext struct {
-	report                Report
-	maskingAnalysisBudget mcdc.AnalysisBudget
+	report                 Report
+	maskingAnalysisBudget  mcdc.AnalysisBudget
+	context                context.Context
+	maskingDecisionWorkers int
 
 	decisions []cover.DecisionMetadata
 	clauses   []cover.ClauseMetadata
@@ -31,6 +34,10 @@ type buildContext struct {
 }
 
 func newBuildContext(input Input) *buildContext {
+	ctx := input.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	instrumentationBackend := input.Backend
 	if instrumentationBackend == nil {
 		instrumentationBackend = backend.OrchestratedBackend{}
@@ -45,6 +52,10 @@ func newBuildContext(input Input) *buildContext {
 		}
 	}
 	maskingAnalysisBudget := mcdc.EffectiveMaskingAnalysisBudget(input.MaskingAnalysisBudget)
+	maskingDecisionWorkers := 1
+	if input.Coverage.Enabled(config.MetricMCDCMasking) {
+		maskingDecisionWorkers = effectiveMaskingDecisionWorkers(input.MaxMaskingDecisionWorkers, len(input.Decisions))
+	}
 	report := Report{
 		SchemaVersion:    SchemaVersion,
 		ToolVersion:      normalizedToolVersion(input.ToolVersion),
@@ -192,7 +203,9 @@ func newBuildContext(input Input) *buildContext {
 	}
 
 	return &buildContext{
-		report: report, maskingAnalysisBudget: maskingAnalysisBudget, decisions: decisions, clauses: clauses,
+		report: report, maskingAnalysisBudget: maskingAnalysisBudget,
+		context: ctx, maskingDecisionWorkers: maskingDecisionWorkers,
+		decisions: decisions, clauses: clauses,
 		evaluationsByDecision: evaluationsByDecision, notEvaluatedByDecision: notEvaluatedByDecision,
 		observationCounts: observationCounts, selectedAlternatives: selectedAlternatives, noMatchObservations: noMatchObservations,
 		packageEvidence: packageEvidence, astPackageEvidence: astPackageEvidence,

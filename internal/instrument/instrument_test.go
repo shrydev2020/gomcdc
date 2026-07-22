@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -19,6 +20,7 @@ import (
 	"github.com/shrydev2020/gomcdc/internal/c0"
 	cover "github.com/shrydev2020/gomcdc/internal/coverage"
 	"github.com/shrydev2020/gomcdc/internal/runtimecov"
+	"github.com/shrydev2020/gomcdc/internal/transformmap"
 )
 
 func TestInstrumentationRejectsCanceledWork(t *testing.T) {
@@ -31,6 +33,21 @@ func TestInstrumentationRejectsCanceledWork(t *testing.T) {
 	}
 	if _, err := InstrumentPackage(PackageOptions{Context: ctx}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("InstrumentPackage error = %v, want context.Canceled", err)
+	}
+}
+
+func TestSyntheticInstrumentedRangesCountsRepeatedLineDirectives(t *testing.T) {
+	t.Parallel()
+	original := []byte("//line p.go:10\npackage p\n")
+	instrumented := []byte("//line p.go:10\n//line p.go:10\npackage p\n")
+	ranges, err := syntheticInstrumentedRanges(original, instrumented, "__gomcdcHooks", ".gomcdc/generated/g.go", ".gomcdc/compiler/c.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := physicalLineRanges(instrumented)
+	want := []transformmap.Range{{Start: lines[1].start, End: lines[1].end}}
+	if !reflect.DeepEqual(ranges, want) {
+		t.Fatalf("synthetic repeated directive ranges = %#v, want %#v", ranges, want)
 	}
 }
 
@@ -547,8 +564,8 @@ func Check(value bool) { if value {} }
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.SourceMaps) != 1 || len(result.SourceMaps[0].LineMappings) == 0 {
-		t.Fatalf("line mappings = %#v", result.SourceMaps)
+	if len(result.Transformations) != 1 || len(result.Transformations[0].LineMappings) == 0 {
+		t.Fatalf("line mappings = %#v", result.Transformations)
 	}
 	if len(result.CoveragePlans) != 1 {
 		t.Fatalf("coverage plans = %#v", result.CoveragePlans)
@@ -556,7 +573,7 @@ func Check(value bool) { if value {} }
 	if _, err := result.CoveragePlans[0].Correspondence.ProjectableRegions(); err != nil {
 		t.Fatalf("line-directive correspondence is not projectable: %v", err)
 	}
-	mapping := result.SourceMaps[0].LineMappings[len(result.SourceMaps[0].LineMappings)-1]
+	mapping := result.Transformations[0].LineMappings[len(result.Transformations[0].LineMappings)-1]
 	if filepath.Base(mapping.LogicalFile) != "imaginary.go" || mapping.LogicalLine < 900 || mapping.LogicalColumn != 7 {
 		t.Errorf("line mapping = %#v", mapping)
 	}
@@ -731,8 +748,19 @@ func TestCoverageFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.SourceMaps) != 1 || !strings.HasPrefix(result.SourceMaps[0].GeneratedFile, ".gomcdc/generated/") || !strings.HasPrefix(result.SourceMaps[0].CompilerFile, ".gomcdc/compiler/") || len(result.SourceMaps[0].GeneratedRegions) == 0 {
-		t.Fatalf("SourceMaps = %#v", result.SourceMaps)
+	if len(result.Transformations) != 1 || !strings.HasPrefix(result.Transformations[0].GeneratedFile, ".gomcdc/generated/") || !strings.HasPrefix(result.Transformations[0].CompilerFile, ".gomcdc/compiler/") || len(result.Transformations[0].GeneratedRegions) == 0 {
+		t.Fatalf("Transformations = %#v", result.Transformations)
+	}
+	relationKinds := make(map[transformmap.RelationKind]bool)
+	for _, relation := range result.Transformations[0].History.Relations() {
+		relationKinds[relation.Kind] = true
+	}
+	if !relationKinds[transformmap.Lossy] || !relationKinds[transformmap.Synthetic] {
+		t.Fatalf("transformation history does not separate source-derived and synthetic bytes: %#v", result.Transformations[0].History.Relations())
+	}
+	if result.CoveragePlans[0].Transformation.Source() != result.Transformations[0].History.Source() ||
+		result.CoveragePlans[0].Transformation.Target() != result.Transformations[0].History.Target() {
+		t.Fatal("coverage plan was detached from its immutable transformation revisions")
 	}
 	if len(result.CoveragePlans) != 1 {
 		t.Fatalf("CoveragePlans = %#v", result.CoveragePlans)
@@ -977,8 +1005,12 @@ func TestDecide(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InstrumentPackage: %v", err)
 	}
-	if len(result.SourceMaps) != 1 || len(result.CoveragePlans) != 2 {
+	if len(result.Transformations) != 2 || len(result.CoveragePlans) != 2 {
 		t.Fatalf("instrumentation result = %#v", result)
+	}
+	plainHistory := result.Transformations[1].History.Relations()
+	if len(plainHistory) != 1 || plainHistory[0].Kind != transformmap.Preserved {
+		t.Fatalf("unchanged file transformation = %#v", plainHistory)
 	}
 	var projectable []c0.RegionCorrespondence
 	for _, plan := range result.CoveragePlans {

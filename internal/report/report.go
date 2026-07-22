@@ -2,6 +2,7 @@
 package report
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"sort"
@@ -28,26 +29,34 @@ const (
 // Input contains all static metadata, runtime evidence, and run state needed
 // to build an integrated report.
 type Input struct {
-	ToolVersion           string
-	ModulePath            string
-	SourceFiles           []SourceFileInput
-	Coverage              config.CoverageSet
-	MaskingAnalysisBudget mcdc.AnalysisBudget
-	Decisions             []cover.DecisionMetadata
-	Evaluations           []cover.DecisionEvaluation
-	NotEvaluatedDecisions []cover.DecisionNotEvaluatedObservation
-	Clauses               []cover.ClauseMetadata
-	NoMatches             []cover.NoMatchMetadata
-	ClauseObservations    []cover.ClauseObservation
-	C0                    *c0.Report
-	RunStatus             cover.RunStatus
-	FailureKind           cover.RunFailureKind
-	Results               RunResults
-	MeasurementMode       MeasurementMode
-	Measurements          []MeasurementRun
-	ProducerOutcomes      []ProducerOutcome
-	Backend               backend.InstrumentationBackend
-	BackendProducers      []backend.ProducerCapabilities
+	// Context cancels decision scheduling. A nil Context uses Background.
+	// Masking analysis already running for one decision remains bounded by its
+	// per-obligation budget and is allowed to finish.
+	Context context.Context
+	// MaxMaskingDecisionWorkers bounds concurrent decision analyses. Values
+	// above the internal safety cap are clamped; zero selects the bounded
+	// GOMAXPROCS-derived default.
+	MaxMaskingDecisionWorkers int
+	ToolVersion               string
+	ModulePath                string
+	SourceFiles               []SourceFileInput
+	Coverage                  config.CoverageSet
+	MaskingAnalysisBudget     mcdc.AnalysisBudget
+	Decisions                 []cover.DecisionMetadata
+	Evaluations               []cover.DecisionEvaluation
+	NotEvaluatedDecisions     []cover.DecisionNotEvaluatedObservation
+	Clauses                   []cover.ClauseMetadata
+	NoMatches                 []cover.NoMatchMetadata
+	ClauseObservations        []cover.ClauseObservation
+	C0                        *c0.Report
+	RunStatus                 cover.RunStatus
+	FailureKind               cover.RunFailureKind
+	Results                   RunResults
+	MeasurementMode           MeasurementMode
+	Measurements              []MeasurementRun
+	ProducerOutcomes          []ProducerOutcome
+	Backend                   backend.InstrumentationBackend
+	BackendProducers          []backend.ProducerCapabilities
 	// InstrumentationUnknown counts requested source units whose static
 	// analysis did not complete, so their entity denominator is unknowable.
 	InstrumentationUnknown int
@@ -378,9 +387,9 @@ func buildHierarchy(context *buildContext, input Input) {
 	astEvidenceUnusable := producerRejectsEvidence(input.ProducerOutcomes, ProducerASTRuntime)
 	compilerEvidenceUnusable := producerRejectsEvidence(input.ProducerOutcomes, ProducerCompilerSelection)
 
+	decisionTasks := make([]decisionBuildTask, 0, len(decisions))
 	for _, decision := range decisions {
 		builder := ensurePackageBuilder(builders, decision.Package, input)
-		function := ensureFunctionBuilder(builder, decision.Location.File, displayFunctionName(decision.Function), optionalLocation(decision.FunctionLocation), input.Coverage)
 		state := stateForEvaluations(
 			evaluationsByDecision[decision.ID],
 			astEvidenceUnusable || packageUnknown(astPackageStatus(input, decision.Package, builder.status), astPackageEvidence[decision.Package]),
@@ -388,7 +397,22 @@ func buildHierarchy(context *buildContext, input Input) {
 		if state == entityNormal && !supportedDecision(decision.Kind) {
 			state = entityUnsupported
 		}
-		decisionReport := buildDecisionReport(decision, evaluationsByDecision[decision.ID], notEvaluatedByDecision[decision.ID], state, input.Coverage, context.maskingAnalysisBudget)
+		decisionTasks = append(decisionTasks, decisionBuildTask{
+			metadata: decision, evaluations: evaluationsByDecision[decision.ID],
+			notEvaluated: notEvaluatedByDecision[decision.ID], state: state,
+		})
+	}
+	decisionReports := buildDecisionReports(
+		context.context,
+		decisionTasks,
+		input.Coverage,
+		context.maskingAnalysisBudget,
+		context.maskingDecisionWorkers,
+	)
+	for index, decision := range decisions {
+		builder := ensurePackageBuilder(builders, decision.Package, input)
+		function := ensureFunctionBuilder(builder, decision.Location.File, displayFunctionName(decision.Function), optionalLocation(decision.FunctionLocation), input.Coverage)
+		decisionReport := decisionReports[index]
 		function.report.Decisions = append(function.report.Decisions, decisionReport)
 		addSummary(&function.report.Summary, decisionReport.Summary)
 	}
@@ -689,6 +713,7 @@ func buildDecisionReport(
 	state entityState,
 	coverage config.CoverageSet,
 	maskingBudget mcdc.AnalysisBudget,
+	maskingCanceled bool,
 ) DecisionReport {
 	completed := completedEvaluations(evaluations)
 	trueCovered, falseCovered := false, false
@@ -709,7 +734,11 @@ func buildDecisionReport(
 	}
 	var maskingResult cover.MCDCResult
 	if maskingEnabled {
-		maskingResult = (mcdc.MaskingStrategy{Budget: maskingBudget}).Analyze(metadata, evaluations)
+		if maskingCanceled {
+			maskingResult = canceledMaskingResult(metadata)
+		} else {
+			maskingResult = (mcdc.MaskingStrategy{Budget: maskingBudget}).Analyze(metadata, evaluations)
+		}
 	}
 	unique := buildMCDCAnalysis(uniqueResult, metadata.Conditions, state, uniqueEnabled)
 	masking := buildMCDCAnalysis(maskingResult, metadata.Conditions, state, maskingEnabled)

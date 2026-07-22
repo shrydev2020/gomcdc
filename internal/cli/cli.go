@@ -279,10 +279,11 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	}
 
 	input := assembleReportInput(reportAssembly{
+		context:     ctx,
 		toolVersion: buildinfo.Version(),
 		loaded:      loaded, sources: sources, coverage: opts.metrics, decisions: decisions,
 		maskingAnalysisBudget: opts.maskingAnalysisBudget(),
-		clauses: clauses, noMatches: noMatches,
+		clauses:               clauses, noMatches: noMatches,
 		evidence: measurement.evidence, c0: measurement.c0, testResult: measurement.testResult, measurementName: measurement.measurementName,
 		standardCoverRequested: needsC0, astRequested: needsASTRun,
 		producerOutcomes:       measurement.producerOutcomes,
