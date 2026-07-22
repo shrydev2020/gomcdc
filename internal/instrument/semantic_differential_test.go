@@ -2,7 +2,6 @@ package instrument
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -48,7 +47,7 @@ func TestInstrumentationModesPreserveProgramSemantics(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			workspace := t.TempDir()
 			copyPath := writeSemanticFixture(t, workspace)
-			injected, err := runtimecov.Inject(context.Background(), workspace, semanticFixtureModule)
+			injected, err := runtimecov.Inject(t.Context(), workspace, semanticFixtureModule)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -79,7 +78,7 @@ func TestInstrumentationModesPreserveProgramSemantics(t *testing.T) {
 			}
 			toolexec := ""
 			if test.compilerAware {
-				toolchain, err := compileraware.Prepare(context.Background(), t.TempDir())
+				toolchain, err := compileraware.Prepare(t.Context(), t.TempDir())
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -94,7 +93,7 @@ func TestInstrumentationModesPreserveProgramSemantics(t *testing.T) {
 				t.Fatalf("semantic transcript changed\noriginal:     %s\ninstrumented: %s", wantTranscript, gotTranscript)
 			}
 
-			collected, err := runtimecov.CollectDetailed(context.Background(), dataDir)
+			collected, err := runtimecov.CollectDetailed(t.Context(), dataDir)
 			if err != nil {
 				t.Fatal(err)
 			}

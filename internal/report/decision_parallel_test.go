@@ -27,7 +27,7 @@ func TestParallelDecisionBuildMatchesSequentialReport(t *testing.T) {
 
 func TestCanceledDecisionSchedulingRetainsEvidenceAndMarksMaskingIncomplete(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	input := parallelDecisionTestInput(1)
 	input.Context = ctx
@@ -66,7 +66,7 @@ func TestDecisionBuildPoolWaitsForWorkersBeforePropagatingPanic(t *testing.T) {
 	}
 	recovered := func() (value any) {
 		defer func() { value = recover() }()
-		runDecisionBuildPool(context.Background(), tasks, 4, build, canceled)
+		runDecisionBuildPool(t.Context(), tasks, 4, build, canceled)
 		return nil
 	}()
 	if recovered != "decision-builder-panic" {
@@ -79,7 +79,7 @@ func TestDecisionBuildPoolWaitsForWorkersBeforePropagatingPanic(t *testing.T) {
 
 func TestCanceledDecisionBuildPoolLeavesNoWorkers(t *testing.T) {
 	baseline := runtime.NumGoroutine()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	tasks := make([]decisionBuildTask, 64)
 	var built atomic.Int64
@@ -106,7 +106,7 @@ func TestDecisionBuildPoolRetainsCompletedResultsAfterCancellation(t *testing.T)
 	for index := range tasks {
 		tasks[index].metadata.ID = cover.DecisionID(index + 1)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	started := make(chan cover.DecisionID, 2)
 	release := make(chan struct{})
 	build := func(task decisionBuildTask) DecisionReport {

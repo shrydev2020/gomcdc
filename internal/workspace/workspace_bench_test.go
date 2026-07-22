@@ -1,7 +1,6 @@
 package workspace
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -33,7 +32,7 @@ func BenchmarkCreateModuleCopy(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for index := 0; index < b.N; index++ {
-		workspace, err := Create(context.Background(), Options{SourceDir: source, ModuleSettings: settings, TempParent: tempParent})
+		workspace, err := Create(b.Context(), Options{SourceDir: source, ModuleSettings: settings, TempParent: tempParent})
 		if err != nil {
 			b.Fatal(err)
 		}

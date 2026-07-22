@@ -12,7 +12,7 @@ import (
 
 func TestPrepareBuildsCompilerAwareToolchain(t *testing.T) {
 	root := t.TempDir()
-	toolchain, err := Prepare(context.Background(), root)
+	toolchain, err := Prepare(t.Context(), root)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestPrepareBuildsCompilerAwareToolchain(t *testing.T) {
 func TestCreateGOROOTViewRejectsCanceledWork(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	destination := filepath.Join(t.TempDir(), "goroot")
 	if err := createGOROOTView(ctx, t.TempDir(), destination); !errors.Is(err, context.Canceled) {
@@ -169,7 +169,7 @@ func TestPrepareRejectsUnsupportedGoVersionBeforeReadingCompilerSources(t *testi
 			}
 			t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-			_, err := Prepare(context.Background(), t.TempDir())
+			_, err := Prepare(t.Context(), t.TempDir())
 			want := "requires stable Go 1.26.x, got " + version
 			if err == nil || !strings.Contains(err.Error(), want) {
 				t.Fatalf("Prepare error = %v, want %q", err, want)
@@ -189,7 +189,7 @@ func TestSupportedGoVersionAcceptsStableGo126Patches(t *testing.T) {
 
 func TestPrepareFailsClosedForInvalidSetup(t *testing.T) {
 	t.Run("empty tool root", func(t *testing.T) {
-		if _, err := Prepare(context.Background(), ""); err == nil || !strings.Contains(err.Error(), "tool directory is empty") {
+		if _, err := Prepare(t.Context(), ""); err == nil || !strings.Contains(err.Error(), "tool directory is empty") {
 			t.Fatalf("Prepare error = %v", err)
 		}
 	})
@@ -201,7 +201,7 @@ func TestPrepareFailsClosedForInvalidSetup(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Setenv("PATH", fakeBin)
-		if _, err := Prepare(context.Background(), t.TempDir()); err == nil || !strings.Contains(err.Error(), "query Go toolchain") {
+		if _, err := Prepare(t.Context(), t.TempDir()); err == nil || !strings.Contains(err.Error(), "query Go toolchain") {
 			t.Fatalf("Prepare error = %v", err)
 		}
 	})
@@ -209,7 +209,7 @@ func TestPrepareFailsClosedForInvalidSetup(t *testing.T) {
 	t.Run("missing compiler source", func(t *testing.T) {
 		goroot := t.TempDir()
 		setFakeGoEnv(t, goroot, "go1.26.0")
-		if _, err := Prepare(context.Background(), t.TempDir()); err == nil || !strings.Contains(err.Error(), "read Go go1.26.0 switch lowering source") {
+		if _, err := Prepare(t.Context(), t.TempDir()); err == nil || !strings.Contains(err.Error(), "read Go go1.26.0 switch lowering source") {
 			t.Fatalf("Prepare error = %v", err)
 		}
 	})
@@ -224,7 +224,7 @@ func TestPrepareFailsClosedForInvalidSetup(t *testing.T) {
 			t.Fatal(err)
 		}
 		setFakeGoEnv(t, goroot, "go1.26.0")
-		if _, err := Prepare(context.Background(), t.TempDir()); err == nil || !strings.Contains(err.Error(), "compiler source is incompatible") {
+		if _, err := Prepare(t.Context(), t.TempDir()); err == nil || !strings.Contains(err.Error(), "compiler source is incompatible") {
 			t.Fatalf("Prepare error = %v", err)
 		}
 	})
@@ -234,7 +234,7 @@ func TestPrepareFailsClosedForInvalidSetup(t *testing.T) {
 		if err := os.WriteFile(root, []byte("not a directory"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := Prepare(context.Background(), root); err == nil || !strings.Contains(err.Error(), "create compiler-aware tool directory") {
+		if _, err := Prepare(t.Context(), root); err == nil || !strings.Contains(err.Error(), "create compiler-aware tool directory") {
 			t.Fatalf("Prepare error = %v", err)
 		}
 	})

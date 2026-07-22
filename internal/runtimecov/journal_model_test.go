@@ -1,7 +1,6 @@
 package runtimecov
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -247,7 +246,7 @@ func collectJournalModel(t *testing.T, files []journalFileModel) RecordedEvidenc
 		content := strings.Join(lines, "\n") + "\n" + file.tail
 		writeEventFile(t, dataDir, file.suffix, content)
 	}
-	collected, err := CollectDetailed(context.Background(), dataDir)
+	collected, err := CollectDetailed(t.Context(), dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}

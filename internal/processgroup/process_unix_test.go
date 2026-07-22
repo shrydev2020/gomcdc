@@ -19,7 +19,7 @@ func TestConfigureCancellationTerminatesDescendants(t *testing.T) {
 	t.Parallel()
 
 	pidFile := filepath.Join(t.TempDir(), "child.pid")
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	command := exec.CommandContext(ctx, "/bin/sh", "-c", `sleep 30 & child=$!; printf '%s\n' "$child" > "$PID_FILE"; wait`)
 	command.Env = append(os.Environ(), "PID_FILE="+pidFile)
 	ConfigureCancellation(command)

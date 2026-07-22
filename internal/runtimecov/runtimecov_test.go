@@ -119,11 +119,11 @@ func TestInjectCreatesDistinctGeneratedInternalPackages(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	first, err := Inject(context.Background(), moduleDir, "example.test/project")
+	first, err := Inject(t.Context(), moduleDir, "example.test/project")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := Inject(context.Background(), moduleDir, "example.test/project")
+	second, err := Inject(t.Context(), moduleDir, "example.test/project")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,8 +180,8 @@ func TestInjectRejectsInvalidLocations(t *testing.T) {
 		{moduleDir: t.TempDir(), modulePath: `example.test\project`},
 	}
 	for _, test := range tests {
-		if _, err := Inject(context.Background(), test.moduleDir, test.modulePath); err == nil {
-			t.Errorf("Inject(context.Background(), %q, %q) error = nil", test.moduleDir, test.modulePath)
+		if _, err := Inject(t.Context(), test.moduleDir, test.modulePath); err == nil {
+			t.Errorf("Inject(t.Context(), %q, %q) error = nil", test.moduleDir, test.modulePath)
 		}
 	}
 }
@@ -195,8 +195,8 @@ func TestInjectRejectsSymlinkedInternalDirectory(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(moduleDir, "internal")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Inject(context.Background(), moduleDir, "example.test/project"); err == nil {
-		t.Fatal("Inject(context.Background(), ) accepted symlinked internal directory")
+	if _, err := Inject(t.Context(), moduleDir, "example.test/project"); err == nil {
+		t.Fatal("Inject(t.Context(), ) accepted symlinked internal directory")
 	}
 	if entries, err := os.ReadDir(outside); err != nil || len(entries) != 0 {
 		t.Fatalf("symlink target entries = %v, %v", entries, err)
@@ -217,7 +217,7 @@ func TestCollectDetailedRetainsValidEvidenceAndSynthesizesAbort(t *testing.T) {
 	}, "\n") + "\n" + `{"type":"terminal"`
 	writeEventFile(t, dataDir, "fixture.jsonl", content)
 
-	collected, err := CollectDetailed(context.Background(), dataDir)
+	collected, err := CollectDetailed(t.Context(), dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +285,7 @@ func TestCollectDetailedRejectsMalformedJournalRecords(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			dataDir := t.TempDir()
 			writeEventFile(t, dataDir, "journal.jsonl", strings.Join(test.records, "\n")+"\n")
-			collected, err := CollectDetailed(context.Background(), dataDir)
+			collected, err := CollectDetailed(t.Context(), dataDir)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -320,7 +320,7 @@ func TestCollectDetailedRejectsMixedProvenanceWithinProcessFile(t *testing.T) {
 		`{"type":"clause","runId":"run","packagePath":"example.test/p","processId":8,"clauseId":13,"event":"body-execution"}`,
 	}, "\n")+"\n")
 
-	collected, err := CollectDetailed(context.Background(), dataDir)
+	collected, err := CollectDetailed(t.Context(), dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,9 +341,9 @@ func TestCollectDetailedRejectsMixedProvenanceWithinProcessFile(t *testing.T) {
 }
 
 func TestCollectMissingDirectoryIsIOError(t *testing.T) {
-	_, err := CollectDetailed(context.Background(), filepath.Join(t.TempDir(), "missing"))
+	_, err := CollectDetailed(t.Context(), filepath.Join(t.TempDir(), "missing"))
 	if err == nil {
-		t.Fatal("CollectDetailed(context.Background(), ) error = nil")
+		t.Fatal("CollectDetailed(t.Context(), ) error = nil")
 	}
 }
 
@@ -365,7 +365,7 @@ func TestCollectDetailedAcceptsRecordsLargerThanSixtyFourKiB(t *testing.T) {
 		t.Fatalf("fixture record is only %d bytes", len(terminal))
 	}
 	writeEventFile(t, dataDir, "large.jsonl", string(begin)+"\n"+string(terminal)+"\n")
-	collected, err := CollectDetailed(context.Background(), dataDir)
+	collected, err := CollectDetailed(t.Context(), dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +377,7 @@ func TestCollectDetailedAcceptsRecordsLargerThanSixtyFourKiB(t *testing.T) {
 func TestCollectDetailedRejectsTerminalWithoutBeginAsCoverageEvidence(t *testing.T) {
 	dataDir := t.TempDir()
 	writeEventFile(t, dataDir, "orphan.jsonl", `{"type":"terminal","runId":"run","packagePath":"example.test/p","processId":1,"evaluationId":9,"decisionId":7,"conditions":[2],"result":true,"status":0}`+"\n")
-	collected, err := CollectDetailed(context.Background(), dataDir)
+	collected, err := CollectDetailed(t.Context(), dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,7 +399,7 @@ func TestCollectDetailedRetainsJournalAndCompactedEvaluationProvenance(t *testin
 	}, "\n") + "\n"
 	writeEventFile(t, dataDir, "mixed.jsonl", content)
 
-	collected, err := CollectDetailed(context.Background(), dataDir)
+	collected, err := CollectDetailed(t.Context(), dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -426,7 +426,7 @@ func TestInjectedRuntimeConcurrentEvaluationsHaveUniqueIDsAndProvenance(t *testi
 	if err := os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte("module example.test/probe\n\ngo 1.26.0\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	injected, err := Inject(context.Background(), moduleDir, "example.test/probe")
+	injected, err := Inject(t.Context(), moduleDir, "example.test/probe")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -481,7 +481,7 @@ func main() {
 		t.Fatalf("probe failed: %v\n%s", err, output)
 	}
 
-	collected, err := CollectDetailed(context.Background(), dataDir)
+	collected, err := CollectDetailed(t.Context(), dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -547,7 +547,7 @@ func TestInjectedRuntimeCompactsDuplicateHistoryWithoutDroppingUniqueVectorsOrAc
 	if err := os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte("module example.test/compactprobe\n\ngo 1.26.0\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	injected, err := Inject(context.Background(), moduleDir, "example.test/compactprobe")
+	injected, err := Inject(t.Context(), moduleDir, "example.test/compactprobe")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -600,7 +600,7 @@ func main() {
 		t.Fatalf("compacted event bytes = %d; duplicate history was not bounded", size)
 	}
 
-	collected, err := CollectDetailed(context.Background(), dataDir)
+	collected, err := CollectDetailed(t.Context(), dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -615,7 +615,7 @@ func TestInjectedRuntimeSwallowsRecorderFailuresAndPreservesValues(t *testing.T)
 	if err := os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte("module example.test/failureprobe\n\ngo 1.26.0\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	injected, err := Inject(context.Background(), moduleDir, "example.test/failureprobe")
+	injected, err := Inject(t.Context(), moduleDir, "example.test/failureprobe")
 	if err != nil {
 		t.Fatal(err)
 	}

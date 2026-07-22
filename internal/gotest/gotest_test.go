@@ -20,7 +20,7 @@ func TestRunForcesFreshTestAndSeparatesOutput(t *testing.T) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	var output bytes.Buffer
-	result := Run(context.Background(), Options{
+	result := Run(t.Context(), Options{
 		Dir:        t.TempDir(),
 		Patterns:   []string{"./..."},
 		Args:       []string{"-run", "TestOne"},
@@ -96,7 +96,7 @@ func TestRunPlainOutputClassifiesBuildTestAndGoTestTimeoutFailures(t *testing.T)
 			writeExecutable(t, filepath.Join(bin, "go"), test.script)
 			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 			var output bytes.Buffer
-			result := Run(context.Background(), Options{
+			result := Run(t.Context(), Options{
 				Dir:      t.TempDir(),
 				Patterns: []string{"example.test/broken"},
 				Output:   &output,
@@ -126,7 +126,7 @@ printf 'ok  \texample.test/p\t0.001s\n'
 `)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	var output bytes.Buffer
-	result := Run(context.Background(), Options{
+	result := Run(t.Context(), Options{
 		Dir:      t.TempDir(),
 		Patterns: []string{"example.test/p"},
 		Output:   &output,
@@ -180,7 +180,7 @@ func TestRunOverridesCountAndCoverProfile(t *testing.T) {
 	writeExecutable(t, filepath.Join(bin, "go"), "#!/bin/sh\nprintf '%s\\n' \"$*\"\n")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	var output bytes.Buffer
-	result := Run(context.Background(), Options{
+	result := Run(t.Context(), Options{
 		Dir:           t.TempDir(),
 		Patterns:      []string{"example.test/p"},
 		Args:          []string{"-count=4", "-coverprofile", "user.out", "-run", "TestX", "-args", "-custom"},
@@ -237,7 +237,7 @@ func TestRunASTMeasurementOwnsAllCoverageFlags(t *testing.T) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("GOFLAGS", `-tags=integration -cover -covermode=atomic -coverprofile=bad.out -coverpkg=bad/... -count=7 -json`)
 	var output bytes.Buffer
-	result := Run(context.Background(), Options{
+	result := Run(t.Context(), Options{
 		Dir:          t.TempDir(),
 		Patterns:     []string{"example.test/p"},
 		Args:         []string{"-cover", "-covermode", "count", "-coverprofile=user.out", "-run", "TestX"},
@@ -291,7 +291,7 @@ func TestRunReportsFailure(t *testing.T) {
 	bin := t.TempDir()
 	writeExecutable(t, filepath.Join(bin, "go"), "#!/bin/sh\nexit 1\n")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	result := Run(context.Background(), Options{Dir: t.TempDir(), DataDirEnv: "COVER", DataDir: t.TempDir()})
+	result := Run(t.Context(), Options{Dir: t.TempDir(), DataDirEnv: "COVER", DataDir: t.TempDir()})
 	if result.Status != cover.RunFailed || result.FailureKind != cover.RunFailureCommand || result.Err == nil {
 		t.Fatalf("Run() = %#v, want failed", result)
 	}
@@ -301,7 +301,7 @@ func TestRunReportsTimeout(t *testing.T) {
 	bin := t.TempDir()
 	writeExecutable(t, filepath.Join(bin, "go"), "#!/bin/sh\nwhile :; do :; done\n")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 	defer cancel()
 	result := Run(ctx, Options{Dir: t.TempDir(), DataDirEnv: "COVER", DataDir: t.TempDir()})
 	if result.Status != cover.RunTimeout || result.FailureKind != cover.RunFailureTimeout || result.Err == nil {
@@ -313,7 +313,7 @@ func TestRunReportsCallerInterruptionSeparatelyFromTimeout(t *testing.T) {
 	bin := t.TempDir()
 	writeExecutable(t, filepath.Join(bin, "go"), "#!/bin/sh\nwhile :; do :; done\n")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	time.AfterFunc(20*time.Millisecond, cancel)
 	result := Run(ctx, Options{Dir: t.TempDir(), DataDirEnv: "COVER", DataDir: t.TempDir()})
 	if result.Status != cover.RunFailed || result.FailureKind != cover.RunFailureInterrupted || result.Err == nil {
