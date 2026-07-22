@@ -1,7 +1,6 @@
 package modulecontext
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,7 +17,7 @@ func TestDiscoverSnapshotsSingleModuleWorkspace(t *testing.T) {
 	writeContextFile(t, goWork, "go 1.26\n\nuse ./module\n\nreplace example.test/dependency => ./dependency\n")
 	t.Setenv("GOWORK", goWork)
 
-	settings, err := Discover(context.Background(), module)
+	settings, err := Discover(t.Context(), DiscoverOptions{Dir: module})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +39,7 @@ func TestDiscoverSnapshotsSingleModuleWorkspace(t *testing.T) {
 	}
 	copiedWorkspace := t.TempDir()
 	copiedModule := filepath.Join(copiedWorkspace, "module")
-	contents, err := settings.RelocatedGoWork(context.Background(), module, copiedWorkspace, copiedModule)
+	contents, err := settings.RelocatedGoWork(t.Context(), module, copiedWorkspace, copiedModule)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,8 +61,68 @@ func TestDiscoverRejectsMultipleMainModules(t *testing.T) {
 	goWork := filepath.Join(root, "go.work")
 	writeContextFile(t, goWork, "go 1.26\n\nuse (\n\t./first\n\t./second\n)\n")
 	t.Setenv("GOWORK", goWork)
-	if _, err := Discover(context.Background(), filepath.Join(root, "first")); err == nil || !strings.Contains(err.Error(), "has 2 main modules") {
+	if _, err := Discover(t.Context(), DiscoverOptions{Dir: filepath.Join(root, "first")}); err == nil || !strings.Contains(err.Error(), "has 2 main modules") {
 		t.Fatalf("Discover() error = %v", err)
+	}
+}
+
+func TestDiscoverFreezesAndRelocatesAlternateModFileAndSum(t *testing.T) {
+	root := t.TempDir()
+	module := filepath.Join(root, "module")
+	writeContextFile(t, filepath.Join(module, "go.mod"), "module example.test/module\n\ngo 1.26\n")
+	writeContextFile(t, filepath.Join(module, "dependency", "go.mod"), "module example.test/dependency\n\ngo 1.26\n")
+	alternate := filepath.Join(root, "config", "analysis.mod")
+	alternateSum := filepath.Join(root, "config", "analysis.sum")
+	writeContextFile(t, alternate, "module example.test/module\n\ngo 1.26\n\nrequire example.test/dependency v0.0.0\nreplace example.test/dependency => ./dependency\n")
+	writeContextFile(t, alternateSum, "frozen sum bytes\n")
+	t.Setenv("GOWORK", "off")
+
+	settings, err := Discover(t.Context(), DiscoverOptions{
+		Dir: module, BuildFlags: []string{"-modfile=" + alternate},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !settings.HasAlternateModFile() || settings.AlternateModFilePath() != alternate {
+		t.Fatalf("alternate modfile = %q", settings.AlternateModFilePath())
+	}
+	copiedModule := filepath.Join(t.TempDir(), "module")
+	mod, sum, sumSet, err := settings.RelocatedAlternateMod(t.Context(), copiedModule)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sumSet || string(sum) != "frozen sum bytes\n" {
+		t.Fatalf("relocated sum = set %t bytes %q", sumSet, sum)
+	}
+	wantReplacement := filepath.Join(copiedModule, "dependency")
+	if !strings.Contains(string(mod), "=> "+wantReplacement) {
+		t.Fatalf("relocated alternate modfile does not target copied module:\n%s", mod)
+	}
+	writeContextFile(t, alternateSum, "changed\n")
+	if err := settings.AssertSourceUnchanged(); err == nil || !strings.Contains(err.Error(), "changed during package loading") {
+		t.Fatalf("AssertSourceUnchanged() error = %v", err)
+	}
+}
+
+func TestAlternateModFileExplicitFlagOverridesGOFLAGS(t *testing.T) {
+	root := t.TempDir()
+	module := filepath.Join(root, "module")
+	writeContextFile(t, filepath.Join(module, "go.mod"), "module example.test/module\n\ngo 1.26\n")
+	fromEnvironment := filepath.Join(root, "environment.mod")
+	fromCommand := filepath.Join(root, "command.mod")
+	writeContextFile(t, fromEnvironment, "module example.test/module\n\ngo 1.26\n")
+	writeContextFile(t, fromCommand, "module example.test/module\n\ngo 1.26\n")
+	t.Setenv("GOWORK", "off")
+
+	settings, err := Discover(t.Context(), DiscoverOptions{
+		Dir: module, GOFLAGS: "-modfile=" + fromEnvironment,
+		BuildFlags: []string{"-modfile=" + fromCommand},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.AlternateModFilePath() != fromCommand {
+		t.Fatalf("selected alternate modfile = %q, want explicit %q", settings.AlternateModFilePath(), fromCommand)
 	}
 }
 

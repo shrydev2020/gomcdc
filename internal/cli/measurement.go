@@ -15,6 +15,7 @@ import (
 	"github.com/shrydev2020/gomcdc/internal/c0map"
 	"github.com/shrydev2020/gomcdc/internal/compileraware"
 	cover "github.com/shrydev2020/gomcdc/internal/coverage"
+	"github.com/shrydev2020/gomcdc/internal/goflags"
 	"github.com/shrydev2020/gomcdc/internal/gotest"
 	"github.com/shrydev2020/gomcdc/internal/instrument"
 	"github.com/shrydev2020/gomcdc/internal/loader"
@@ -27,6 +28,7 @@ type measurementRequest struct {
 	context                 context.Context
 	timeout                 time.Duration
 	goTestArgs              []string
+	goFlags                 string
 	json                    bool
 	workDirParent           string
 	keepWorkDir             bool
@@ -198,7 +200,16 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 		if goWorkPath == "" {
 			goWorkPath = "off"
 		}
-		environment := map[string]string{"GOWORK": goWorkPath}
+		goTestArgs := request.goTestArgs
+		goFlags := request.goFlags
+		if work.ModFilePath != "" {
+			goTestArgs = withRelocatedModFile(goTestArgs, work.ModFilePath)
+			goFlags, err = goflags.Without(goFlags, map[string]bool{"modfile": true})
+			if err != nil {
+				return outcome, measurementWork, fmt.Errorf("relocate GOFLAGS modfile: %w", err)
+			}
+		}
+		environment := map[string]string{"GOWORK": goWorkPath, "GOFLAGS": goFlags}
 		if request.needsAST {
 			environment[runtimecov.RunIDEnv] = runID
 		}
@@ -217,10 +228,14 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 			// binaries from running and destroy recoverable partial evidence.
 			coverPackages = nil
 		}
+		testDir := work.ModuleDir
+		if request.loaded.WorkingDirBase == loader.WorkingDirectoryWorkspace {
+			testDir = work.RootDir
+		}
 		result := runGoTest(request.context, request.timeout, gotest.Options{
-			Dir:           filepath.Join(work.ModuleDir, request.loaded.RelativeWorkDir),
+			Dir:           filepath.Join(testDir, request.loaded.RelativeWorkDir),
 			Patterns:      request.loaded.PackageImportSet,
-			Args:          request.goTestArgs,
+			Args:          goTestArgs,
 			CoverProfile:  coverProfile,
 			CoverPackages: coverPackages,
 			DataDirEnv:    runtimeDataDirEnv(request.needsAST),
@@ -358,6 +373,38 @@ func measure(request measurementRequest, stderr io.Writer) (measurementOutcome, 
 		markInterrupted()
 	}
 	return outcome, measurementWork, nil
+}
+
+// withRelocatedModFile removes every source -modfile selection before the test
+// binary argument boundary and inserts the one workspace-owned snapshot.
+func withRelocatedModFile(arguments []string, path string) []string {
+	goArguments, binaryArguments := splitMeasurementBinaryArgs(arguments)
+	filtered := make([]string, 0, len(goArguments)+1)
+	for index := 0; index < len(goArguments); index++ {
+		argument := goArguments[index]
+		if goflags.Name(argument) != "modfile" {
+			filtered = append(filtered, argument)
+			continue
+		}
+		if !strings.Contains(argument, "=") && index+1 < len(goArguments) {
+			index++
+		}
+	}
+	filtered = append(filtered, "-modfile="+path)
+	if binaryArguments != nil {
+		filtered = append(filtered, "-args")
+		filtered = append(filtered, binaryArguments...)
+	}
+	return filtered
+}
+
+func splitMeasurementBinaryArgs(arguments []string) (goArguments, binaryArguments []string) {
+	for index, argument := range arguments {
+		if argument == "-args" || argument == "--args" {
+			return append([]string(nil), arguments[:index]...), append([]string{}, arguments[index+1:]...)
+		}
+	}
+	return append([]string(nil), arguments...), nil
 }
 
 func runtimeProducerOutcome(

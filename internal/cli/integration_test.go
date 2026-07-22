@@ -87,12 +87,68 @@ func TestSingleModuleGoWorkSettingsApplyToAnalysisAndTest(t *testing.T) {
 	writeIntegrationFile(t, goWork, "go 1.26\n\nuse ./module\n\nreplace example.test/dependency => ./dependency\n")
 	t.Setenv("GOWORK", goWork)
 
-	built, stderr, code := runFixture(t, module, "--coverage=statement", "--format=json", ".")
-	if code != ExitSuccess {
-		t.Fatalf("single-module go.work exit=%d\nstderr:\n%s", code, stderr)
+	for _, invocation := range []struct {
+		name    string
+		dir     string
+		pattern string
+	}{
+		{name: "module-directory", dir: module, pattern: "."},
+		{name: "workspace-root", dir: root, pattern: "./module"},
+	} {
+		t.Run(invocation.name, func(t *testing.T) {
+			built, stderr, code := runFixture(t, invocation.dir, "--coverage=statement", "--format=json", invocation.pattern)
+			if code != ExitSuccess {
+				t.Fatalf("single-module go.work exit=%d\nstderr:\n%s", code, stderr)
+			}
+			if built.Module != "example.test/workmodule" || built.Run.Results.Test != report.ResultPassed || built.Run.Results.Measurement != report.ResultPassed {
+				t.Fatalf("single-module go.work report = module %q run %#v", built.Module, built.Run)
+			}
+		})
 	}
-	if built.Module != "example.test/workmodule" || built.Run.Results.Test != report.ResultPassed || built.Run.Results.Measurement != report.ResultPassed {
-		t.Fatalf("single-module go.work report = module %q run %#v", built.Module, built.Run)
+}
+
+func TestAlternateModFileAppliesSameSnapshotToAnalysisAndTest(t *testing.T) {
+	for _, selection := range []struct {
+		name             string
+		goFlags          bool
+		explicitOverride bool
+	}{
+		{name: "explicit"},
+		{name: "GOFLAGS", goFlags: true},
+		{name: "explicit-overrides-GOFLAGS", explicitOverride: true},
+	} {
+		t.Run(selection.name, func(t *testing.T) {
+			root := t.TempDir()
+			module := filepath.Join(root, "module")
+			writeIntegrationFile(t, filepath.Join(module, "go.mod"), "module example.test/modfile\n\ngo 1.26\n")
+			writeIntegrationFile(t, filepath.Join(module, "value.go"), "package modfile\n\nimport \"example.test/dependency\"\n\nfunc Value() bool { return dependency.Value() }\n")
+			writeIntegrationFile(t, filepath.Join(module, "value_test.go"), "package modfile\n\nimport \"testing\"\n\nfunc TestValue(t *testing.T) { if !Value() { t.Fatal(\"false\") } }\n")
+			writeIntegrationFile(t, filepath.Join(module, "dependency", "go.mod"), "module example.test/dependency\n\ngo 1.26\n")
+			writeIntegrationFile(t, filepath.Join(module, "dependency", "value.go"), "package dependency\n\nfunc Value() bool { return true }\n")
+			alternate := filepath.Join(root, "config", "analysis.mod")
+			writeIntegrationFile(t, alternate, "module example.test/modfile\n\ngo 1.26\n\nrequire example.test/dependency v0.0.0\nreplace example.test/dependency => ./dependency\n")
+			writeIntegrationFile(t, strings.TrimSuffix(alternate, ".mod")+".sum", "")
+			t.Setenv("GOWORK", "off")
+			arguments := []string{"--coverage=statement", "--format=json", "."}
+			if selection.goFlags {
+				t.Setenv("GOFLAGS", "-modfile="+alternate)
+			} else {
+				arguments = append(arguments, "--", "-modfile="+alternate)
+				if selection.explicitOverride {
+					environmentMod := filepath.Join(root, "config", "environment.mod")
+					writeIntegrationFile(t, environmentMod, "module example.test/modfile\n\ngo 1.26\n")
+					t.Setenv("GOFLAGS", "-modfile="+environmentMod)
+				}
+			}
+
+			built, stderr, code := runFixture(t, module, arguments...)
+			if code != ExitSuccess {
+				t.Fatalf("alternate modfile exit=%d\nstderr:\n%s", code, stderr)
+			}
+			if built.Module != "example.test/modfile" || built.Run.Results.Test != report.ResultPassed || built.Run.Results.Measurement != report.ResultPassed {
+				t.Fatalf("alternate modfile report = module %q run %#v", built.Module, built.Run)
+			}
+		})
 	}
 }
 
@@ -119,7 +175,7 @@ func TestValue(t *testing.T) {
 	t.Setenv("GOWORK", "off")
 	t.Setenv("GOMCDC_CLEANUP_PARENT", workParent)
 	var stdout, stderr bytes.Buffer
-	code := runAt(context.Background(), module, []string{
+	code := runAt(t.Context(), module, []string{
 		"test", "--coverage=statement", "--format=json", "--workdir=" + workParent, ".",
 	}, &stdout, &stderr)
 	if err := os.Chmod(workParent, 0o700); err != nil {
@@ -152,7 +208,7 @@ func TestIntegratedFixtureWritesPackageCenteredHTML(t *testing.T) {
 	root := fixturePath(t, "integration")
 	output := filepath.Join(t.TempDir(), "coverage-html")
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 	defer cancel()
 	code := runAt(ctx, root, []string{"test", "--timeout=2m", "--format=html", "--output=" + output, "./..."}, &stdout, &stderr)
 	if code != ExitSuccess {
@@ -599,7 +655,7 @@ func TestFailedAndInterruptedRunsRetainEvidenceAndIndependentResults(t *testing.
 		t.Setenv("GOMCDC_FAILURE_MODE", "interrupt")
 		marker := filepath.Join(t.TempDir(), "ready")
 		t.Setenv("GOMCDC_INTERRUPT_MARKER", marker)
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 		defer cancel()
 		canceled := make(chan struct{})
 		go func() {
@@ -711,7 +767,7 @@ func TestEvidenceVerificationDropsImpossibleCompletedEvidence(t *testing.T) {
 		Conditions: []cover.ConditionState{cover.ConditionFalse, cover.ConditionTrue},
 		Result:     false, Status: cover.EvaluationCompleted,
 	}}}
-	validated, err := acceptRuntimeEvidence(context.Background(), []cover.DecisionMetadata{decision}, nil, recorded, "run", nil)
+	validated, err := acceptRuntimeEvidence(t.Context(), []cover.DecisionMetadata{decision}, nil, recorded, "run", nil)
 	if err == nil || len(validated.Evaluations) != 0 {
 		t.Fatalf("validated=%#v err=%v; impossible vector became coverage evidence", validated, err)
 	}
@@ -739,7 +795,7 @@ func TestEvidenceVerificationKeepsConditionlessSwitchNotEvaluatedEvidence(t *tes
 		{ID: 10, Package: "example.test/p", GroupID: 100, Kind: cover.ClauseConditionlessSwitch, Role: cover.ClauseCase, Index: 0, DecisionIDs: []cover.DecisionID{1}},
 		{ID: 11, Package: "example.test/p", GroupID: 100, Kind: cover.ClauseConditionlessSwitch, Role: cover.ClauseCase, Index: 1, DecisionIDs: []cover.DecisionID{2}},
 	}
-	validated, err := acceptRuntimeEvidence(context.Background(),
+	validated, err := acceptRuntimeEvidence(t.Context(),
 		[]cover.DecisionMetadata{first, second},
 		clauses,
 		runtimecov.RecordedEvidence{Evaluations: []cover.DecisionEvaluation{evaluation}, NotEvaluatedDecisions: []cover.DecisionNotEvaluatedObservation{observation}},
@@ -749,7 +805,7 @@ func TestEvidenceVerificationKeepsConditionlessSwitchNotEvaluatedEvidence(t *tes
 	if err != nil || len(validated.NotEvaluatedDecisions) != 1 {
 		t.Fatalf("validated=%#v err=%v", validated, err)
 	}
-	withoutSuffix, err := acceptRuntimeEvidence(context.Background(),
+	withoutSuffix, err := acceptRuntimeEvidence(t.Context(),
 		[]cover.DecisionMetadata{first, second},
 		clauses,
 		runtimecov.RecordedEvidence{Evaluations: []cover.DecisionEvaluation{evaluation}},
@@ -794,7 +850,7 @@ func TestEvidenceVerificationRejectsInvalidEvaluationIdentityAndShape(t *testing
 			if test.mutate != nil {
 				test.mutate(&evaluation)
 			}
-			validated, err := acceptRuntimeEvidence(context.Background(),
+			validated, err := acceptRuntimeEvidence(t.Context(),
 				[]cover.DecisionMetadata{metadata}, nil,
 				runtimecov.RecordedEvidence{Evaluations: []cover.DecisionEvaluation{evaluation}}, "run", nil,
 			)
@@ -830,7 +886,7 @@ func TestEvaluationEvidenceIsVerifiedBeforeSemanticDeduplication(t *testing.T) {
 	validDuplicate.ProcessID = 10
 	validDuplicate.TestID = "TestNamed"
 
-	accepted, err := acceptRuntimeEvidence(context.Background(),
+	accepted, err := acceptRuntimeEvidence(t.Context(),
 		[]cover.DecisionMetadata{metadata}, nil,
 		runtimecov.RecordedEvidence{Evaluations: []cover.DecisionEvaluation{valid, invalidDuplicate, validDuplicate}},
 		"run", nil,
@@ -910,7 +966,7 @@ func TestEvidenceVerificationRejectsInvalidConditionlessSwitchSkipEvidence(t *te
 			if test.mutate != nil {
 				test.mutate(decisions, clauses, &collection)
 			}
-			validated, err := acceptRuntimeEvidence(context.Background(), decisions, clauses, collection, "run", nil)
+			validated, err := acceptRuntimeEvidence(t.Context(), decisions, clauses, collection, "run", nil)
 			if test.wantErr == "" {
 				if err != nil || len(validated.NotEvaluatedDecisions) != 2 {
 					t.Fatalf("valid skip suffix rejected: validated=%#v err=%v", validated, err)
@@ -952,7 +1008,7 @@ func TestEvidenceVerificationRejectsInvalidClauseEvidence(t *testing.T) {
 		{name: "unsupported event", observation: cover.ClauseObservation{ClauseID: 10, Event: cover.ClauseEventKind("invented")}, wantErr: "unsupported event"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			validated, err := acceptRuntimeEvidence(context.Background(),
+			validated, err := acceptRuntimeEvidence(t.Context(),
 				nil, clauses, runtimecov.RecordedEvidence{ClauseEvents: []runtimecov.RecordedClauseEvent{recordedClauseEvent(test.observation)}}, "run", noMatches,
 			)
 			if test.wantErr == "" {
@@ -1004,7 +1060,7 @@ func TestClauseEvidenceRequiresValidProvenanceBeforeDeduplication(t *testing.T) 
 		t.Run(test.name, func(t *testing.T) {
 			event := valid
 			test.mutate(&event)
-			accepted, err := acceptRuntimeEvidence(context.Background(), nil, metadata, runtimecov.RecordedEvidence{ClauseEvents: []runtimecov.RecordedClauseEvent{event}}, "run", nil)
+			accepted, err := acceptRuntimeEvidence(t.Context(), nil, metadata, runtimecov.RecordedEvidence{ClauseEvents: []runtimecov.RecordedClauseEvent{event}}, "run", nil)
 			if err == nil || !strings.Contains(err.Error(), test.wantErr) || len(accepted.ClauseObservations) != 0 {
 				t.Fatalf("accepted=%#v err=%v, want rejection containing %q", accepted, err, test.wantErr)
 			}
@@ -1013,7 +1069,7 @@ func TestClauseEvidenceRequiresValidProvenanceBeforeDeduplication(t *testing.T) 
 
 	secondProcess := valid
 	secondProcess.ProcessID++
-	accepted, err := acceptRuntimeEvidence(context.Background(), nil, metadata, runtimecov.RecordedEvidence{ClauseEvents: []runtimecov.RecordedClauseEvent{valid, secondProcess}}, "run", nil)
+	accepted, err := acceptRuntimeEvidence(t.Context(), nil, metadata, runtimecov.RecordedEvidence{ClauseEvents: []runtimecov.RecordedClauseEvent{valid, secondProcess}}, "run", nil)
 	if err != nil || len(accepted.ClauseObservations) != 1 {
 		t.Fatalf("valid cross-process duplicate was not projected idempotently: accepted=%#v err=%v", accepted, err)
 	}
@@ -1027,14 +1083,14 @@ func TestProcessFileProvenanceIsVerified(t *testing.T) {
 		{Path: "/tmp/zero-process", RunID: "run", PackagePath: "example.test/p"},
 		{Path: "/tmp/unknown-package", RunID: "run", PackagePath: "example.test/other", ProcessID: 1},
 	} {
-		accepted, err := acceptRuntimeEvidence(context.Background(), nil, nil, runtimecov.RecordedEvidence{Files: []runtimecov.ProcessFile{file}}, "run", nil)
+		accepted, err := acceptRuntimeEvidence(t.Context(), nil, nil, runtimecov.RecordedEvidence{Files: []runtimecov.ProcessFile{file}}, "run", nil)
 		if err == nil || !strings.Contains(err.Error(), "invalid provenance") || len(accepted.Files) != 1 {
 			t.Fatalf("file=%#v accepted=%#v err=%v", file, accepted, err)
 		}
 	}
 	metadata := []cover.DecisionMetadata{{ID: 1, Package: "example.test/p"}}
 	valid := runtimecov.ProcessFile{Path: "/tmp/valid", RunID: "run", PackagePath: "example.test/p", ProcessID: 1}
-	if _, err := acceptRuntimeEvidence(context.Background(), metadata, nil, runtimecov.RecordedEvidence{Files: []runtimecov.ProcessFile{valid}}, "run", nil); err != nil {
+	if _, err := acceptRuntimeEvidence(t.Context(), metadata, nil, runtimecov.RecordedEvidence{Files: []runtimecov.ProcessFile{valid}}, "run", nil); err != nil {
 		t.Fatalf("valid process file provenance was rejected: %v", err)
 	}
 }
@@ -1057,7 +1113,7 @@ func TestRejectsMeasurementOwnedFlagsFromExplicitFlagsAndGOFLAGS(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Setenv("GOFLAGS", test.goFlags)
 			var stdout, stderr bytes.Buffer
-			code := runAt(context.Background(), t.TempDir(), test.args, &stdout, &stderr)
+			code := runAt(t.Context(), t.TempDir(), test.args, &stdout, &stderr)
 			if code != ExitInvalidUsage || !strings.Contains(stderr.String(), test.want) {
 				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 			}
@@ -1083,17 +1139,17 @@ func TestRuntimeDiagnosticSeverityDistinguishesInterruptionFromCorruption(t *tes
 	passed := &gotest.Result{Status: cover.RunPassed}
 	recoverable := []runtimecov.Diagnostic{{Severity: runtimecov.DiagnosticRecoverable, Truncated: true, Message: "truncated final event record"}}
 	corrupt := []runtimecov.Diagnostic{{Severity: runtimecov.DiagnosticIntegrity, Message: "decode event JSON"}}
-	if invalid, err := runtimeDiagnosticsInvalidate(context.Background(), recoverable, failed); err != nil || invalid {
+	if invalid, err := runtimeDiagnosticsInvalidate(t.Context(), recoverable, failed); err != nil || invalid {
 		t.Fatal("recoverable tail interruption overrode an already failed test run")
 	}
-	if invalid, err := runtimeDiagnosticsInvalidate(context.Background(), recoverable, passed); err != nil || !invalid {
+	if invalid, err := runtimeDiagnosticsInvalidate(t.Context(), recoverable, passed); err != nil || !invalid {
 		t.Fatal("tail interruption in a passed test run was accepted")
 	}
-	if invalid, err := runtimeDiagnosticsInvalidate(context.Background(), corrupt, failed); err != nil || !invalid {
+	if invalid, err := runtimeDiagnosticsInvalidate(t.Context(), corrupt, failed); err != nil || !invalid {
 		t.Fatal("complete-record corruption did not take precedence over test failure")
 	}
 	failed.RuntimeDiagnostics = []string{"disk unavailable"}
-	if invalid, err := runtimeDiagnosticsInvalidate(context.Background(), nil, failed); err != nil || !invalid {
+	if invalid, err := runtimeDiagnosticsInvalidate(t.Context(), nil, failed); err != nil || !invalid {
 		t.Fatal("runtime recorder failure did not invalidate coverage")
 	}
 }
@@ -1405,7 +1461,7 @@ func runFixture(t *testing.T, root string, arguments ...string) (report.Report, 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	args := append([]string{"test", "--timeout=2m"}, arguments...)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 	defer cancel()
 	code := runAt(ctx, root, args, &stdout, &stderr)
 	var built report.Report
