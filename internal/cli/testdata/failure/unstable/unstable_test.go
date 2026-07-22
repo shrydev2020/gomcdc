@@ -13,6 +13,17 @@ func TestControlledFailure(t *testing.T) {
 	switch os.Getenv("GOMCDC_FAILURE_MODE") {
 	case "fail":
 		t.Fatal("controlled test failure")
+	case "panic":
+		panic("controlled test panic")
+	case "interrupt":
+		marker := os.Getenv("GOMCDC_INTERRUPT_MARKER")
+		if marker == "" {
+			t.Fatal("GOMCDC_INTERRUPT_MARKER is empty")
+		}
+		if err := os.WriteFile(marker, []byte("ready\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		select {}
 	case "timeout":
 		select {}
 	case "truncate":

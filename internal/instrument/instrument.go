@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/shrydev2020/gomcdc/internal/analyzer"
+	"github.com/shrydev2020/gomcdc/internal/c0"
 	cover "github.com/shrydev2020/gomcdc/internal/coverage"
 )
 
@@ -45,23 +46,26 @@ type noMatchLocation struct {
 
 // FileMapping maps analysis of an original file to its unchanged copied path.
 type FileMapping struct {
-	CopyPath string
-	Analysis analyzer.File
+	CopyPath                string
+	Analysis                analyzer.File
+	OriginalInventory       *c0.FileInventory
+	ExcludeFromCoveragePlan bool
 }
 
 // PackageOptions describes one copied package to instrument. ActiveFiles must
 // include every build-active source and test file whose identifiers may collide
 // with the generated package-wide helper.
 type PackageOptions struct {
-	Context                 context.Context
-	Directory               string
-	PackageName             string
-	PackagePath             string
-	RuntimeImportPath       string
-	CompilerClauseSelection bool
-	TestOnly                bool
-	ActiveFiles             []string
-	Files                   []FileMapping
+	Context                    context.Context
+	Directory                  string
+	PackageName                string
+	PackagePath                string
+	RuntimeImportPath          string
+	CompilerClauseSelection    bool
+	PlanCoverageCorrespondence bool
+	TestOnly                   bool
+	ActiveFiles                []string
+	Files                      []FileMapping
 }
 
 // PackageResult identifies the generated bridge and helper used by rewritten
@@ -71,6 +75,7 @@ type PackageResult struct {
 	BridgePath     string
 	GeneratedFiles []string
 	SourceMaps     []SourceMap
+	CoveragePlans  []FileCoveragePlan
 }
 
 // SourceMap identifies the original logical filename used by printer.SourcePos,
@@ -83,6 +88,14 @@ type SourceMap struct {
 	CompilerFile     string
 	GeneratedRegions []GeneratedRegion
 	LineMappings     []analyzer.LineMapping
+}
+
+// FileCoveragePlan keeps coverage acceptance authority separate from SourceMap
+// coordinate translation. Correspondence is planned before Go cover executes.
+type FileCoveragePlan struct {
+	WorkspaceFile  string
+	OriginalPath   string
+	Correspondence c0.CoverageCorrespondence
 }
 
 // GeneratedRegion identifies instrumentation-only statements which Go's
@@ -136,16 +149,62 @@ func InstrumentPackage(options PackageOptions) (PackageResult, error) {
 		map_ SourceMap
 	}
 	transformed := make([]transformedFile, 0, len(options.Files))
+	coveragePlans := make([]FileCoveragePlan, 0, len(options.Files))
 	for _, mapping := range options.Files {
 		if err := ctx.Err(); err != nil {
 			return PackageResult{}, err
 		}
+		planCoverage := options.PlanCoverageCorrespondence && !mapping.ExcludeFromCoveragePlan
+		var originalInventory c0.FileInventory
+		if planCoverage {
+			if mapping.OriginalInventory != nil {
+				originalInventory = *mapping.OriginalInventory
+			} else {
+				originalInventory, err = c0.BuildInventory(mapping.Analysis.RelativePath, mapping.Analysis.Source)
+				if err != nil {
+					return PackageResult{}, fmt.Errorf("plan coverage for copied file %q: build original inventory: %w", mapping.CopyPath, err)
+				}
+			}
+		}
 		if len(mapping.Analysis.Decisions) == 0 && len(mapping.Analysis.Clauses) == 0 {
+			if planCoverage {
+				contents, err := os.ReadFile(mapping.CopyPath)
+				if err != nil {
+					return PackageResult{}, fmt.Errorf("plan coverage for copied file %q: read: %w", mapping.CopyPath, err)
+				}
+				if hash := sha256.Sum256(contents); hash != mapping.Analysis.SourceHash {
+					return PackageResult{}, fmt.Errorf("plan coverage for copied file %q: copy differs from analyzed original", mapping.CopyPath)
+				}
+				correspondence, err := planRewrittenCoverageCorrespondence(
+					ctx, options.PackagePath, mapping.Analysis.RelativePath, originalInventory, contents, nil,
+				)
+				if err != nil {
+					return PackageResult{}, fmt.Errorf("plan coverage for copied file %q: %w", mapping.CopyPath, err)
+				}
+				coveragePlans = append(coveragePlans, FileCoveragePlan{
+					WorkspaceFile: mapping.CopyPath, OriginalPath: mapping.Analysis.RelativePath, Correspondence: correspondence,
+				})
+			}
 			continue
 		}
 		data, mode, sourceMap, err := transformCopiedFile(mapping.CopyPath, mapping.Analysis, helperName, options.CompilerClauseSelection)
 		if err != nil {
 			return PackageResult{}, err
+		}
+		if planCoverage {
+			generatedProfileFiles := []string{
+				filepath.ToSlash(filepath.Join(filepath.Dir(mapping.Analysis.RelativePath), sourceMap.GeneratedFile)),
+				filepath.ToSlash(filepath.Join(filepath.Dir(mapping.Analysis.RelativePath), sourceMap.CompilerFile)),
+			}
+			correspondence, err := planRewrittenCoverageCorrespondence(
+				ctx, options.PackagePath, mapping.Analysis.RelativePath, originalInventory, data, generatedProfileFiles,
+			)
+			if err != nil {
+				return PackageResult{}, fmt.Errorf("instrument copied file %q: %w", mapping.CopyPath, err)
+			}
+			coveragePlans = append(coveragePlans, FileCoveragePlan{
+				WorkspaceFile: mapping.CopyPath, OriginalPath: mapping.Analysis.RelativePath, Correspondence: correspondence,
+			})
 		}
 		if err := ctx.Err(); err != nil {
 			return PackageResult{}, err
@@ -175,11 +234,31 @@ func InstrumentPackage(options PackageOptions) (PackageResult, error) {
 	if err != nil {
 		return PackageResult{}, err
 	}
-	result := PackageResult{HelperName: helperName, BridgePath: bridgePath, GeneratedFiles: []string{bridgePath}}
+	result := PackageResult{
+		HelperName: helperName, BridgePath: bridgePath, GeneratedFiles: []string{bridgePath}, CoveragePlans: coveragePlans,
+	}
 	for _, file := range transformed {
 		result.SourceMaps = append(result.SourceMaps, file.map_)
 	}
 	return result, nil
+}
+
+func planRewrittenCoverageCorrespondence(
+	ctx context.Context,
+	packagePath string,
+	originalPath string,
+	originalInventory c0.FileInventory,
+	rewritten []byte,
+	generatedProfileFiles []string,
+) (c0.CoverageCorrespondence, error) {
+	rewrittenInventory, err := c0.BuildInventory(originalPath, rewritten)
+	if err != nil {
+		return c0.CoverageCorrespondence{}, fmt.Errorf("build rewritten coverage inventory: %w", err)
+	}
+	return c0.PlanCoverageCorrespondence(ctx, c0.CorrespondencePlanInput{
+		PackagePath: packagePath, OriginalPath: originalPath,
+		Original: originalInventory, Rewritten: rewrittenInventory, GeneratedProfileFiles: generatedProfileFiles,
+	})
 }
 
 // InstrumentFile transforms one copied file using analysis from its unchanged
@@ -385,7 +464,12 @@ func transformCopiedFile(copyPath string, analysis analyzer.File, helperName str
 		GeneratedRegions: append([]GeneratedRegion(nil), transformer.generatedRegions...),
 		LineMappings:     append([]analyzer.LineMapping(nil), analysis.LineMappings...),
 	}
-	formatted := mapGeneratedStatements(output.Bytes(), helperName, sourceMap.OriginalFile, sourceMap.GeneratedFile, sourceMap.CompilerFile)
+	formatted, err := mapGeneratedStatements(
+		output.Bytes(), helperName, sourceMap.OriginalFile, sourceMap.GeneratedFile, sourceMap.CompilerFile, analysis.Source,
+	)
+	if err != nil {
+		return nil, 0, SourceMap{}, fmt.Errorf("instrument copied file %q: map generated coverage lines: %w", copyPath, err)
+	}
 	if _, err := parser.ParseFile(token.NewFileSet(), copyPath, formatted, parser.ParseComments|parser.AllErrors); err != nil {
 		return nil, 0, SourceMap{}, fmt.Errorf("instrument copied file %q: validate transformed source: %w", copyPath, err)
 	}
@@ -393,8 +477,9 @@ func transformCopiedFile(copyPath string, analysis analyzer.File, helperName str
 }
 
 type logicalLine struct {
-	file string
-	line int
+	file   string
+	line   int
+	column int
 }
 
 // mapGeneratedStatements requests a virtual filename for every inserted
@@ -402,38 +487,65 @@ type logicalLine struct {
 // original line. Some Go cover versions retain the physical filename anyway;
 // SourceMap.GeneratedRegions is the authoritative exclusion mechanism when the
 // compiler profile retains physical filenames.
-func mapGeneratedStatements(source []byte, helperName, originalFile, generatedFile, compilerFile string) []byte {
+func mapGeneratedStatements(source []byte, helperName, originalFile, generatedFile, compilerFile string, originalSource []byte) ([]byte, error) {
 	lines := strings.Split(string(source), "\n")
+	originalPositions := originalLogicalLines(originalSource, originalFile)
+	for index, line := range lines {
+		line = restoreUserLogicalDirective(line, originalFile, originalPositions)
+		lines[index] = normalizeOriginalLineDirective(line, originalFile)
+	}
+	generatedLines, err := generatedStatementLineKinds([]byte(strings.Join(lines, "\n")), helperName)
+	if err != nil {
+		return nil, fmt.Errorf("locate generated statements: %w", err)
+	}
 	positions := make([]logicalLine, len(lines))
 	current := logicalLine{file: originalFile, line: 1}
 	for index, line := range lines {
 		positions[index] = current
-		if file, number, ok := parseLineDirective(line); ok {
-			current = logicalLine{file: file, line: number}
+		if file, number, column, ok := parseLineDirective(line); ok {
+			current = logicalLine{file: file, line: number, column: column}
 			continue
 		}
 		current.line++
 	}
 
+	virtualLine, ok := unusedLogicalLineRange(positions, len(lines)+1)
+	if !ok {
+		return nil, errors.New("no collision-free logical line range remains for generated statements")
+	}
 	var output strings.Builder
-	virtualLine := 1
 	resetNeeded := false
+	activeGeneratedKind := generatedLineNone
 	for index, line := range lines {
-		if generatedStatementLine(line, helperName) {
+		trimmed := strings.TrimSpace(line)
+		kind := generatedLines[index+1]
+		if kind != generatedLineNone {
 			virtualFile := generatedFile
-			if compilerMarkerStatementLine(line, helperName) {
+			if kind == generatedLineCompiler {
 				virtualFile = compilerFile
 			}
-			fmt.Fprintf(&output, "//line %s:%d\n", virtualFile, virtualLine)
-			output.WriteString(line)
-			output.WriteByte('\n')
-			virtualLine++
+			if kind != activeGeneratedKind {
+				fmt.Fprintf(&output, "//line %s:%d\n", virtualFile, virtualLine+index)
+			}
+			// printer.SourcePos may place an original //line directive or comment
+			// between the receiver and method name of a positionless generated
+			// selector. Keep ordinary comments, but suppress directives inside the
+			// generated statement so they cannot remap part of that statement back
+			// onto an original coverage obligation.
+			if _, _, _, directive := parseLineDirective(line); !directive {
+				output.WriteString(line)
+			}
+			if index != len(lines)-1 {
+				output.WriteByte('\n')
+			}
 			resetNeeded = true
+			activeGeneratedKind = kind
 			continue
 		}
-		if resetNeeded && strings.TrimSpace(line) != "" && !strings.HasPrefix(strings.TrimSpace(line), "//line ") {
+		activeGeneratedKind = generatedLineNone
+		if resetNeeded && trimmed != "" && !strings.HasPrefix(trimmed, "//line ") {
 			position := positions[index]
-			fmt.Fprintf(&output, "//line %s:%d\n", position.file, position.line)
+			writeLineDirective(&output, position)
 			resetNeeded = false
 		}
 		output.WriteString(line)
@@ -441,53 +553,291 @@ func mapGeneratedStatements(source []byte, helperName, originalFile, generatedFi
 			output.WriteByte('\n')
 		}
 	}
-	return []byte(output.String())
+	return []byte(output.String()), nil
 }
 
-func parseLineDirective(line string) (string, int, bool) {
+type generatedLineKind uint8
+
+const (
+	generatedLineNone generatedLineKind = iota
+	generatedLineRuntime
+	generatedLineCompiler
+)
+
+// generatedStatementLineKinds identifies generated statement ranges from the
+// parsed syntax rather than from rendered line prefixes. printer.SourcePos can
+// legally split a positionless selector across comments and line directives,
+// so textual prefix matching is not a sound generated/original boundary.
+func generatedStatementLineKinds(source []byte, helperName string) (map[int]generatedLineKind, error) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "generated.go", source, parser.ParseComments|parser.AllErrors)
+	if err != nil {
+		return nil, err
+	}
+	lines := make(map[int]generatedLineKind)
+	var classificationErr error
+	ast.Inspect(file, func(node ast.Node) bool {
+		if classificationErr != nil {
+			return false
+		}
+		statement, ok := node.(ast.Stmt)
+		if !ok {
+			return true
+		}
+		kind := classifyGeneratedStatement(statement, helperName)
+		if kind == generatedLineNone {
+			return true
+		}
+		start := fset.PositionFor(statement.Pos(), false).Line
+		end := fset.PositionFor(statement.End(), false).Line
+		if start <= 0 || end < start {
+			classificationErr = fmt.Errorf("invalid generated statement physical range %d-%d", start, end)
+			return false
+		}
+		for line := start; line <= end; line++ {
+			if existing := lines[line]; existing != generatedLineNone && existing != kind {
+				classificationErr = fmt.Errorf("generated statement line %d has conflicting producer classes", line)
+				return false
+			}
+			lines[line] = kind
+		}
+		return false
+	})
+	if classificationErr != nil {
+		return nil, classificationErr
+	}
+	return lines, nil
+}
+
+func classifyGeneratedStatement(statement ast.Stmt, helperName string) generatedLineKind {
+	switch current := statement.(type) {
+	case *ast.DeclStmt:
+		declaration, ok := current.Decl.(*ast.GenDecl)
+		if !ok || declaration.Tok != token.VAR {
+			return generatedLineNone
+		}
+		for _, raw := range declaration.Specs {
+			specification, ok := raw.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for _, name := range specification.Names {
+				if name.Name == helperName+"Slots" || name.Name == helperName+"Switches" {
+					return generatedLineRuntime
+				}
+			}
+		}
+	case *ast.DeferStmt:
+		if method, ok := generatedHelperMethod(current.Call, helperName); ok && method == "AbortSlots" {
+			return generatedLineRuntime
+		}
+	case *ast.ExprStmt:
+		call, ok := current.X.(*ast.CallExpr)
+		if !ok {
+			return generatedLineNone
+		}
+		method, ok := generatedHelperMethod(call, helperName)
+		if !ok {
+			return generatedLineNone
+		}
+		switch method {
+		case "SelectClause":
+			return generatedLineRuntime
+		case "CompilerDirectClause", "CompilerNoMatch":
+			return generatedLineCompiler
+		}
+	case *ast.IfStmt:
+		assignment, ok := current.Init.(*ast.AssignStmt)
+		if !ok || assignment.Tok != token.DEFINE || len(assignment.Lhs) != 1 {
+			return generatedLineNone
+		}
+		name, ok := assignment.Lhs[0].(*ast.Ident)
+		if ok && strings.HasPrefix(name.Name, helperName+"Boundary") {
+			return generatedLineRuntime
+		}
+	}
+	return generatedLineNone
+}
+
+func generatedHelperMethod(call *ast.CallExpr, helperName string) (string, bool) {
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return "", false
+	}
+	receiver, ok := selector.X.(*ast.Ident)
+	if !ok || receiver.Name != helperName {
+		return "", false
+	}
+	return selector.Sel.Name, true
+}
+
+type logicalLineKey struct {
+	file string
+	line int
+}
+
+type originalLogicalPositions struct {
+	physical        map[int]logicalLine
+	columnByLogical map[logicalLineKey]logicalLine
+	ambiguousColumn map[logicalLineKey]bool
+}
+
+func originalLogicalLines(source []byte, originalFile string) originalLogicalPositions {
+	lines := strings.Split(string(source), "\n")
+	positions := originalLogicalPositions{
+		physical:        make(map[int]logicalLine, len(lines)),
+		columnByLogical: make(map[logicalLineKey]logicalLine),
+		ambiguousColumn: make(map[logicalLineKey]bool),
+	}
+	current := logicalLine{file: originalFile, line: 1}
+	for index, line := range lines {
+		physicalLine := index + 1
+		positions.physical[physicalLine] = current
+		if current.column > 0 {
+			key := logicalLineKey{file: normalizeLogicalFilename(current.file), line: current.line}
+			if existing, found := positions.columnByLogical[key]; found && existing.column != current.column {
+				positions.ambiguousColumn[key] = true
+			} else {
+				positions.columnByLogical[key] = current
+			}
+		}
+		if file, number, column, ok := parseLineDirective(line); ok {
+			current = logicalLine{file: file, line: number, column: column}
+			continue
+		}
+		current.line++
+	}
+	return positions
+}
+
+func restoreUserLogicalDirective(line, originalFile string, positions originalLogicalPositions) string {
+	file, physicalLine, column, ok := parseLineDirective(line)
+	if !ok {
+		return line
+	}
+	key := logicalLineKey{file: normalizeLogicalFilename(file), line: physicalLine}
+	if column > 0 {
+		if logical, found := positions.columnByLogical[key]; found && !positions.ambiguousColumn[key] && logical.column == column {
+			return line
+		}
+	}
+	// printer.SourcePos can omit a user directive's column. Restore it from an
+	// exact logical filename+line only when the original source establishes one
+	// unique positive column. This check precedes physical-line restoration so
+	// a user virtual filename equal to the original basename is not mistaken for
+	// a printer reference to the unchanged file.
+	if column == 0 {
+		if logical, found := positions.columnByLogical[key]; found && !positions.ambiguousColumn[key] {
+			var restored strings.Builder
+			writeLineDirective(&restored, logical)
+			return strings.TrimSuffix(restored.String(), "\n")
+		}
+	}
+	if !sameOriginalDirectiveFile(file, originalFile) {
+		return line
+	}
+	logical, found := positions.physical[physicalLine]
+	if !found {
+		return line
+	}
+	var restored strings.Builder
+	writeLineDirective(&restored, logical)
+	return strings.TrimSuffix(restored.String(), "\n")
+}
+
+func normalizeLogicalFilename(filename string) string {
+	return filepath.ToSlash(filepath.Clean(filename))
+}
+
+func sameOriginalDirectiveFile(left, right string) bool {
+	left = normalizeLogicalFilename(left)
+	right = normalizeLogicalFilename(right)
+	return left == right || filepath.Base(left) == filepath.Base(right)
+}
+
+func writeLineDirective(output *strings.Builder, position logicalLine) {
+	if position.column > 0 {
+		fmt.Fprintf(output, "//line %s:%d:%d\n", position.file, position.line, position.column)
+		return
+	}
+	fmt.Fprintf(output, "//line %s:%d\n", position.file, position.line)
+}
+
+// normalizeOriginalLineDirective keeps printer.SourcePos's stable
+// module-relative identity from being resolved a second time against the
+// copied source directory by the compiler and parser.
+func normalizeOriginalLineDirective(line, originalFile string) string {
+	normalized := filepath.ToSlash(originalFile)
+	base := filepath.ToSlash(filepath.Base(normalized))
+	if normalized == "" || normalized == "." || normalized == base {
+		return line
+	}
+	trimmed := strings.TrimSpace(line)
+	prefix := "//line " + normalized
+	if !strings.HasPrefix(trimmed, prefix+":") {
+		return line
+	}
+	return "//line " + base + strings.TrimPrefix(trimmed, prefix)
+}
+
+func unusedLogicalLineRange(positions []logicalLine, width int) (int, bool) {
+	if width <= 0 {
+		return 0, false
+	}
+	usedSet := make(map[int]struct{}, len(positions))
+	for _, position := range positions {
+		if position.line > 0 {
+			usedSet[position.line] = struct{}{}
+		}
+	}
+	used := make([]int, 0, len(usedSet))
+	for line := range usedSet {
+		used = append(used, line)
+	}
+	sort.Ints(used)
+	maximum := int(^uint(0) >> 1)
+	start := 1
+	for _, line := range used {
+		if line < start {
+			continue
+		}
+		if line-start >= width {
+			return start, true
+		}
+		if line == maximum {
+			return 0, false
+		}
+		start = line + 1
+	}
+	if start > maximum-width+1 {
+		return 0, false
+	}
+	return start, true
+}
+
+func parseLineDirective(line string) (string, int, int, bool) {
 	trimmed := strings.TrimSpace(line)
 	if !strings.HasPrefix(trimmed, "//line ") {
-		return "", 0, false
+		return "", 0, 0, false
 	}
 	value := strings.TrimPrefix(trimmed, "//line ")
 	separator := strings.LastIndexByte(value, ':')
 	if separator <= 0 || separator == len(value)-1 {
-		return "", 0, false
+		return "", 0, 0, false
 	}
 	number, err := strconv.Atoi(value[separator+1:])
 	if err != nil || number <= 0 {
-		return "", 0, false
+		return "", 0, 0, false
 	}
 	file := value[:separator]
 	if previous := strings.LastIndexByte(file, ':'); previous > 0 {
 		if lineNumber, lineErr := strconv.Atoi(file[previous+1:]); lineErr == nil && lineNumber > 0 {
 			// filename:line:column -- the last numeric component is the
 			// column, while logical line tracking uses the penultimate one.
-			return file[:previous], lineNumber, true
+			return file[:previous], lineNumber, number, true
 		}
 	}
-	return file, number, true
-}
-
-func generatedStatementLine(line, helperName string) bool {
-	trimmed := strings.TrimSpace(line)
-	if strings.HasPrefix(trimmed, "var "+helperName+"Slots ") ||
-		strings.HasPrefix(trimmed, "var "+helperName+"Switches ") ||
-		strings.HasPrefix(trimmed, "defer "+helperName+".AbortSlots(") {
-		return true
-	}
-	for _, method := range []string{"SelectClause", "CompilerDirectClause", "CompilerNoMatch"} {
-		if strings.HasPrefix(trimmed, helperName+"."+method+"(") {
-			return true
-		}
-	}
-	return false
-}
-
-func compilerMarkerStatementLine(line, helperName string) bool {
-	trimmed := strings.TrimSpace(line)
-	return strings.HasPrefix(trimmed, helperName+".CompilerDirectClause(") ||
-		strings.HasPrefix(trimmed, helperName+".CompilerNoMatch(")
+	return file, number, 0, true
 }
 
 type fileTransformer struct {
@@ -503,6 +853,8 @@ type fileTransformer struct {
 	originalFile      string
 	compilerSelection bool
 	generatedRegions  []GeneratedRegion
+	reservedNames     map[string]struct{}
+	boundaryCount     int
 }
 
 type functionState struct {
@@ -524,6 +876,10 @@ func newFileTransformer(fset *token.FileSet, helperName string, analysis analyze
 		funcs:             make(map[*ast.BlockStmt]bool),
 		originalFile:      analysis.RelativePath,
 		compilerSelection: compilerClauseSelection,
+		reservedNames:     make(map[string]struct{}, len(analysis.Identifiers)),
+	}
+	for _, identifier := range analysis.Identifiers {
+		transformer.reservedNames[identifier] = struct{}{}
 	}
 	for _, decision := range analysis.Decisions {
 		key := decisionLocation{kind: decision.Metadata.Kind, start: decision.Condition.Start, end: decision.Condition.End}
@@ -607,7 +963,8 @@ func (transformer *fileTransformer) transformFunction(body *ast.BlockStmt) error
 			arrayDeclaration(state.slotsName, state.slotCount, transformer.helperName+"EvaluationID"),
 			&ast.DeferStmt{Call: state.call("AbortSlots", sliceExpression(state.slotsName))},
 		)
-		transformer.recordGenerated("evaluation-prologue", body, 2)
+		prologue = append(prologue, transformer.coverageBoundary(body.Lbrace)...)
+		transformer.recordGenerated("evaluation-prologue", body, uint32(len(prologue)))
 	}
 	body.List = append(prologue, body.List...)
 	var nestedErr error
@@ -781,6 +1138,9 @@ func (state *functionState) transformCaseClauses(kind cover.ClauseKind, statemen
 			)}
 			probes = append([]ast.Stmt{direct}, probes...)
 		}
+		if len(body) > 0 {
+			probes = append(probes, state.transformer.coverageBoundary(clause.Colon)...)
+		}
 		state.transformer.recordGenerated("switch-clause-probe", clause, uint32(len(probes)))
 		clause.Body = append(probes, body...)
 	}
@@ -825,8 +1185,12 @@ func (state *functionState) transformSelect(statement *ast.SelectStmt) ([]ast.St
 		if err != nil {
 			return nil, err
 		}
-		clause.Body = append([]ast.Stmt{&ast.ExprStmt{X: state.call("SelectClause", idLiteral(uint64(metadata.ID)), idLiteral(uint64(metadata.SwitchID)))}}, body...)
-		state.transformer.recordGenerated("select-clause-probe", clause, 1)
+		probes := []ast.Stmt{&ast.ExprStmt{X: state.call("SelectClause", idLiteral(uint64(metadata.ID)), idLiteral(uint64(metadata.SwitchID)))}}
+		if len(body) > 0 {
+			probes = append(probes, state.transformer.coverageBoundary(clause.Colon)...)
+		}
+		clause.Body = append(probes, body...)
+		state.transformer.recordGenerated("select-clause-probe", clause, uint32(len(probes)))
 	}
 	return []ast.Stmt{statement}, nil
 }
@@ -992,6 +1356,32 @@ func arrayDeclaration(name string, length int, element string) ast.Stmt {
 
 func sliceExpression(name string) ast.Expr {
 	return &ast.SliceExpr{X: ast.NewIdent(name)}
+}
+
+func (transformer *fileTransformer) coverageBoundary(position token.Pos) []ast.Stmt {
+	for {
+		name := transformer.helperName + "Boundary" + strconv.Itoa(transformer.boundaryCount)
+		transformer.boundaryCount++
+		if _, exists := transformer.reservedNames[name]; exists {
+			continue
+		}
+		transformer.reservedNames[name] = struct{}{}
+		return []ast.Stmt{
+			&ast.IfStmt{
+				If: position,
+				Init: &ast.AssignStmt{
+					Lhs:    []ast.Expr{ast.NewIdent(name)},
+					TokPos: position,
+					Tok:    token.DEFINE,
+					Rhs: []ast.Expr{&ast.BinaryExpr{
+						X: intLiteral(0), Op: token.NEQ, Y: intLiteral(0),
+					}},
+				},
+				Cond: ast.NewIdent(name),
+				Body: &ast.BlockStmt{Lbrace: position, Rbrace: position},
+			},
+		}
+	}
 }
 
 func ensureDistinctCopy(copyPath, originalPath string) error {

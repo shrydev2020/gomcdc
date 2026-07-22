@@ -1,5 +1,7 @@
 # gomcdc
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/shrydev2020/gomcdc)
+
 [English](README.md)
 
 `gomcdc` はGoのtestを実行し、Statement、Function、Decision、Condition、
@@ -10,6 +12,10 @@ Go標準coverageがstatementとfunctionの実行有無を測るのに対し、`g
 boolean評価vectorも記録し、各conditionがdecision結果へ独立に影響したかを
 示します。clause bodyの実行とswitch/type-switchの直接selectionを区別し、
 test失敗や中断時も検証可能なpartial resultを保持します。
+
+一つのmeasurement sessionでは、選択された各packageのtest binaryを一度だけ
+実行します。Go cover、AST runtime計装、compiler-aware selection hookは同じ実行を
+観測し、productionのdual-run fallbackはありません。
 
 ## 動作要件
 
@@ -78,6 +84,10 @@ clauseを示します。
 defaultはtextです。JSONはrepository内のreport schemaに従います。HTMLは指定
 directoryへself-contained reportを書きます。
 
+schema 2.0は要求されたevidence producerごとのoutcomeを公開します。integrity、
+実行completeness、source mapping、最終usability判断を分離するため、compiler
+selection streamの拒否が有効なASTやGo cover evidenceを消すことはありません。
+
 ```sh
 # Textを標準出力へ表示
 gomcdc test ./...
@@ -104,10 +114,13 @@ gomcdc test --format html --output coverage-html ./...
 tailが発生しても、信頼できるevidenceが残ればpartial reportを生成します。
 
 Masking MC/DCはexact searchします。組み込みのcondition obligationごとの上限は、
-candidate evaluation pair 1,000,000件、search state 4,000,000件、search workspace
-64 MiBです。いずれかを超える探索が必要な場合は`analysis-incomplete`とし、
-`not-covered`や`infeasible`へ変換しません。現時点では、これらの上限を変更する
-CLI optionはありません。
+candidate evaluation pair 1,000,000件、search state 4,000,000件、主要solver backing
+array 64 MiBです。solver byte上限には検証済みinput、result witness、goroutine stack、
+その他のprocess memoryを含まず、process全体のheap、RSS、総memory上限ではありません。
+いずれかを超える探索が必要な場合は`analysis-incomplete`とし、`not-covered`や
+`infeasible`へ変換しません。3つの`--mcdc-masking-max-*` optionで正のobligation単位
+上限を変更できます。値を増やすとconditionとdecisionの数に応じて総処理量が増えます。
+reportは実効値を`maskingAnalysisLimits`として記録します。
 
 ## 主なoption
 
@@ -134,6 +147,9 @@ gomcdc test ./... -- -count=1 -run TestCritical
 | `--output=<path>` | fileへ出力。HTMLの場合はdirectory |
 | `--strict` | requested entityにunsupported、unknown、analysis-incomplete、未計装があれば失敗 |
 | `--fail-under-<metric>=<percent>` | 有効な一指標がthreshold未満なら失敗 |
+| `--mcdc-masking-max-evaluation-pairs=<count>` | Masking condition obligationごとのcandidate evaluation pair上限。default 1,000,000 |
+| `--mcdc-masking-max-search-states=<count>` | Masking condition obligationごとの新規search state上限。default 4,000,000 |
+| `--mcdc-masking-max-solver-bytes=<bytes>` | Masking condition obligationごとの主要solver backing array上限。default 67,108,864 bytes |
 | `--timeout=<duration>` | `go test` subprocessのtimeout。defaultは10分 |
 | `--keep-workdir` | 診断用に計装済みtemporary workspaceを保持 |
 | `--workdir=<directory>` | temporary workspaceの親directoryを指定 |
@@ -159,7 +175,7 @@ gomcdc test \
 | 終了code | 意味 |
 | ---: | --- |
 | 0 | 成功 |
-| 1 | 一つ以上の`go test` runが失敗 |
+| 1 | `go test` runが失敗 |
 | 2 | measurement、instrumentation、integrity、reportの失敗 |
 | 3 | coverage threshold未達 |
 | 4 | 不正なCLI usage |
@@ -172,7 +188,7 @@ gomcdc test \
 - `_test.go` decisionは`--include-tests`指定時だけAST metricへ含めます。
   Statement/Function CoverageはGo標準coverageに基づきます。
 - Windows、assembly内部、cgo内部、compiler IR obligation、path coverage、
-  distributed test executionはv1対象外です。
+  distributed test executionはv2対象外です。
 - 対象moduleを現在ユーザーの権限でbuild/testします。temporary workspaceは
   悪意ある対象codeに対するsandboxではありません。
 - `gomcdc`はcoverage意味論を定義しますが、安全認証、DO-178C適合、tool
@@ -182,7 +198,7 @@ gomcdc test \
 
 - [規範仕様](docs/specification.ja.md)
 - [英語参考仕様](docs/specification.md)
-- [JSON report schema](schema/report-v1.1.schema.json)
+- [JSON report schema](schema/report-v2.0.schema.json)
 
 ## 開発時の確認
 

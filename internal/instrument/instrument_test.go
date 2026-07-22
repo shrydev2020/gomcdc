@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/shrydev2020/gomcdc/internal/analyzer"
+	"github.com/shrydev2020/gomcdc/internal/c0"
 	cover "github.com/shrydev2020/gomcdc/internal/coverage"
 	"github.com/shrydev2020/gomcdc/internal/runtimecov"
 )
@@ -152,18 +153,106 @@ func TestBroken( {
 func TestParseLineDirectiveHandlesOptionalColumn(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
-		input string
-		file  string
-		line  int
+		input  string
+		file   string
+		line   int
+		column int
 	}{
 		{input: "//line original.go:42", file: "original.go", line: 42},
-		{input: "//line original.go:42:7", file: "original.go", line: 42},
+		{input: "//line original.go:42:7", file: "original.go", line: 42, column: 7},
 		{input: "//line C:/project/original.go:42", file: "C:/project/original.go", line: 42},
 	} {
-		file, line, ok := parseLineDirective(test.input)
-		if !ok || file != test.file || line != test.line {
-			t.Errorf("parseLineDirective(%q) = %q, %d, %v", test.input, file, line, ok)
+		file, line, column, ok := parseLineDirective(test.input)
+		if !ok || file != test.file || line != test.line || column != test.column {
+			t.Errorf("parseLineDirective(%q) = %q, %d, %d, %v", test.input, file, line, column, ok)
 		}
+	}
+}
+
+func TestNormalizeOriginalLineDirectiveUsesCopiedFileRelativeIdentity(t *testing.T) {
+	t.Parallel()
+
+	if got := normalizeOriginalLineDirective("//line logic/logic.go:42:7", "logic/logic.go"); got != "//line logic.go:42:7" {
+		t.Fatalf("normalized directive = %q", got)
+	}
+	if got := normalizeOriginalLineDirective("//line virtual.go:42", "logic/logic.go"); got != "//line virtual.go:42" {
+		t.Fatalf("unrelated directive = %q", got)
+	}
+}
+
+func TestGeneratedStatementLineKindsRecognizeSplitSelector(t *testing.T) {
+	t.Parallel()
+	const source = `package p
+
+func f() {
+	gomcdc.
+//line p.go:30
+	// a source-positioned comment can be printed inside a generated selector
+//line p.go:4
+	SelectClause(1)
+	return
+}
+`
+	kinds, err := generatedStatementLineKinds([]byte(source), "gomcdc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range []int{4, 5, 6, 7, 8} {
+		if kinds[line] != generatedLineRuntime {
+			t.Errorf("line %d kind = %d, want runtime-generated", line, kinds[line])
+		}
+	}
+	if kinds[9] != generatedLineNone {
+		t.Errorf("original return line kind = %d, want none", kinds[9])
+	}
+
+	mapped, err := mapGeneratedStatements(
+		[]byte(source), "gomcdc", "p.go", ".gomcdc/generated/p.go", ".gomcdc/compiler/p.go", []byte(source),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inventory, err := c0.BuildInventory("p.go", mapped)
+	if err != nil {
+		t.Fatalf("mapped source is not valid: %v\n%s", err, mapped)
+	}
+	generated, original := 0, 0
+	for _, block := range inventory.Blocks {
+		for _, unit := range block.StatementUnits {
+			switch unit.ProfileFile {
+			case ".gomcdc/generated/p.go":
+				generated++
+			case "p.go":
+				original++
+			}
+		}
+	}
+	if generated != 1 || original != 1 {
+		t.Fatalf("mapped statement files = generated:%d original:%d, want 1 each\n%s", generated, original, mapped)
+	}
+}
+
+func TestUnusedLogicalLineRange(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name      string
+		positions []logicalLine
+		width     int
+		want      int
+		ok        bool
+	}{
+		{name: "after dense prefix", positions: []logicalLine{{line: 1}, {line: 2}, {line: 3}}, width: 2, want: 4, ok: true},
+		{name: "first sufficient gap", positions: []logicalLine{{line: 1}, {line: 4}}, width: 2, want: 2, ok: true},
+		{name: "zero width", width: 0, ok: false},
+		{name: "integer space exhausted", positions: []logicalLine{{line: int(^uint(0) >> 1)}}, width: int(^uint(0) >> 1), ok: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := unusedLogicalLineRange(test.positions, test.width)
+			if got != test.want || ok != test.ok {
+				t.Fatalf("unusedLogicalLineRange() = (%d, %v), want (%d, %v)", got, ok, test.want, test.ok)
+			}
+		})
 	}
 }
 
@@ -447,12 +536,13 @@ func Check(value bool) { if value {} }
 	copyPath := writeFile(t, workspace, "p/p.go", source)
 	analysis := analyze(t, original, originalRoot, "example.com/p", "example.com/p")
 	result, err := InstrumentPackage(PackageOptions{
-		Directory:         filepath.Dir(copyPath),
-		PackageName:       "p",
-		PackagePath:       "example.com/p",
-		RuntimeImportPath: "example.com/p/internal/runtimecov",
-		ActiveFiles:       []string{copyPath},
-		Files:             []FileMapping{{CopyPath: copyPath, Analysis: analysis}},
+		Directory:                  filepath.Dir(copyPath),
+		PackageName:                "p",
+		PackagePath:                "example.com/p",
+		RuntimeImportPath:          "example.com/p/internal/runtimecov",
+		PlanCoverageCorrespondence: true,
+		ActiveFiles:                []string{copyPath},
+		Files:                      []FileMapping{{CopyPath: copyPath, Analysis: analysis}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -460,9 +550,57 @@ func Check(value bool) { if value {} }
 	if len(result.SourceMaps) != 1 || len(result.SourceMaps[0].LineMappings) == 0 {
 		t.Fatalf("line mappings = %#v", result.SourceMaps)
 	}
+	if len(result.CoveragePlans) != 1 {
+		t.Fatalf("coverage plans = %#v", result.CoveragePlans)
+	}
+	if _, err := result.CoveragePlans[0].Correspondence.ProjectableRegions(); err != nil {
+		t.Fatalf("line-directive correspondence is not projectable: %v", err)
+	}
 	mapping := result.SourceMaps[0].LineMappings[len(result.SourceMaps[0].LineMappings)-1]
 	if filepath.Base(mapping.LogicalFile) != "imaginary.go" || mapping.LogicalLine < 900 || mapping.LogicalColumn != 7 {
 		t.Errorf("line mapping = %#v", mapping)
+	}
+}
+
+func TestInstrumentPackagePreservesSameBasenameUserLineDirective(t *testing.T) {
+	t.Parallel()
+	originalRoot := t.TempDir()
+	workspace := t.TempDir()
+	const source = `package p
+
+//line p.go:3:7
+func Check(value bool) { if value {} }
+`
+	original := writeFile(t, originalRoot, "p/p.go", source)
+	copyPath := writeFile(t, workspace, "p/p.go", source)
+	analysis := analyze(t, original, originalRoot, "example.com/p", "example.com/p")
+	result, err := InstrumentPackage(PackageOptions{
+		Directory:                  filepath.Dir(copyPath),
+		PackageName:                "p",
+		PackagePath:                "example.com/p",
+		RuntimeImportPath:          "example.com/p/internal/runtimecov",
+		PlanCoverageCorrespondence: true,
+		ActiveFiles:                []string{copyPath},
+		Files:                      []FileMapping{{CopyPath: copyPath, Analysis: analysis}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := result.CoveragePlans[0].Correspondence.ProjectableRegions(); err != nil {
+		t.Fatalf("same-basename line-directive correspondence is not projectable: %v", err)
+	}
+	transformed, err := os.ReadFile(copyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	parsed, err := parser.ParseFile(fset, "p/p.go", transformed, parser.ParseComments|parser.AllErrors)
+	if err != nil {
+		t.Fatalf("parse transformed source: %v\n%s", err, transformed)
+	}
+	position := fset.PositionFor(parsed.Decls[0].Pos(), true)
+	if filepath.Base(position.Filename) != "p.go" || position.Line != 3 || position.Column != 7 {
+		t.Fatalf("transformed function position = %s, want basename p.go:3:7\n%s", position, transformed)
 	}
 }
 
@@ -582,18 +720,25 @@ func TestCoverageFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := InstrumentPackage(PackageOptions{
-		Directory:         filepath.Dir(copyPath),
-		PackageName:       "logic",
-		PackagePath:       "example.com/fixture/logic",
-		RuntimeImportPath: injected.ImportPath,
-		ActiveFiles:       []string{copyPath, testPath},
-		Files:             []FileMapping{{CopyPath: copyPath, Analysis: analysis}},
+		Directory:                  filepath.Dir(copyPath),
+		PackageName:                "logic",
+		PackagePath:                "example.com/fixture/logic",
+		RuntimeImportPath:          injected.ImportPath,
+		PlanCoverageCorrespondence: true,
+		ActiveFiles:                []string{copyPath, testPath},
+		Files:                      []FileMapping{{CopyPath: copyPath, Analysis: analysis}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(result.SourceMaps) != 1 || !strings.HasPrefix(result.SourceMaps[0].GeneratedFile, ".gomcdc/generated/") || !strings.HasPrefix(result.SourceMaps[0].CompilerFile, ".gomcdc/compiler/") || len(result.SourceMaps[0].GeneratedRegions) == 0 {
 		t.Fatalf("SourceMaps = %#v", result.SourceMaps)
+	}
+	if len(result.CoveragePlans) != 1 {
+		t.Fatalf("CoveragePlans = %#v", result.CoveragePlans)
+	}
+	if _, err := result.CoveragePlans[0].Correspondence.ProjectableRegions(); err != nil {
+		t.Fatalf("combined coverage plan is not projectable: %v", err)
 	}
 	if len(result.GeneratedFiles) != 1 || result.GeneratedFiles[0] != result.BridgePath {
 		t.Fatalf("GeneratedFiles = %#v", result.GeneratedFiles)
@@ -764,6 +909,161 @@ func distinctEvaluationVectors(evaluations []cover.DecisionEvaluation) []cover.D
 		result = append(result, evaluation)
 	}
 	return result
+}
+
+func TestCombinedInstrumentationProducesCoverAndASTEvidenceInOneExecution(t *testing.T) {
+	originalRoot := t.TempDir()
+	workspace := t.TempDir()
+	const source = `package logic
+
+func Decide(left, right bool) bool {
+	if left && right {
+		return true
+	}
+	return false
+}
+`
+	const plainSource = `package logic
+
+func Plain() int { return 1 }
+`
+	const tests = `package logic
+
+import (
+	"os"
+	"testing"
+)
+
+func TestDecide(t *testing.T) {
+	marker := os.Getenv("GOMCDC_COMBINED_MARKER")
+	file, err := os.OpenFile(marker, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString("run\n"); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !Decide(true, true) || Decide(true, false) || Plain() != 1 {
+		t.Fatal("unexpected decision result")
+	}
+}
+`
+	originalPath := writeFile(t, originalRoot, "logic/logic.go", source)
+	copyPath := writeFile(t, workspace, "logic/logic.go", source)
+	plainOriginalPath := writeFile(t, originalRoot, "logic/plain.go", plainSource)
+	plainCopyPath := writeFile(t, workspace, "logic/plain.go", plainSource)
+	testPath := writeFile(t, workspace, "logic/logic_test.go", tests)
+	writeFile(t, workspace, "go.mod", "module example.com/fixture\n\ngo 1.26.0\n")
+	analysis := analyze(t, originalPath, originalRoot, "example.com/fixture", "example.com/fixture/logic")
+	plainAnalysis := analyze(t, plainOriginalPath, originalRoot, "example.com/fixture", "example.com/fixture/logic")
+	injected, err := runtimecov.Inject(t.Context(), workspace, "example.com/fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := InstrumentPackage(PackageOptions{
+		Context: t.Context(), Directory: filepath.Dir(copyPath), PackageName: "logic",
+		PackagePath: "example.com/fixture/logic", RuntimeImportPath: injected.ImportPath,
+		PlanCoverageCorrespondence: true,
+		ActiveFiles:                []string{copyPath, plainCopyPath, testPath},
+		Files: []FileMapping{
+			{CopyPath: copyPath, Analysis: analysis},
+			{CopyPath: plainCopyPath, Analysis: plainAnalysis},
+		},
+	})
+	if err != nil {
+		t.Fatalf("InstrumentPackage: %v", err)
+	}
+	if len(result.SourceMaps) != 1 || len(result.CoveragePlans) != 2 {
+		t.Fatalf("instrumentation result = %#v", result)
+	}
+	var projectable []c0.RegionCorrespondence
+	for _, plan := range result.CoveragePlans {
+		if len(plan.Correspondence.Regions()) == 0 {
+			t.Fatalf("combined coverage plan has no region: %#v", plan)
+		}
+		regions, err := plan.Correspondence.ProjectableRegions()
+		if err != nil {
+			t.Fatalf("combined coverage plan is not projectable: %v", err)
+		}
+		projectable = append(projectable, regions...)
+	}
+	if len(projectable) == 0 {
+		t.Fatal("combined coverage plan has no projectable original region")
+	}
+
+	dataDir := t.TempDir()
+	profilePath := filepath.Join(t.TempDir(), "combined.out")
+	markerPath := filepath.Join(t.TempDir(), "executions.txt")
+	command := exec.Command("go", "test", "-count=1", "-covermode=set", "-coverprofile="+profilePath, "-coverpkg=example.com/fixture/logic", "./logic")
+	command.Dir = workspace
+	command.Env = append(os.Environ(),
+		"GOWORK=off",
+		"GOCACHE="+filepath.Join(t.TempDir(), "go-cache"),
+		"GOMCDC_COMBINED_MARKER="+markerPath,
+		runtimecov.DataDirEnv+"="+dataDir,
+		runtimecov.RunIDEnv+"=combined-run",
+	)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("combined go test failed: %v\n%s", err, output)
+	}
+
+	marker, err := os.ReadFile(markerPath)
+	if err != nil {
+		t.Fatalf("read execution marker: %v", err)
+	}
+	if string(marker) != "run\n" {
+		t.Fatalf("test execution marker = %q, want one execution", marker)
+	}
+
+	profileContents, err := os.ReadFile(profilePath)
+	if err != nil {
+		t.Fatalf("read cover profile: %v", err)
+	}
+	profile, parseErr := c0.ParseProfile(bytes.NewReader(profileContents))
+	if parseErr != nil {
+		t.Fatalf("ParseProfile: %v\n%s", parseErr, profileContents)
+	}
+	for _, planned := range projectable {
+		matched := false
+		for _, file := range profile.Files {
+			profilePath := filepath.ToSlash(file.Path)
+			if profilePath != planned.Region.ProfilePath && !strings.HasSuffix(profilePath, "/"+planned.Region.ProfilePath) {
+				continue
+			}
+			for _, block := range file.Blocks {
+				if block.Position == planned.Region.Range && block.Statements == planned.Region.Statements {
+					matched = true
+					break
+				}
+			}
+		}
+		if !matched {
+			t.Fatalf("planned projectable region missing from actual profile: %#v\nprofile: %#v", planned.Region, profile)
+		}
+	}
+	hasCoveredRegion := false
+	for _, file := range profile.Files {
+		for _, block := range file.Blocks {
+			if block.Count > 0 {
+				hasCoveredRegion = true
+				break
+			}
+		}
+	}
+	if !hasCoveredRegion {
+		t.Fatalf("combined cover profile has no covered region: %#v", profile)
+	}
+	collected, err := runtimecov.CollectDetailed(t.Context(), dataDir)
+	if err != nil {
+		t.Fatalf("CollectDetailed: %v", err)
+	}
+	if len(collected.Evaluations) != 2 {
+		t.Fatalf("AST evaluations = %d, want 2: %#v", len(collected.Evaluations), collected.Evaluations)
+	}
 }
 
 func analyze(t *testing.T, path, moduleDir, modulePath, packagePath string) analyzer.File {

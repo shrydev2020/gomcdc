@@ -40,3 +40,15 @@ func TestSummaryAnalysisIncompleteCountsEnabledMetricsOnly(t *testing.T) {
 		t.Fatalf("summaryAnalysisIncomplete() = %d, want 5", got)
 	}
 }
+
+func TestSummaryUnknownCountsEnabledMetricsOnly(t *testing.T) {
+	t.Parallel()
+	summary := report.Summary{
+		Statement: report.MetricSummary{Enabled: true, Unknown: 2},
+		Decision:  report.MetricSummary{Enabled: true, Unknown: 3},
+		Condition: report.MetricSummary{Enabled: false, Unknown: 100},
+	}
+	if got := summaryUnknown(summary); got != 5 {
+		t.Fatalf("summaryUnknown() = %d, want 5", got)
+	}
+}

@@ -126,14 +126,14 @@ func benchmarkMaskingAnalyzeCase(b *testing.B, test maskingAnalyzeBenchmarkCase)
 		metadata.ID = test.evaluations[0].DecisionID
 	}
 	var result cover.MCDCResult
-	var evaluationPairs, searchStates, workspaceBytes uint64
+	var evaluationPairs, searchStates, solverBytes uint64
 	var targetStats maskingSearchStats
 	if strategy, ok := test.strategy.(MaskingStrategy); ok {
 		result = strategy.analyze(metadata, test.evaluations, func(target uint16, stats maskingSearchStats) {
 			evaluationPairs += stats.EvaluationPairs
 			searchStates += stats.SearchStates
-			if stats.WorkspaceBytes > workspaceBytes {
-				workspaceBytes = stats.WorkspaceBytes
+			if stats.SolverBytes > solverBytes {
+				solverBytes = stats.SolverBytes
 			}
 			if target == test.target {
 				targetStats = stats
@@ -188,7 +188,7 @@ func benchmarkMaskingAnalyzeCase(b *testing.B, test maskingAnalyzeBenchmarkCase)
 	b.ReportMetric(float64(searchStates), "search-states")
 	b.ReportMetric(float64(targetStats.EvaluationPairs), "target-evaluation-pairs")
 	b.ReportMetric(float64(targetStats.SearchStates), "target-search-states")
-	b.ReportMetric(float64(workspaceBytes), "workspace-bytes")
+	b.ReportMetric(float64(solverBytes), "solver-bytes")
 	_ = result
 }
 

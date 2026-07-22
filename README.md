@@ -1,5 +1,7 @@
 # gomcdc
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/shrydev2020/gomcdc)
+
 [日本語](README.ja.md)
 
 `gomcdc` runs Go tests and produces one coverage report containing statement,
@@ -11,6 +13,10 @@ also records boolean evaluation vectors, so it can show whether each condition
 independently affected its decision. It distinguishes clause body execution
 from direct switch/type-switch selection and preserves partial results when a
 test run fails or is interrupted.
+
+One measurement session executes each selected package test binary once. Go
+cover, AST runtime instrumentation, and compiler-aware selection hooks observe
+that same execution; there is no production dual-run fallback.
 
 ## Requirements
 
@@ -80,6 +86,11 @@ the clause chosen by dispatch.
 Text is the default. JSON follows the checked-in report schema. HTML writes a
 self-contained report to the requested directory.
 
+Schema 2.0 exposes an outcome for every requested evidence producer. Integrity,
+execution completeness, source mapping, and the final usability decision remain
+separate, so a rejected compiler-selection stream does not erase valid AST or
+Go-cover evidence.
+
 ```sh
 # Text on stdout
 gomcdc test ./...
@@ -108,9 +119,14 @@ survives.
 
 Masking MC/DC uses exact search. Its built-in limit for each condition obligation
 is 1,000,000 candidate evaluation pairs, 4,000,000 search states, and 64 MiB of
-search workspace. A search that would exceed a limit yields
-`analysis-incomplete`; it is never reported as `not-covered` or `infeasible`.
-These limits currently have no CLI override.
+primary solver backing arrays. The solver-byte limit excludes validated input,
+result witnesses, goroutine stacks, and all other process memory; it is not a
+process-wide heap, RSS, or total-memory limit. A search that would exceed a
+limit yields `analysis-incomplete`; it is never reported as `not-covered` or
+`infeasible`.
+The three `--mcdc-masking-max-*` options override these positive per-obligation
+limits. Raising them can multiply total work across conditions and decisions.
+Reports record the effective values as `maskingAnalysisLimits`.
 
 ## Common options
 
@@ -137,6 +153,9 @@ gomcdc test ./... -- -count=1 -run TestCritical
 | `--output=<path>` | Write a file, or a directory for HTML |
 | `--strict` | Fail on requested unsupported, unknown, analysis-incomplete, or uninstrumented entities |
 | `--fail-under-<metric>=<percent>` | Fail when one enabled metric is below a threshold |
+| `--mcdc-masking-max-evaluation-pairs=<count>` | Override candidate evaluation pairs per Masking condition obligation; default 1,000,000 |
+| `--mcdc-masking-max-search-states=<count>` | Override newly expanded search states per Masking condition obligation; default 4,000,000 |
+| `--mcdc-masking-max-solver-bytes=<bytes>` | Override primary solver backing-array bytes per Masking condition obligation; default 67,108,864 |
 | `--timeout=<duration>` | Set the `go test` subprocess timeout; default is 10 minutes |
 | `--keep-workdir` | Retain the instrumented temporary workspace for diagnosis |
 | `--workdir=<directory>` | Choose the parent directory for the temporary workspace |
@@ -163,7 +182,7 @@ gomcdc test \
 | Exit code | Meaning |
 | ---: | --- |
 | 0 | Success |
-| 1 | One or more `go test` runs failed |
+| 1 | The `go test` run failed |
 | 2 | Measurement, instrumentation, integrity, or report failure |
 | 3 | Coverage threshold failure |
 | 4 | Invalid CLI usage |
@@ -176,7 +195,7 @@ gomcdc test \
 - `_test.go` decisions enter AST metrics only with `--include-tests`;
   Statement and Function Coverage remain based on standard Go coverage.
 - Windows, assembly internals, cgo internals, compiler-IR obligations, path
-  coverage, and distributed test execution are outside v1.
+  coverage, and distributed test execution are outside v2.
 - The target module is built and tested with the current user's authority. The
   temporary workspace is not a sandbox for malicious target code.
 - `gomcdc` defines coverage semantics; it does not claim safety certification,
@@ -186,7 +205,7 @@ gomcdc test \
 
 - [Normative specification](docs/specification.ja.md)
 - [English reference specification](docs/specification.md)
-- [JSON report schema](schema/report-v1.1.schema.json)
+- [JSON report schema](schema/report-v2.0.schema.json)
 
 ## Development
 

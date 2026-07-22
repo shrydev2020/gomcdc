@@ -23,7 +23,9 @@ type Position struct {
 	Column int `json:"column"`
 }
 
-// SourceRange is a half-open physical source range.
+// SourceRange is a pair of source coordinates. Physical original-source
+// ranges are ordered and half-open; logical Go cover ranges may be lexically
+// decreasing when //line directives change the producer coordinate space.
 type SourceRange struct {
 	Start Position `json:"start"`
 	End   Position `json:"end"`
@@ -80,11 +82,22 @@ type FileInventory struct {
 // with the logical range/file emitted by Go coverage. ProfileAnchors are the
 // starts of original statements represented by this block.
 type InventoryBlock struct {
-	PhysicalRange  SourceRange `json:"physical_range"`
-	ProfileFile    string      `json:"profile_file"`
-	ProfileRange   SourceRange `json:"profile_range"`
-	ProfileAnchors []Position  `json:"profile_anchors"`
-	Statements     int         `json:"statements"`
+	PhysicalRange  SourceRange          `json:"physical_range"`
+	ProfileFile    string               `json:"profile_file"`
+	ProfileRange   SourceRange          `json:"profile_range"`
+	ProfileAnchors []Position           `json:"profile_anchors"`
+	StatementUnits []InventoryStatement `json:"statement_units,omitempty"`
+	Statements     int                  `json:"statements"`
+}
+
+// InventoryStatement identifies one original statement unit in both physical
+// source and Go cover's logical coordinate space. ProfileFile is recorded per
+// statement because //line directives can make one rewritten cover block span
+// original and generated logical files.
+type InventoryStatement struct {
+	PhysicalPosition Position `json:"physical_position"`
+	ProfileFile      string   `json:"profile_file"`
+	ProfilePosition  Position `json:"profile_position"`
 }
 
 // BlockMapping overrides the identity mapping for one exact profile block
@@ -180,6 +193,7 @@ const (
 	ExcludeGeneratedBlock      ExclusionReason = "generated_block"
 	ExcludeUnmappedFile        ExclusionReason = "unmapped_file"
 	ExcludeNoOriginalStatement ExclusionReason = "no_original_statement"
+	ExcludeReportScope         ExclusionReason = "report_scope"
 )
 
 // ExcludedBlock is profile data deliberately kept out of every denominator.

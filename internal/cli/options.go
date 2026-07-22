@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/shrydev2020/gomcdc/internal/config"
+	"github.com/shrydev2020/gomcdc/internal/mcdc"
 )
 
 type options struct {
@@ -35,6 +36,9 @@ type options struct {
 	failUnderCondition                 optionalFloat
 	failUnderMCDCUnique                optionalFloat
 	failUnderMCDCMasking               optionalFloat
+	maskingMaxEvaluationPairs          optionalUint64
+	maskingMaxSearchStates             optionalUint64
+	maskingMaxSolverBytes              optionalUint64
 	patterns                           []string
 	goTestArgs                         []string
 }
@@ -68,6 +72,27 @@ func (f *optionalFloat) Set(value string) error {
 	return nil
 }
 
+type optionalUint64 struct {
+	value uint64
+	set   bool
+}
+
+func (u *optionalUint64) String() string {
+	if !u.set {
+		return ""
+	}
+	return strconv.FormatUint(u.value, 10)
+}
+
+func (u *optionalUint64) Set(value string) error {
+	parsed, err := strconv.ParseUint(value, 10, 64)
+	if err != nil {
+		return err
+	}
+	u.value, u.set = parsed, true
+	return nil
+}
+
 func parseOptions(args []string, errOut io.Writer) (options, error) {
 	toolArgs, goTestArgs := splitGoTestArgs(args)
 	var opts options
@@ -93,6 +118,9 @@ func parseOptions(args []string, errOut io.Writer) (options, error) {
 	fs.Var(&opts.failUnderCondition, "fail-under-condition", "minimum condition coverage percentage")
 	fs.Var(&opts.failUnderMCDCUnique, "fail-under-mcdc-unique", "minimum Unique-Cause MC/DC percentage")
 	fs.Var(&opts.failUnderMCDCMasking, "fail-under-mcdc-masking", "minimum Masking MC/DC percentage")
+	fs.Var(&opts.maskingMaxEvaluationPairs, "mcdc-masking-max-evaluation-pairs", "maximum candidate evaluation pairs per Masking MC/DC condition obligation")
+	fs.Var(&opts.maskingMaxSearchStates, "mcdc-masking-max-search-states", "maximum newly expanded search states per Masking MC/DC condition obligation")
+	fs.Var(&opts.maskingMaxSolverBytes, "mcdc-masking-max-solver-bytes", "maximum primary solver backing-array bytes per Masking MC/DC condition obligation")
 	fs.Usage = func() { writeTestUsage(errOut, fs) }
 	if err := fs.Parse(toolArgs); err != nil {
 		return options{}, err
@@ -163,7 +191,31 @@ func validateOptions(opts options) error {
 			return fmt.Errorf("%s requires --coverage to include %s", threshold.name, threshold.metric)
 		}
 	}
+	maskingLimits := []struct {
+		name  string
+		value optionalUint64
+	}{
+		{"--mcdc-masking-max-evaluation-pairs", opts.maskingMaxEvaluationPairs},
+		{"--mcdc-masking-max-search-states", opts.maskingMaxSearchStates},
+		{"--mcdc-masking-max-solver-bytes", opts.maskingMaxSolverBytes},
+	}
+	for _, limit := range maskingLimits {
+		if limit.value.set && limit.value.value == 0 {
+			return fmt.Errorf("%s must be greater than zero", limit.name)
+		}
+		if limit.value.set && !opts.metrics.Enabled(config.MetricMCDCMasking) {
+			return fmt.Errorf("%s requires --coverage to include %s", limit.name, config.MetricMCDCMasking)
+		}
+	}
 	return nil
+}
+
+func (opts options) maskingAnalysisBudget() mcdc.AnalysisBudget {
+	return mcdc.AnalysisBudget{
+		MaxEvaluationPairs: opts.maskingMaxEvaluationPairs.value,
+		MaxSearchStates:    opts.maskingMaxSearchStates.value,
+		MaxSolverBytes:     opts.maskingMaxSolverBytes.value,
+	}
 }
 
 func validateThreshold(name string, value optionalFloat) error {

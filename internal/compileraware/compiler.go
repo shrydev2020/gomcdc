@@ -318,34 +318,33 @@ func PatchSwitchSource(source []byte) ([]byte, error) {
 // resolve to the fresh injected runtime package as well as the exact noinline
 // method, so similarly named user methods retain ordinary source semantics.
 func gomcdcSelectionProbe(ncase *ir.CaseClause) ir.Node {
-	if len(ncase.Body) == 0 {
-		return nil
-	}
-	probe := ncase.Body[0]
-	call, ok := probe.(*ir.CallExpr)
-	if !ok || call.Fun == nil {
-		return nil
-	}
-	callee := ir.StaticCalleeName(call.Fun)
-	if callee == nil || callee.Sym() == nil || callee.Sym().Pkg == nil ||
-		!strings.Contains(callee.Sym().Pkg.Path, "/internal/gomcdc_runtime_") {
-		return nil
-	}
-	name := callee.Sym().Name
-	switch {
-	case strings.HasSuffix(name, ".CompilerDirectClause"):
-		if len(call.Args) != 4 {
-			return nil
+	for index, probe := range ncase.Body {
+		call, ok := probe.(*ir.CallExpr)
+		if !ok || call.Fun == nil {
+			continue
 		}
-	case strings.HasSuffix(name, ".CompilerNoMatch"):
-		if len(call.Args) != 2 {
-			return nil
+		callee := ir.StaticCalleeName(call.Fun)
+		if callee == nil || callee.Sym() == nil || callee.Sym().Pkg == nil ||
+			!strings.Contains(callee.Sym().Pkg.Path, "/internal/gomcdc_runtime_") {
+			continue
 		}
-	default:
-		return nil
+		name := callee.Sym().Name
+		switch {
+		case strings.HasSuffix(name, ".CompilerDirectClause"):
+			if len(call.Args) != 4 {
+				continue
+			}
+		case strings.HasSuffix(name, ".CompilerNoMatch"):
+			if len(call.Args) != 2 {
+				continue
+			}
+		default:
+			continue
+		}
+		ncase.Body = append(ncase.Body[:index], ncase.Body[index+1:]...)
+		return probe
 	}
-	ncase.Body = ncase.Body[1:]
-	return probe
+	return nil
 }
 
 // gomcdcSelectionJump targets a trampoline that records dispatch before

@@ -12,13 +12,14 @@ import (
 	"github.com/shrydev2020/gomcdc/internal/c0"
 	"github.com/shrydev2020/gomcdc/internal/config"
 	cover "github.com/shrydev2020/gomcdc/internal/coverage"
+	"github.com/shrydev2020/gomcdc/internal/mcdc"
 	"github.com/shrydev2020/gomcdc/internal/report"
 )
 
 func TestSchemaVersionIsCurrent(t *testing.T) {
 	t.Parallel()
-	if report.SchemaVersion != "1.1" {
-		t.Fatalf("SchemaVersion = %q, want schema 1.1", report.SchemaVersion)
+	if report.SchemaVersion != "2.0" {
+		t.Fatalf("SchemaVersion = %q, want schema 2.0", report.SchemaVersion)
 	}
 }
 
@@ -177,8 +178,8 @@ func TestJSONSchemaUsesExactSpecificationKeys(t *testing.T) {
 	}
 	assertJSONKeys(t, "root", root, []string{
 		"schemaVersion", "toolVersion", "module", "run", "measurementMode", "measurements",
-		"capabilities", "backendCapabilities", "instrumentationCoverage",
-		"summary", "packages", "errors",
+		"producerOutcomes", "capabilities", "backendCapabilities", "instrumentationCoverage",
+		"maskingAnalysisLimits", "summary", "packages", "errors",
 	})
 	var run map[string]json.RawMessage
 	if err := json.Unmarshal(root["run"], &run); err != nil {
@@ -267,6 +268,76 @@ func TestMCDCAnalysisIncompleteIsSeparateFromUnknownSupport(t *testing.T) {
 	}
 }
 
+func TestMaskingAnalysisLimitsAreEffectiveAndReproducible(t *testing.T) {
+	t.Parallel()
+	decision := andDecision(10, "example.com/m/p", "p.go", "Allow")
+	input := report.Input{
+		ModulePath: "example.com/m",
+		Coverage:   config.CoverageSet{config.MetricMCDCMasking: true},
+		MaskingAnalysisBudget: mcdc.AnalysisBudget{
+			MaxEvaluationPairs: 17,
+			MaxSearchStates:    23,
+			MaxSolverBytes:     1,
+		},
+		Decisions: []cover.DecisionMetadata{decision},
+		Evaluations: []cover.DecisionEvaluation{
+			completedEvaluation(10, 1, false, cover.ConditionFalse, cover.ConditionNotEvaluated),
+			completedEvaluation(10, 2, true, cover.ConditionTrue, cover.ConditionTrue),
+		},
+	}
+
+	built := report.Build(input)
+	if built.MaskingAnalysisLimits == nil || *built.MaskingAnalysisLimits != (report.MaskingAnalysisLimits{
+		MaxEvaluationPairs: 17, MaxSearchStates: 23, MaxSolverBytes: 1,
+	}) {
+		t.Fatalf("effective Masking limits = %#v", built.MaskingAnalysisLimits)
+	}
+	if built.Summary.MCDCMasking.AnalysisIncomplete == 0 {
+		t.Fatalf("custom solver limit did not reach analysis-incomplete: %#v", built.Summary.MCDCMasking)
+	}
+
+	encoded, err := report.RenderJSON(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range [][]byte{
+		[]byte(`"maskingAnalysisLimits"`),
+		[]byte(`"maxEvaluationPairs": 17`),
+		[]byte(`"maxSearchStates": 23`),
+		[]byte(`"maxSolverBytes": 1`),
+	} {
+		if !bytes.Contains(encoded, required) {
+			t.Fatalf("JSON report omits effective limit %s:\n%s", required, encoded)
+		}
+	}
+	if text := report.RenderText(input); !strings.Contains(text, "evaluation-pairs=17 search-states=23 solver-bytes=1") {
+		t.Fatalf("text report omits effective Masking limits:\n%s", text)
+	}
+	var html bytes.Buffer
+	if err := report.WriteHTML(&html, input); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(html.String(), "17 evaluation pairs · 23 search states · 1 solver bytes") {
+		t.Fatalf("HTML report omits effective Masking limits:\n%s", html.String())
+	}
+}
+
+func TestMaskingAnalysisLimitsUseDefaultsAndStayAbsentWhenDisabled(t *testing.T) {
+	t.Parallel()
+	defaults := mcdc.DefaultMaskingAnalysisBudget()
+	enabled := report.Build(report.Input{Coverage: config.CoverageSet{config.MetricMCDCMasking: true}})
+	if enabled.MaskingAnalysisLimits == nil || *enabled.MaskingAnalysisLimits != (report.MaskingAnalysisLimits{
+		MaxEvaluationPairs: defaults.MaxEvaluationPairs,
+		MaxSearchStates:    defaults.MaxSearchStates,
+		MaxSolverBytes:     defaults.MaxSolverBytes,
+	}) {
+		t.Fatalf("default Masking limits = %#v", enabled.MaskingAnalysisLimits)
+	}
+	if disabled := report.Build(report.Input{}); disabled.MaskingAnalysisLimits != nil {
+		t.Fatalf("disabled Masking limits = %#v, want nil", disabled.MaskingAnalysisLimits)
+	}
+}
+
 func TestWriteHTMLReportsSourceMappingDiagnostics(t *testing.T) {
 	t.Parallel()
 	location := cover.SourceLocation{File: "p.go", Start: cover.Position{Line: 9, Column: 1}, End: cover.Position{Line: 9, Column: 2}}
@@ -331,7 +402,7 @@ func TestANDShortCircuitDistinguishesUniqueAndMasking(t *testing.T) {
 	}
 
 	text := report.RenderText(input)
-	if !strings.HasPrefix(text, "gomcdc unknown report schema 1.1\n") {
+	if !strings.HasPrefix(text, "gomcdc unknown report schema 2.0\n") {
 		t.Fatalf("text report does not distinguish tool and schema identities:\n%s", text)
 	}
 	for _, required := range []string{"Unique-Cause MC/DC", "Masking MC/DC", "witness=", "[false,not-evaluated] -> false", "[true,true] -> true", "completions=([false,true] [true,true])"} {
@@ -544,16 +615,18 @@ func TestProducerIntegrityFailureForcesSurvivingEvidenceToUnknown(t *testing.T) 
 
 	decision := andDecision(101, "example.com/m/p", "p.go", "Allow")
 	input := report.Input{
-		ModulePath:                  "example.com/m",
-		Coverage:                    config.AllCoverage(),
-		RunStatus:                   cover.RunPassed,
-		Complete:                    false,
-		Decisions:                   []cover.DecisionMetadata{decision},
-		Evaluations:                 []cover.DecisionEvaluation{completedEvaluation(101, 1, true, cover.ConditionTrue, cover.ConditionTrue)},
-		ASTEvidenceIntegrityUnknown: true,
-		C0EvidenceIntegrityUnknown:  true,
-		PackageStatuses:             map[string]string{"example.com/m/p": "passed"},
-		ASTPackageStatuses:          map[string]string{"example.com/m/p": "passed"},
+		ModulePath:  "example.com/m",
+		Coverage:    config.AllCoverage(),
+		RunStatus:   cover.RunPassed,
+		Complete:    false,
+		Decisions:   []cover.DecisionMetadata{decision},
+		Evaluations: []cover.DecisionEvaluation{completedEvaluation(101, 1, true, cover.ConditionTrue, cover.ConditionTrue)},
+		ProducerOutcomes: []report.ProducerOutcome{
+			{Producer: report.ProducerASTRuntime, Usability: report.ProducerUsabilityRejected},
+			{Producer: report.ProducerGoCover, Usability: report.ProducerUsabilityRejected},
+		},
+		PackageStatuses:    map[string]string{"example.com/m/p": "passed"},
+		ASTPackageStatuses: map[string]string{"example.com/m/p": "passed"},
 		C0: &c0.Report{Packages: []c0.PackageReport{{
 			Path: "example.com/m/p", Evidence: true,
 			Files: []c0.FileReport{{Path: "p.go", Evidence: true, Functions: []c0.FunctionReport{{
@@ -573,6 +646,45 @@ func TestProducerIntegrityFailureForcesSurvivingEvidenceToUnknown(t *testing.T) 
 	assertMetric(t, "corrupt AST masking", built.Summary.MCDCMasking, true, 0, 0, 0, 0, 2, 0, 0)
 	if built.Packages[0].Evidence {
 		t.Fatal("integrity-damaged package must not claim valid evidence")
+	}
+}
+
+func TestProducerUsabilityGatesBodyAndSelectionIndependently(t *testing.T) {
+	t.Parallel()
+
+	clause := cover.ClauseMetadata{
+		ID: 1, SwitchID: 2, Package: "example.com/m/p", Function: "Choose",
+		Kind: cover.ClauseExpressionSwitch, Role: cover.ClauseCase,
+		Expressions: []string{"1"}, Location: location("p.go", 4),
+	}
+	base := report.Input{
+		Coverage: config.AllCoverage(), Clauses: []cover.ClauseMetadata{clause},
+		ClauseObservations: []cover.ClauseObservation{
+			{ClauseID: 1, Event: cover.ClauseBodyExecution},
+			{ClauseID: 1, SwitchID: 2, Event: cover.ClauseDirectSelection, AlternativeKnown: true},
+		},
+		PackageStatuses:    map[string]string{"example.com/m/p": "passed"},
+		ASTPackageStatuses: map[string]string{"example.com/m/p": "passed"},
+	}
+
+	bodyRejected := base
+	bodyRejected.ProducerOutcomes = []report.ProducerOutcome{
+		{Producer: report.ProducerASTRuntime, Usability: report.ProducerUsabilityRejected},
+		{Producer: report.ProducerCompilerSelection, Usability: report.ProducerUsabilityAccepted},
+	}
+	got := report.Build(bodyRejected).Packages[0].Files[0].Functions[0].Clauses[0]
+	if got.BodyCoverage.Unknown != 1 || got.SelectionCoverage.Covered != 1 || got.SelectionCoverage.Total != 1 {
+		t.Fatalf("body rejection leaked into compiler evidence: %#v", got)
+	}
+
+	selectionRejected := base
+	selectionRejected.ProducerOutcomes = []report.ProducerOutcome{
+		{Producer: report.ProducerASTRuntime, Usability: report.ProducerUsabilityAccepted},
+		{Producer: report.ProducerCompilerSelection, Usability: report.ProducerUsabilityRejected},
+	}
+	got = report.Build(selectionRejected).Packages[0].Files[0].Functions[0].Clauses[0]
+	if got.BodyCoverage.Covered != 1 || got.BodyCoverage.Total != 1 || got.SelectionCoverage.Unknown != 1 {
+		t.Fatalf("compiler rejection leaked into AST body evidence: %#v", got)
 	}
 }
 

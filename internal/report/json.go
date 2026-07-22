@@ -6,7 +6,7 @@ import (
 	"io"
 )
 
-// RenderJSON builds input and returns indented schema-v1 JSON ending in a
+// RenderJSON builds input and returns indented current-schema JSON ending in a
 // newline.
 func RenderJSON(input Input) ([]byte, error) {
 	var buffer bytes.Buffer
@@ -25,7 +25,7 @@ func RenderJSONReport(report Report) ([]byte, error) {
 	return buffer.Bytes(), nil
 }
 
-// WriteJSON builds input and writes deterministic, indented schema-v1 JSON.
+// WriteJSON builds input and writes deterministic, indented current-schema JSON.
 func WriteJSON(writer io.Writer, input Input) error {
 	return WriteJSONReport(writer, Build(input))
 }

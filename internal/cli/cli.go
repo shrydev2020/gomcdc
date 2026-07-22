@@ -114,8 +114,9 @@ func runAt(ctx context.Context, workingDir string, args []string, stdout, stderr
 }
 
 type sourceInstrumentation struct {
-	loaded   loader.File
-	analysis analyzer.File
+	loaded    loader.File
+	analysis  analyzer.File
+	inventory *c0.FileInventory
 }
 
 func runCoverage(ctx context.Context, workingDir string, opts options, stdout, stderr io.Writer) (exitCode int) {
@@ -163,9 +164,13 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		fmt.Fprintf(stderr, "gomcdc: package load failed: %v\n", err)
 		return ExitMeasurementFailed
 	}
+	needsC0 := opts.metrics.Enabled(config.MetricStatement) || opts.metrics.Enabled(config.MetricFunction)
+	needsASTRun := needsASTRuntime(opts.metrics)
+	needsCompilerSelection := opts.metrics.Enabled(config.MetricSwitchClauseSelection) || opts.metrics.Enabled(config.MetricTypeSwitchClauseSelection)
 
 	var sources []sourceInstrumentation
 	var generatedFiles []c0map.GeneratedFile
+	var ignoredCoverageFiles []string
 	var reportErrors []report.ReportError
 	analysisIncomplete := false
 	analysisUnknown := 0
@@ -180,6 +185,9 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 			return ExitMeasurementFailed
 		}
 		if excludes.Match(relative) {
+			if needsC0 && !strings.HasSuffix(relative, "_test.go") {
+				ignoredCoverageFiles = append(ignoredCoverageFiles, filepath.ToSlash(relative))
+			}
 			continue
 		}
 		analysis, analysisErr := analyzer.AnalyzeFile(analyzer.FileOptions{
@@ -209,7 +217,16 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 			generatedFiles = append(generatedFiles, c0map.GeneratedFile{Path: filepath.ToSlash(relative)})
 			continue
 		}
-		sources = append(sources, sourceInstrumentation{loaded: file, analysis: analysis})
+		var inventory *c0.FileInventory
+		if needsC0 && !strings.HasSuffix(analysis.RelativePath, "_test.go") {
+			builtInventory, inventoryErr := c0.BuildInventory(analysis.RelativePath, analysis.Source)
+			if inventoryErr != nil {
+				fmt.Fprintf(stderr, "gomcdc: C0 inventory failed %q: %v\n", relative, inventoryErr)
+				return ExitMeasurementFailed
+			}
+			inventory = &builtInventory
+		}
+		sources = append(sources, sourceInstrumentation{loaded: file, analysis: analysis, inventory: inventory})
 	}
 	analyses := make([]analyzer.File, 0, len(sources))
 	for _, source := range sources {
@@ -224,9 +241,6 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		return ExitInterrupted
 	}
 
-	needsC0 := opts.metrics.Enabled(config.MetricStatement) || opts.metrics.Enabled(config.MetricFunction)
-	needsASTRun := needsASTRuntime(opts.metrics)
-	needsCompilerSelection := opts.metrics.Enabled(config.MetricSwitchClauseSelection) || opts.metrics.Enabled(config.MetricTypeSwitchClauseSelection)
 	var decisions []cover.DecisionMetadata
 	var clauses []cover.ClauseMetadata
 	var noMatches []cover.NoMatchMetadata
@@ -241,15 +255,16 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	}
 
 	jsonMode := goTestJSONEnabled(opts.goTestArgs)
-	measurement, workspaces, measurementErr := measure(measurementRequest{
+	measurement, measurementWork, measurementErr := measure(measurementRequest{
 		context: ctx, timeout: opts.timeout, goTestArgs: opts.goTestArgs, json: jsonMode,
 		workDirParent: opts.workDirParent, keepWorkDir: opts.keepWorkDir,
-		loaded: loaded, sources: sources, generated: generatedFiles, decisions: decisions, clauses: clauses, noMatches: noMatches,
+		loaded: loaded, sources: sources, generated: generatedFiles, ignoredCoverageFiles: ignoredCoverageFiles,
+		decisions: decisions, clauses: clauses, noMatches: noMatches,
 		needsC0: needsC0, needsAST: needsASTRun, compilerClauseSelection: needsCompilerSelection,
 	}, stderr)
-	if workspaces != nil {
+	if measurementWork != nil {
 		defer func() {
-			if cleanupErr := workspaces.cleanup(stderr); cleanupErr != nil {
+			if cleanupErr := measurementWork.cleanup(stderr); cleanupErr != nil {
 				exitCode = ExitMeasurementFailed
 			}
 		}()
@@ -266,16 +281,17 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	input := assembleReportInput(reportAssembly{
 		toolVersion: buildinfo.Version(),
 		loaded:      loaded, sources: sources, coverage: opts.metrics, decisions: decisions,
+		maskingAnalysisBudget: opts.maskingAnalysisBudget(),
 		clauses: clauses, noMatches: noMatches,
-		evidence: measurement.evidence, c0: measurement.c0, standardResult: measurement.standardResult, astResult: measurement.astResult,
+		evidence: measurement.evidence, c0: measurement.c0, testResult: measurement.testResult, measurementName: measurement.measurementName,
 		standardCoverRequested: needsC0, astRequested: needsASTRun,
-		astEvidenceUnknown: measurement.astEvidenceIntegrityUnknown, c0EvidenceUnknown: measurement.c0EvidenceIntegrityUnknown,
+		producerOutcomes:       measurement.producerOutcomes,
 		instrumentationUnknown: analysisUnknown, integrityFailure: measurement.integrityFailure, analysisIncomplete: analysisIncomplete,
 		interrupted: measurement.interrupted,
 		errors:      reportErrors, measurementDiagnostics: measurement.diagnostics,
 	})
 	built := report.Build(input)
-	strictFailure := opts.strict && (built.Instrumentation.HasGaps() || summaryAnalysisIncomplete(built.Summary) > 0)
+	strictFailure := opts.strict && (built.Instrumentation.HasGaps() || summaryUnknown(built.Summary) > 0 || summaryAnalysisIncomplete(built.Summary) > 0)
 	thresholds := thresholdFailures(opts, built.Summary)
 	input.Results.Strict = requestedResult(opts.strict, !strictFailure)
 	input.Results.Threshold = requestedResult(thresholdRequested(opts), len(thresholds) == 0)
@@ -307,12 +323,13 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		coverage := built.Instrumentation.Total
 		fmt.Fprintf(
 			stderr,
-			"gomcdc: strict coverage failed: discovered=%d supported=%d instrumented=%d unsupported=%d unknown=%d analysis-incomplete=%d\n",
+			"gomcdc: strict coverage failed: discovered=%d supported=%d instrumented=%d unsupported=%d unknown=%d evidence-unknown=%d analysis-incomplete=%d\n",
 			coverage.Discovered,
 			coverage.Supported,
 			coverage.Instrumented,
 			coverage.Unsupported,
 			coverage.Unknown,
+			summaryUnknown(built.Summary),
 			summaryAnalysisIncomplete(built.Summary),
 		)
 		return classifyExit(false, true, false, false)
@@ -320,13 +337,8 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	if analysisIncomplete {
 		return classifyExit(false, true, false, false)
 	}
-	if testRunsFailed(measurement.standardResult, measurement.astResult) {
-		if measurement.standardResult != nil && measurement.standardResult.Err != nil {
-			fmt.Fprintf(stderr, "gomcdc: standard-cover measurement: %v\n", measurement.standardResult.Err)
-		}
-		if measurement.astResult != nil && measurement.astResult.Err != nil {
-			fmt.Fprintf(stderr, "gomcdc: ast measurement: %v\n", measurement.astResult.Err)
-		}
+	if testRunFailed(measurement.testResult) {
+		fmt.Fprintf(stderr, "gomcdc: %s measurement: %v\n", measurement.measurementName, measurement.testResult.Err)
 		return classifyExit(false, false, true, false)
 	}
 	if len(thresholds) > 0 {
@@ -360,6 +372,14 @@ func thresholdRequested(opts options) bool {
 }
 
 func summaryAnalysisIncomplete(summary report.Summary) int {
+	return sumEnabledSummaryField(summary, func(metric report.MetricSummary) int { return metric.AnalysisIncomplete })
+}
+
+func summaryUnknown(summary report.Summary) int {
+	return sumEnabledSummaryField(summary, func(metric report.MetricSummary) int { return metric.Unknown })
+}
+
+func sumEnabledSummaryField(summary report.Summary, value func(report.MetricSummary) int) int {
 	metrics := []report.MetricSummary{
 		summary.Statement, summary.Function, summary.Decision,
 		summary.SwitchClauseBody, summary.TypeSwitchClauseBody, summary.SelectClauseBody,
@@ -369,7 +389,7 @@ func summaryAnalysisIncomplete(summary report.Summary) int {
 	total := 0
 	for _, metric := range metrics {
 		if metric.Enabled {
-			total += metric.AnalysisIncomplete
+			total += value(metric)
 		}
 	}
 	return total
@@ -395,7 +415,14 @@ type packageInstrumentation struct {
 	files       []instrument.FileMapping
 }
 
-func instrumentPackages(ctx context.Context, moduleDir string, sources []sourceInstrumentation, runtimeImportPath string, compilerClauseSelection bool) ([]instrument.PackageResult, error) {
+func instrumentPackages(
+	ctx context.Context,
+	moduleDir string,
+	sources []sourceInstrumentation,
+	runtimeImportPath string,
+	compilerClauseSelection bool,
+	planCoverageCorrespondence bool,
+) ([]instrument.PackageResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -423,7 +450,10 @@ func instrumentPackages(ctx context.Context, moduleDir string, sources []sourceI
 		if !strings.HasSuffix(item.analysis.RelativePath, "_test.go") {
 			group.testOnly = false
 		}
-		group.files = append(group.files, instrument.FileMapping{CopyPath: copyPath, Analysis: item.analysis})
+		group.files = append(group.files, instrument.FileMapping{
+			CopyPath: copyPath, Analysis: item.analysis, OriginalInventory: item.inventory,
+			ExcludeFromCoveragePlan: item.inventory == nil,
+		})
 	}
 
 	keys := make([]string, 0, len(groups))
@@ -442,15 +472,16 @@ func instrumentPackages(ctx context.Context, moduleDir string, sources []sourceI
 			return nil, err
 		}
 		result, err := instrument.InstrumentPackage(instrument.PackageOptions{
-			Context:                 ctx,
-			Directory:               group.directory,
-			PackageName:             group.packageName,
-			PackagePath:             group.packagePath,
-			RuntimeImportPath:       runtimeImportPath,
-			CompilerClauseSelection: compilerClauseSelection,
-			TestOnly:                group.testOnly,
-			ActiveFiles:             activeFiles,
-			Files:                   group.files,
+			Context:                    ctx,
+			Directory:                  group.directory,
+			PackageName:                group.packageName,
+			PackagePath:                group.packagePath,
+			RuntimeImportPath:          runtimeImportPath,
+			CompilerClauseSelection:    compilerClauseSelection,
+			PlanCoverageCorrespondence: planCoverageCorrespondence,
+			TestOnly:                   group.testOnly,
+			ActiveFiles:                activeFiles,
+			Files:                      group.files,
 		})
 		if err != nil {
 			return nil, err
@@ -504,88 +535,27 @@ func runGoTest(ctx context.Context, timeout time.Duration, options gotest.Option
 	return gotest.Run(testContext, options)
 }
 
-func combineTestResults(results ...*gotest.Result) (cover.RunStatus, cover.RunFailureKind) {
-	status := cover.RunPassed
-	kind := cover.RunFailureNone
-	for _, result := range results {
-		if result == nil {
-			continue
-		}
-		if result.Status == cover.RunTimeout {
-			status = cover.RunTimeout
-		} else if result.Status == cover.RunFailed && status != cover.RunTimeout {
-			status = cover.RunFailed
-		}
-		if result.FailureKind == cover.RunFailureNone {
-			continue
-		}
-		if kind == cover.RunFailureNone {
-			kind = result.FailureKind
-		} else if kind != result.FailureKind {
-			kind = cover.RunFailureMixed
-		}
+func measurementRuns(name string, result *gotest.Result) []report.MeasurementRun {
+	if result == nil {
+		return nil
 	}
-	if status == cover.RunTimeout {
-		kind = cover.RunFailureTimeout
+	packages := make(map[string]string, len(result.Packages))
+	for packagePath, status := range result.Packages {
+		packages[packagePath] = string(status)
 	}
-	return status, kind
+	return []report.MeasurementRun{{
+		Name: name,
+		Run: report.TestRun{
+			Status:      result.Status,
+			FailureKind: result.FailureKind,
+			Complete:    result.Status == cover.RunPassed,
+		},
+		Packages: packages,
+	}}
 }
 
-func measurementRuns(standard, ast *gotest.Result) []report.MeasurementRun {
-	measurements := make([]report.MeasurementRun, 0, 2)
-	appendResult := func(name string, result *gotest.Result) {
-		if result == nil {
-			return
-		}
-		packages := make(map[string]string, len(result.Packages))
-		for packagePath, status := range result.Packages {
-			packages[packagePath] = string(status)
-		}
-		measurements = append(measurements, report.MeasurementRun{
-			Name: name,
-			Run: report.TestRun{
-				Status:      result.Status,
-				FailureKind: result.FailureKind,
-				Complete:    result.Status == cover.RunPassed,
-			},
-			Packages: packages,
-		})
-	}
-	appendResult("standard-cover", standard)
-	appendResult("ast", ast)
-	return measurements
-}
-
-func mergePackageStatus(current, next string) string {
-	rank := func(status string) int {
-		switch status {
-		case string(gotest.PackageBuildFailed):
-			return 5
-		case string(gotest.PackageFailed):
-			return 4
-		case string(gotest.PackageStarted):
-			return 3
-		case string(gotest.PackagePassed):
-			return 2
-		case string(gotest.PackageSkipped):
-			return 1
-		default:
-			return 0
-		}
-	}
-	if rank(next) > rank(current) {
-		return next
-	}
-	return current
-}
-
-func testRunsFailed(results ...*gotest.Result) bool {
-	for _, result := range results {
-		if result != nil && result.Err != nil {
-			return true
-		}
-	}
-	return false
+func testRunFailed(result *gotest.Result) bool {
+	return result != nil && result.Err != nil
 }
 
 var measurementFlags = map[string]struct{}{
@@ -683,11 +653,11 @@ func buildC0Report(
 	return &analyzed, nil
 }
 
-// verifiedRuntimeEvidence is the only runtime evidence allowed to reach report
-// construction. Transport provenance has been checked against the requested
+// acceptedRuntimeEvidence is the only runtime evidence allowed to reach report
+// construction. Transport provenance has been accepted against the requested
 // run and source inventory, while ClauseObservations are the provenance-free,
 // idempotent domain projection used for coverage aggregation.
-type verifiedRuntimeEvidence struct {
+type acceptedRuntimeEvidence struct {
 	Evaluations           []cover.DecisionEvaluation
 	NotEvaluatedDecisions []cover.DecisionNotEvaluatedObservation
 	ClauseObservations    []cover.ClauseObservation
@@ -695,22 +665,88 @@ type verifiedRuntimeEvidence struct {
 	Files                 []runtimecov.ProcessFile
 }
 
-func verifyRuntimeEvidence(
+// runtimeAcceptanceIssues preserves producer ownership for rejected runtime
+// records. Shared transport failures invalidate both runtime producers, while
+// AST and compiler mapping failures invalidate only the projection that owns
+// the rejected record.
+type runtimeAcceptanceIssues struct {
+	shared   []error
+	ast      []error
+	compiler []error
+}
+
+func (issues *runtimeAcceptanceIssues) addShared(err error) {
+	if err != nil {
+		issues.shared = append(issues.shared, err)
+	}
+}
+
+func (issues *runtimeAcceptanceIssues) addAST(err error) {
+	if err != nil {
+		issues.ast = append(issues.ast, err)
+	}
+}
+
+func (issues *runtimeAcceptanceIssues) addCompiler(err error) {
+	if err != nil {
+		issues.compiler = append(issues.compiler, err)
+	}
+}
+
+func (issues runtimeAcceptanceIssues) err() error {
+	return errors.Join(errors.Join(issues.shared...), errors.Join(issues.ast...), errors.Join(issues.compiler...))
+}
+
+func (issues runtimeAcceptanceIssues) astErr() error {
+	return errors.Join(errors.Join(issues.shared...), errors.Join(issues.ast...))
+}
+
+func (issues runtimeAcceptanceIssues) compilerErr() error {
+	return errors.Join(errors.Join(issues.shared...), errors.Join(issues.compiler...))
+}
+
+func (issues *runtimeAcceptanceIssues) addClause(event cover.ClauseEventKind, err error) {
+	switch event {
+	case cover.ClauseBodyExecution:
+		issues.addAST(err)
+	case cover.ClauseDirectSelection, cover.ClauseNoMatchSelection:
+		issues.addCompiler(err)
+	default:
+		issues.addShared(err)
+	}
+}
+
+func acceptRuntimeEvidence(
 	ctx context.Context,
 	decisions []cover.DecisionMetadata,
 	clauses []cover.ClauseMetadata,
 	recorded runtimecov.RecordedEvidence,
 	runID string,
 	noMatches []cover.NoMatchMetadata,
-) (verifiedRuntimeEvidence, error) {
+) (acceptedRuntimeEvidence, error) {
+	accepted, issues := acceptRuntimeEvidenceByProducer(ctx, decisions, clauses, recorded, runID, noMatches)
+	return accepted, issues.err()
+}
+
+func acceptRuntimeEvidenceByProducer(
+	ctx context.Context,
+	decisions []cover.DecisionMetadata,
+	clauses []cover.ClauseMetadata,
+	recorded runtimecov.RecordedEvidence,
+	runID string,
+	noMatches []cover.NoMatchMetadata,
+) (acceptedRuntimeEvidence, runtimeAcceptanceIssues) {
+	var issues runtimeAcceptanceIssues
 	if err := ctx.Err(); err != nil {
-		return verifiedRuntimeEvidence{}, err
+		issues.addShared(err)
+		return acceptedRuntimeEvidence{}, issues
 	}
 	knownDecisions := make(map[cover.DecisionID]cover.DecisionMetadata, len(decisions))
 	knownPackages := make(map[string]struct{})
 	for _, decision := range decisions {
 		if err := ctx.Err(); err != nil {
-			return verifiedRuntimeEvidence{}, err
+			issues.addShared(err)
+			return acceptedRuntimeEvidence{}, issues
 		}
 		knownDecisions[decision.ID] = decision
 		knownPackages[decision.Package] = struct{}{}
@@ -718,7 +754,8 @@ func verifyRuntimeEvidence(
 	knownClauses := make(map[cover.ClauseID]cover.ClauseMetadata, len(clauses))
 	for _, clause := range clauses {
 		if err := ctx.Err(); err != nil {
-			return verifiedRuntimeEvidence{}, err
+			issues.addShared(err)
+			return acceptedRuntimeEvidence{}, issues
 		}
 		knownClauses[clause.ID] = clause
 		knownPackages[clause.Package] = struct{}{}
@@ -726,30 +763,32 @@ func verifyRuntimeEvidence(
 	knownNoMatches := make(map[cover.SwitchID]cover.NoMatchMetadata)
 	for _, noMatch := range noMatches {
 		if err := ctx.Err(); err != nil {
-			return verifiedRuntimeEvidence{}, err
+			issues.addShared(err)
+			return acceptedRuntimeEvidence{}, issues
 		}
 		knownNoMatches[noMatch.SwitchID] = noMatch
 		knownPackages[noMatch.Package] = struct{}{}
 	}
 	switchDecisions, orderErr := conditionlessSwitchDecisionOrder(ctx, clauses)
 	if orderErr != nil {
-		return verifiedRuntimeEvidence{}, orderErr
+		issues.addShared(orderErr)
+		return acceptedRuntimeEvidence{}, issues
 	}
-	verified := verifiedRuntimeEvidence{
+	accepted := acceptedRuntimeEvidence{
 		Diagnostics: append([]runtimecov.Diagnostic(nil), recorded.Diagnostics...),
 		Files:       append([]runtimecov.ProcessFile(nil), recorded.Files...),
 	}
-	var validationErrors []error
 	for _, file := range recorded.Files {
 		if err := ctx.Err(); err != nil {
-			return verified, errors.Join(append(validationErrors, err)...)
+			issues.addShared(err)
+			return accepted, issues
 		}
 		if file.RunID == "" && file.PackagePath == "" && file.ProcessID == 0 {
 			continue
 		}
 		_, knownPackage := knownPackages[file.PackagePath]
 		if file.RunID != runID || !knownPackage || file.ProcessID <= 0 {
-			validationErrors = append(validationErrors, fmt.Errorf(
+			issues.addShared(fmt.Errorf(
 				"process event file %q has invalid provenance run=%q package=%q process=%d",
 				filepath.Base(file.Path), file.RunID, file.PackagePath, file.ProcessID,
 			))
@@ -765,41 +804,42 @@ func verifyRuntimeEvidence(
 	candidateSkips := make(map[skipCauseKey][]cover.DecisionNotEvaluatedObservation)
 	for _, evaluation := range recorded.Evaluations {
 		if err := ctx.Err(); err != nil {
-			return verified, errors.Join(append(validationErrors, err)...)
+			issues.addShared(err)
+			return accepted, issues
 		}
 		metadata, exists := knownDecisions[evaluation.DecisionID]
 		if !exists {
-			validationErrors = append(validationErrors, fmt.Errorf("event contains unknown decision ID 0x%016x", uint64(evaluation.DecisionID)))
+			issues.addAST(fmt.Errorf("event contains unknown decision ID 0x%016x", uint64(evaluation.DecisionID)))
 			continue
 		}
 		if evaluation.EvaluationID == 0 {
-			validationErrors = append(validationErrors, fmt.Errorf("decision 0x%016x has reserved evaluation ID zero", uint64(evaluation.DecisionID)))
+			issues.addAST(fmt.Errorf("decision 0x%016x has reserved evaluation ID zero", uint64(evaluation.DecisionID)))
 			continue
 		}
 		if evaluation.ProcessID <= 0 {
-			validationErrors = append(validationErrors, fmt.Errorf("decision 0x%016x has invalid process provenance %d", uint64(evaluation.DecisionID), evaluation.ProcessID))
+			issues.addAST(fmt.Errorf("decision 0x%016x has invalid process provenance %d", uint64(evaluation.DecisionID), evaluation.ProcessID))
 			continue
 		}
 		if evaluation.RunID != runID {
-			validationErrors = append(validationErrors, fmt.Errorf("decision 0x%016x belongs to unexpected run %q", uint64(evaluation.DecisionID), evaluation.RunID))
+			issues.addAST(fmt.Errorf("decision 0x%016x belongs to unexpected run %q", uint64(evaluation.DecisionID), evaluation.RunID))
 			continue
 		}
 		if evaluation.PackagePath != metadata.Package {
-			validationErrors = append(validationErrors, fmt.Errorf(
+			issues.addAST(fmt.Errorf(
 				"decision 0x%016x belongs to package %q, want %q",
 				uint64(evaluation.DecisionID), evaluation.PackagePath, metadata.Package,
 			))
 			continue
 		}
 		if len(evaluation.Conditions) != len(metadata.Conditions) {
-			validationErrors = append(validationErrors, fmt.Errorf(
+			issues.addAST(fmt.Errorf(
 				"decision 0x%016x has %d condition states, want %d",
 				uint64(evaluation.DecisionID), len(evaluation.Conditions), len(metadata.Conditions),
 			))
 			continue
 		}
 		if semanticErr := mcdc.ValidateCompletedEvaluation(metadata, evaluation); semanticErr != nil {
-			validationErrors = append(validationErrors, fmt.Errorf(
+			issues.addAST(fmt.Errorf(
 				"decision 0x%016x contains impossible completed evidence: %w",
 				uint64(evaluation.DecisionID), semanticErr,
 			))
@@ -810,7 +850,8 @@ func verifyRuntimeEvidence(
 	}
 	for _, observation := range recorded.NotEvaluatedDecisions {
 		if err := ctx.Err(); err != nil {
-			return verified, errors.Join(append(validationErrors, err)...)
+			issues.addShared(err)
+			return accepted, issues
 		}
 		target, targetExists := knownDecisions[observation.DecisionID]
 		cause, causeExists := knownDecisions[observation.CauseDecisionID]
@@ -823,25 +864,25 @@ func verifyRuntimeEvidence(
 		causeEvaluation, evidenceExists := validEvaluations[identity]
 		switch {
 		case !targetExists:
-			validationErrors = append(validationErrors, fmt.Errorf("event contains unknown skipped decision ID 0x%016x", uint64(observation.DecisionID)))
+			issues.addAST(fmt.Errorf("event contains unknown skipped decision ID 0x%016x", uint64(observation.DecisionID)))
 			continue
 		case !causeExists:
-			validationErrors = append(validationErrors, fmt.Errorf("event contains unknown skip-cause decision ID 0x%016x", uint64(observation.CauseDecisionID)))
+			issues.addAST(fmt.Errorf("event contains unknown skip-cause decision ID 0x%016x", uint64(observation.CauseDecisionID)))
 			continue
 		case observation.RunID != runID || observation.PackagePath != target.Package || cause.Package != target.Package || observation.ProcessID <= 0:
-			validationErrors = append(validationErrors, fmt.Errorf("skipped decision 0x%016x has inconsistent run or package provenance", uint64(observation.DecisionID)))
+			issues.addAST(fmt.Errorf("skipped decision 0x%016x has inconsistent run or package provenance", uint64(observation.DecisionID)))
 			continue
 		case target.Kind != cover.DecisionSwitchCase || cause.Kind != cover.DecisionSwitchCase:
-			validationErrors = append(validationErrors, fmt.Errorf("skipped decision 0x%016x is not a conditionless-switch decision", uint64(observation.DecisionID)))
+			issues.addAST(fmt.Errorf("skipped decision 0x%016x is not a conditionless-switch decision", uint64(observation.DecisionID)))
 			continue
 		case !evidenceExists || causeEvaluation.DecisionID != observation.CauseDecisionID || causeEvaluation.Status != cover.EvaluationCompleted || !causeEvaluation.Result:
-			validationErrors = append(validationErrors, fmt.Errorf("skipped decision 0x%016x has no completed true cause evaluation", uint64(observation.DecisionID)))
+			issues.addAST(fmt.Errorf("skipped decision 0x%016x has no completed true cause evaluation", uint64(observation.DecisionID)))
 			continue
 		}
 		causeOrder, causeOrdered := switchDecisions[observation.CauseDecisionID]
 		targetOrder, targetOrdered := switchDecisions[observation.DecisionID]
 		if !causeOrdered || !targetOrdered || causeOrder.groupID != targetOrder.groupID || targetOrder.position <= causeOrder.position {
-			validationErrors = append(validationErrors, fmt.Errorf("skipped decision 0x%016x is not later in the same conditionless switch", uint64(observation.DecisionID)))
+			issues.addAST(fmt.Errorf("skipped decision 0x%016x is not later in the same conditionless switch", uint64(observation.DecisionID)))
 			continue
 		}
 		key := skipCauseKey{Identity: identity, DecisionID: observation.CauseDecisionID}
@@ -853,7 +894,8 @@ func verifyRuntimeEvidence(
 	}
 	for _, evaluation := range validEvaluationCandidates {
 		if err := ctx.Err(); err != nil {
-			return verified, errors.Join(append(validationErrors, err)...)
+			issues.addShared(err)
+			return accepted, issues
 		}
 		identity := evaluation.Identity()
 		order, exists := switchDecisions[evaluation.DecisionID]
@@ -863,11 +905,11 @@ func verifyRuntimeEvidence(
 		observed := observedSkips[skipCauseKey{Identity: identity, DecisionID: evaluation.DecisionID}]
 		key := skipCauseKey{Identity: identity, DecisionID: evaluation.DecisionID}
 		if len(candidateSkips[key]) != len(observed) {
-			validationErrors = append(validationErrors, fmt.Errorf("conditionless-switch decision 0x%016x has duplicate skipped-decision evidence", uint64(evaluation.DecisionID)))
+			issues.addAST(fmt.Errorf("conditionless-switch decision 0x%016x has duplicate skipped-decision evidence", uint64(evaluation.DecisionID)))
 			continue
 		}
 		if len(observed) != len(order.suffix) {
-			validationErrors = append(validationErrors, fmt.Errorf(
+			issues.addAST(fmt.Errorf(
 				"conditionless-switch decision 0x%016x skipped %d decisions, want complete suffix of %d",
 				uint64(evaluation.DecisionID), len(observed), len(order.suffix),
 			))
@@ -876,29 +918,32 @@ func verifyRuntimeEvidence(
 		complete := true
 		for _, expected := range order.suffix {
 			if err := ctx.Err(); err != nil {
-				return verified, errors.Join(append(validationErrors, err)...)
+				issues.addShared(err)
+				return accepted, issues
 			}
 			if _, found := observed[expected]; !found {
 				complete = false
-				validationErrors = append(validationErrors, fmt.Errorf(
+				issues.addAST(fmt.Errorf(
 					"conditionless-switch decision 0x%016x omitted skipped decision 0x%016x",
 					uint64(evaluation.DecisionID), uint64(expected),
 				))
 			}
 		}
 		if complete {
-			verified.NotEvaluatedDecisions = append(verified.NotEvaluatedDecisions, candidateSkips[key]...)
+			accepted.NotEvaluatedDecisions = append(accepted.NotEvaluatedDecisions, candidateSkips[key]...)
 		}
 	}
 	var deduplicateErr error
-	verified.Evaluations, deduplicateErr = deduplicateVerifiedEvaluations(ctx, validEvaluationCandidates)
+	accepted.Evaluations, deduplicateErr = deduplicateAcceptedEvaluations(ctx, validEvaluationCandidates)
 	if deduplicateErr != nil {
-		return verified, errors.Join(append(validationErrors, deduplicateErr)...)
+		issues.addAST(deduplicateErr)
+		return accepted, issues
 	}
 	verifiedClauses := make(map[cover.ClauseObservation]struct{})
 	for _, event := range recorded.ClauseEvents {
 		if err := ctx.Err(); err != nil {
-			return verified, errors.Join(append(validationErrors, err)...)
+			issues.addShared(err)
+			return accepted, issues
 		}
 		observation := cover.ClauseObservation{
 			SwitchID:         event.SwitchID,
@@ -908,7 +953,7 @@ func verifyRuntimeEvidence(
 			AlternativeKnown: event.AlternativeKnown,
 		}
 		if event.RunID != runID || event.PackagePath == "" || event.ProcessID <= 0 {
-			validationErrors = append(validationErrors, fmt.Errorf(
+			issues.addClause(observation.Event, fmt.Errorf(
 				"clause event 0x%016x has invalid provenance run=%q package=%q process=%d",
 				uint64(observation.ClauseID), event.RunID, event.PackagePath, event.ProcessID,
 			))
@@ -917,11 +962,11 @@ func verifyRuntimeEvidence(
 		if observation.Event == cover.ClauseNoMatchSelection {
 			metadata, exists := knownNoMatches[observation.SwitchID]
 			if !exists || observation.AlternativeKnown {
-				validationErrors = append(validationErrors, fmt.Errorf("event contains unknown no-match switch ID 0x%016x", uint64(observation.SwitchID)))
+				issues.addCompiler(fmt.Errorf("event contains unknown no-match switch ID 0x%016x", uint64(observation.SwitchID)))
 				continue
 			}
 			if event.PackagePath != metadata.Package {
-				validationErrors = append(validationErrors, fmt.Errorf(
+				issues.addCompiler(fmt.Errorf(
 					"no-match switch 0x%016x belongs to package %q, want %q",
 					uint64(observation.SwitchID), event.PackagePath, metadata.Package,
 				))
@@ -929,39 +974,39 @@ func verifyRuntimeEvidence(
 			}
 			if _, duplicate := verifiedClauses[observation]; !duplicate {
 				verifiedClauses[observation] = struct{}{}
-				verified.ClauseObservations = append(verified.ClauseObservations, observation)
+				accepted.ClauseObservations = append(accepted.ClauseObservations, observation)
 			}
 			continue
 		}
 		metadata, exists := knownClauses[observation.ClauseID]
 		if !exists {
-			validationErrors = append(validationErrors, fmt.Errorf("event contains unknown clause ID 0x%016x", uint64(observation.ClauseID)))
+			issues.addClause(observation.Event, fmt.Errorf("event contains unknown clause ID 0x%016x", uint64(observation.ClauseID)))
 			continue
 		}
 		if event.PackagePath != metadata.Package {
-			validationErrors = append(validationErrors, fmt.Errorf(
+			issues.addClause(observation.Event, fmt.Errorf(
 				"clause 0x%016x belongs to package %q, want %q",
 				uint64(observation.ClauseID), event.PackagePath, metadata.Package,
 			))
 			continue
 		}
 		if observation.SwitchID != 0 && observation.SwitchID != metadata.SwitchID {
-			validationErrors = append(validationErrors, fmt.Errorf("clause 0x%016x has inconsistent switch ID", uint64(observation.ClauseID)))
+			issues.addClause(observation.Event, fmt.Errorf("clause 0x%016x has inconsistent switch ID", uint64(observation.ClauseID)))
 			continue
 		}
 		switch observation.Event {
 		case cover.ClauseBodyExecution:
 			if observation.AlternativeKnown {
-				validationErrors = append(validationErrors, fmt.Errorf("clause 0x%016x body event carries a case alternative", uint64(observation.ClauseID)))
+				issues.addAST(fmt.Errorf("clause 0x%016x body event carries a case alternative", uint64(observation.ClauseID)))
 				continue
 			}
 		case cover.ClauseDirectSelection:
 			if metadata.Kind != cover.ClauseExpressionSwitch && metadata.Kind != cover.ClauseTypeSwitch {
-				validationErrors = append(validationErrors, fmt.Errorf("clause 0x%016x kind %q cannot carry direct-selection evidence", uint64(observation.ClauseID), metadata.Kind))
+				issues.addCompiler(fmt.Errorf("clause 0x%016x kind %q cannot carry direct-selection evidence", uint64(observation.ClauseID), metadata.Kind))
 				continue
 			}
 			if observation.SwitchID == 0 || observation.SwitchID != metadata.SwitchID {
-				validationErrors = append(validationErrors, fmt.Errorf("clause 0x%016x direct selection has inconsistent switch ID", uint64(observation.ClauseID)))
+				issues.addCompiler(fmt.Errorf("clause 0x%016x direct selection has inconsistent switch ID", uint64(observation.ClauseID)))
 				continue
 			}
 			alternatives := len(metadata.Expressions)
@@ -970,26 +1015,26 @@ func verifyRuntimeEvidence(
 			}
 			if metadata.Role == cover.ClauseDefault {
 				if observation.AlternativeKnown {
-					validationErrors = append(validationErrors, fmt.Errorf("default clause 0x%016x carries a case alternative", uint64(observation.ClauseID)))
+					issues.addCompiler(fmt.Errorf("default clause 0x%016x carries a case alternative", uint64(observation.ClauseID)))
 					continue
 				}
 			} else if !observation.AlternativeKnown || int(observation.AlternativeIndex) >= alternatives {
-				validationErrors = append(validationErrors, fmt.Errorf("clause 0x%016x carries an invalid case alternative", uint64(observation.ClauseID)))
+				issues.addCompiler(fmt.Errorf("clause 0x%016x carries an invalid case alternative", uint64(observation.ClauseID)))
 				continue
 			}
 		default:
-			validationErrors = append(validationErrors, fmt.Errorf("clause 0x%016x has unsupported event %q", uint64(observation.ClauseID), observation.Event))
+			issues.addShared(fmt.Errorf("clause 0x%016x has unsupported event %q", uint64(observation.ClauseID), observation.Event))
 			continue
 		}
 		if _, duplicate := verifiedClauses[observation]; !duplicate {
 			verifiedClauses[observation] = struct{}{}
-			verified.ClauseObservations = append(verified.ClauseObservations, observation)
+			accepted.ClauseObservations = append(accepted.ClauseObservations, observation)
 		}
 	}
-	return verified, errors.Join(validationErrors...)
+	return accepted, issues
 }
 
-type verifiedEvaluationKey struct {
+type acceptedEvaluationKey struct {
 	RunID       string
 	PackagePath string
 	DecisionID  cover.DecisionID
@@ -998,9 +1043,9 @@ type verifiedEvaluationKey struct {
 	Status      cover.EvaluationStatus
 }
 
-func deduplicateVerifiedEvaluations(ctx context.Context, evaluations []cover.DecisionEvaluation) ([]cover.DecisionEvaluation, error) {
+func deduplicateAcceptedEvaluations(ctx context.Context, evaluations []cover.DecisionEvaluation) ([]cover.DecisionEvaluation, error) {
 	result := make([]cover.DecisionEvaluation, 0, len(evaluations))
-	seen := make(map[verifiedEvaluationKey]int, len(evaluations))
+	seen := make(map[acceptedEvaluationKey]int, len(evaluations))
 	for _, evaluation := range evaluations {
 		if err := ctx.Err(); err != nil {
 			return result, err
@@ -1012,7 +1057,7 @@ func deduplicateVerifiedEvaluations(ctx context.Context, evaluations []cover.Dec
 			}
 			encodedConditions[index] = byte(condition)
 		}
-		key := verifiedEvaluationKey{
+		key := acceptedEvaluationKey{
 			RunID: evaluation.RunID, PackagePath: evaluation.PackagePath,
 			DecisionID: evaluation.DecisionID, Conditions: string(encodedConditions),
 			Result: evaluation.Result, Status: evaluation.Status,
@@ -1098,8 +1143,8 @@ func runtimeDiagnosticReportMessage(severity runtimecov.DiagnosticSeverity) stri
 	}
 }
 
-func runtimeDiagnosticsInvalidate(ctx context.Context, diagnostics []runtimecov.Diagnostic, astResult *gotest.Result) (bool, error) {
-	if astResult != nil && len(astResult.RuntimeDiagnostics) > 0 {
+func runtimeDiagnosticsInvalidate(ctx context.Context, diagnostics []runtimecov.Diagnostic, testResult *gotest.Result) (bool, error) {
+	if testResult != nil && len(testResult.RuntimeDiagnostics) > 0 {
 		return true, nil
 	}
 	for _, diagnostic := range diagnostics {
@@ -1110,7 +1155,7 @@ func runtimeDiagnosticsInvalidate(ctx context.Context, diagnostics []runtimecov.
 			return true, nil
 		}
 	}
-	return len(diagnostics) > 0 && (astResult == nil || astResult.Status == cover.RunPassed), nil
+	return len(diagnostics) > 0 && (testResult == nil || testResult.Status == cover.RunPassed), nil
 }
 
 func thresholdFailures(opts options, summary report.Summary) []string {

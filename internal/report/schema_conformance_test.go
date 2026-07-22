@@ -48,6 +48,22 @@ func TestCheckedInSchemaEnumsMatchPublicDomains(t *testing.T) {
 		string(gotest.PackageStarted), string(gotest.PackagePassed), string(gotest.PackageFailed),
 		string(cover.RunTimeout), string(gotest.PackageBuildFailed), string(gotest.PackageSkipped),
 	})
+	assertSchemaEnum(t, "producerName", document.Defs["producerName"], []string{
+		string(report.ProducerGoCover), string(report.ProducerASTRuntime), string(report.ProducerCompilerSelection),
+	})
+	assertSchemaEnum(t, "producerIntegrity", document.Defs["producerIntegrity"], []string{
+		string(report.ProducerIntegrityValid), string(report.ProducerIntegrityValidPrefix),
+		string(report.ProducerIntegrityInvalid), string(report.ProducerIntegrityUnavailable),
+	})
+	assertSchemaEnum(t, "producerCompleteness", document.Defs["producerCompleteness"], []string{
+		string(report.ProducerCompletenessComplete), string(report.ProducerCompletenessPartial), string(report.ProducerCompletenessUnavailable),
+	})
+	assertSchemaEnum(t, "producerMapping", document.Defs["producerMapping"], []string{
+		string(report.ProducerMappingComplete), string(report.ProducerMappingInvalid), string(report.ProducerMappingUnavailable),
+	})
+	assertSchemaEnum(t, "producerUsability", document.Defs["producerUsability"], []string{
+		string(report.ProducerUsabilityAccepted), string(report.ProducerUsabilityAcceptedPartial), string(report.ProducerUsabilityRejected),
+	})
 	assertSchemaEnum(t, "capabilityStatus", document.Defs["capabilityStatus"], []string{
 		string(backend.CapabilitySupported), string(backend.CapabilityUnsupportedByBackend), string(backend.CapabilityUnknown),
 	})
@@ -179,7 +195,7 @@ func TestRenderedReportsCarrySchemaAndToolIdentities(t *testing.T) {
 	t.Parallel()
 	for _, input := range []report.Input{
 		{ToolVersion: "v1.0.0", RunStatus: cover.RunPassed, FailureKind: cover.RunFailureNone, MeasurementMode: report.MeasurementSingleRun},
-		{ToolVersion: "devel-abcdef012345-dirty", RunStatus: cover.RunFailed, FailureKind: cover.RunFailureTest, MeasurementMode: report.MeasurementDualRunStandardCover},
+		{ToolVersion: "devel-abcdef012345-dirty", RunStatus: cover.RunFailed, FailureKind: cover.RunFailureTest, MeasurementMode: report.MeasurementStandardCover},
 	} {
 		encoded, err := report.RenderJSON(input)
 		if err != nil {
@@ -197,7 +213,7 @@ func TestRenderedReportsCarrySchemaAndToolIdentities(t *testing.T) {
 
 func readReportSchema(t *testing.T) *reportSchema {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "report-v1.1.schema.json"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "report-v2.0.schema.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +226,7 @@ func readReportSchema(t *testing.T) *reportSchema {
 
 func readReportSchemaJSON(t *testing.T) map[string]any {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "report-v1.1.schema.json"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "report-v2.0.schema.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,6 +7,7 @@ import (
 	cover "github.com/shrydev2020/gomcdc/internal/coverage"
 	"github.com/shrydev2020/gomcdc/internal/gotest"
 	"github.com/shrydev2020/gomcdc/internal/loader"
+	"github.com/shrydev2020/gomcdc/internal/mcdc"
 	"github.com/shrydev2020/gomcdc/internal/report"
 )
 
@@ -18,17 +19,17 @@ type reportAssembly struct {
 	loaded                 loader.Result
 	sources                []sourceInstrumentation
 	coverage               config.CoverageSet
+	maskingAnalysisBudget  mcdc.AnalysisBudget
 	decisions              []cover.DecisionMetadata
 	clauses                []cover.ClauseMetadata
 	noMatches              []cover.NoMatchMetadata
-	evidence               verifiedRuntimeEvidence
+	evidence               acceptedRuntimeEvidence
 	c0                     *c0.Report
-	standardResult         *gotest.Result
-	astResult              *gotest.Result
+	testResult             *gotest.Result
+	measurementName        string
 	standardCoverRequested bool
 	astRequested           bool
-	astEvidenceUnknown     bool
-	c0EvidenceUnknown      bool
+	producerOutcomes       []report.ProducerOutcome
 	instrumentationUnknown int
 	integrityFailure       bool
 	interrupted            bool
@@ -41,13 +42,22 @@ type reportAssembly struct {
 // input. Package status merging and measurement-mode selection belong here so
 // runCoverage remains responsible for sequencing and exit-code policy only.
 func assembleReportInput(assembly reportAssembly) report.Input {
-	overallStatus, overallFailure := combineTestResults(assembly.standardResult, assembly.astResult)
+	overallStatus := cover.RunPassed
+	overallFailure := cover.RunFailureNone
+	if assembly.testResult != nil {
+		overallStatus = assembly.testResult.Status
+		overallFailure = assembly.testResult.FailureKind
+	}
 	if assembly.interrupted {
 		overallStatus = cover.RunFailed
 		overallFailure = cover.RunFailureInterrupted
 	}
-	packageStatuses := packageStatuses(assembly.loaded, assembly.standardResult, assembly.astResult, overallStatus)
-	astPackageStatuses := astPackageStatuses(assembly.loaded, assembly.astResult)
+	packageStatuses := packageStatuses(assembly.loaded, assembly.testResult, overallStatus)
+	astPackageStatuses := astPackageStatuses(assembly.loaded, assembly.testResult, assembly.astRequested)
+	measurementName := assembly.measurementName
+	if measurementName == "" {
+		measurementName = requestedMeasurementName(assembly.standardCoverRequested, assembly.astRequested)
+	}
 
 	errors := append([]report.ReportError(nil), assembly.errors...)
 	for _, diagnostic := range assembly.measurementDiagnostics {
@@ -55,14 +65,14 @@ func assembleReportInput(assembly reportAssembly) report.Input {
 			Phase: diagnostic.phase, Code: diagnostic.code, Message: diagnostic.message,
 		})
 	}
-	errors = append(errors, measurementRunErrors("standard-cover", assembly.standardResult)...)
-	errors = append(errors, measurementRunErrors("ast", assembly.astResult)...)
+	errors = append(errors, measurementRunErrors(measurementName, assembly.testResult)...)
 
 	return report.Input{
 		ToolVersion:           assembly.toolVersion,
 		ModulePath:            assembly.loaded.ModulePath,
 		SourceFiles:           sourceFileInputs(assembly.sources),
 		Coverage:              assembly.coverage,
+		MaskingAnalysisBudget: assembly.maskingAnalysisBudget,
 		Decisions:             assembly.decisions,
 		Evaluations:           assembly.evidence.Evaluations,
 		NotEvaluatedDecisions: assembly.evidence.NotEvaluatedDecisions,
@@ -79,17 +89,16 @@ func assembleReportInput(assembly reportAssembly) report.Input {
 			Strict:      report.ResultNotRequested,
 			Threshold:   report.ResultNotRequested,
 		},
-		MeasurementMode:             measurementMode(assembly.standardCoverRequested, assembly.astRequested),
-		Measurements:                measurementRuns(assembly.standardResult, assembly.astResult),
-		Backend:                     backend.OrchestratedBackend{},
-		BackendProducers:            backend.V1Producers(),
-		ASTEvidenceIntegrityUnknown: assembly.astEvidenceUnknown,
-		C0EvidenceIntegrityUnknown:  assembly.c0EvidenceUnknown,
-		InstrumentationUnknown:      assembly.instrumentationUnknown,
-		Errors:                      errors,
-		Complete:                    overallStatus == cover.RunPassed && !assembly.integrityFailure && !assembly.analysisIncomplete,
-		PackageStatuses:             packageStatuses,
-		ASTPackageStatuses:          astPackageStatuses,
+		MeasurementMode:        measurementMode(assembly.standardCoverRequested, assembly.astRequested),
+		Measurements:           measurementRuns(measurementName, assembly.testResult),
+		ProducerOutcomes:       assembly.producerOutcomes,
+		Backend:                backend.OrchestratedBackend{},
+		BackendProducers:       backend.OrchestratedProducers(),
+		InstrumentationUnknown: assembly.instrumentationUnknown,
+		Errors:                 errors,
+		Complete:               overallStatus == cover.RunPassed && !assembly.integrityFailure && !assembly.analysisIncomplete,
+		PackageStatuses:        packageStatuses,
+		ASTPackageStatuses:     astPackageStatuses,
 	}
 }
 
@@ -129,45 +138,49 @@ func measurementRunErrors(name string, result *gotest.Result) []report.ReportErr
 
 func measurementMode(standardCoverRequested, astRequested bool) report.MeasurementMode {
 	switch {
-	case standardCoverRequested && astRequested:
-		return report.MeasurementDualRunStandardCover
 	case standardCoverRequested:
+		if astRequested {
+			return report.MeasurementSingleRun
+		}
 		return report.MeasurementStandardCover
 	default:
 		return report.MeasurementSingleRun
 	}
 }
 
-func packageStatuses(loaded loader.Result, standard, ast *gotest.Result, overall cover.RunStatus) map[string]string {
+func requestedMeasurementName(standardCoverRequested, astRequested bool) string {
+	switch {
+	case standardCoverRequested && astRequested:
+		return "combined"
+	case astRequested:
+		return "ast"
+	default:
+		return "standard-cover"
+	}
+}
+
+func packageStatuses(loaded loader.Result, result *gotest.Result, overall cover.RunStatus) map[string]string {
 	statuses := make(map[string]string, len(loaded.PackageImportSet))
 	for _, packagePath := range loaded.PackageImportSet {
-		statuses[packagePath] = ""
+		statuses[packagePath] = string(overall)
 	}
-	for _, result := range []*gotest.Result{standard, ast} {
-		if result == nil {
-			continue
-		}
+	if result != nil {
 		for packagePath, status := range result.Packages {
-			statuses[packagePath] = mergePackageStatus(statuses[packagePath], string(status))
-		}
-	}
-	for packagePath, status := range statuses {
-		if status == "" {
-			statuses[packagePath] = string(overall)
+			statuses[packagePath] = string(status)
 		}
 	}
 	return statuses
 }
 
-func astPackageStatuses(loaded loader.Result, ast *gotest.Result) map[string]string {
+func astPackageStatuses(loaded loader.Result, result *gotest.Result, requested bool) map[string]string {
 	statuses := make(map[string]string, len(loaded.PackageImportSet))
-	if ast == nil {
+	if !requested || result == nil {
 		return statuses
 	}
 	for _, packagePath := range loaded.PackageImportSet {
-		statuses[packagePath] = string(ast.Status)
+		statuses[packagePath] = string(result.Status)
 	}
-	for packagePath, status := range ast.Packages {
+	for packagePath, status := range result.Packages {
 		statuses[packagePath] = string(status)
 	}
 	return statuses

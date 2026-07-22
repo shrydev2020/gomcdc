@@ -505,6 +505,19 @@ func TestMaskingEvaluationPairLimitIsAnalysisIncomplete(t *testing.T) {
 	}
 }
 
+func TestEffectiveMaskingAnalysisBudgetFillsOnlyZeroFields(t *testing.T) {
+	t.Parallel()
+	defaults := DefaultMaskingAnalysisBudget()
+	effective := EffectiveMaskingAnalysisBudget(AnalysisBudget{MaxSearchStates: 17})
+	if effective != (AnalysisBudget{
+		MaxEvaluationPairs: defaults.MaxEvaluationPairs,
+		MaxSearchStates:    17,
+		MaxSolverBytes:     defaults.MaxSolverBytes,
+	}) {
+		t.Fatalf("effective Masking analysis budget = %#v", effective)
+	}
+}
+
 func TestMaskingSearchStateLimitIsAnalysisIncomplete(t *testing.T) {
 	t.Parallel()
 	metadata := decisionMetadata(and(condition(0), condition(1)))
@@ -535,25 +548,25 @@ func TestMaskingSearchStateLimitIsAnalysisIncomplete(t *testing.T) {
 	}
 }
 
-func TestMaskingWorkspaceLimitIsAnalysisIncomplete(t *testing.T) {
+func TestMaskingSolverByteLimitIsAnalysisIncomplete(t *testing.T) {
 	t.Parallel()
 	metadata := decisionMetadata(and(condition(0), condition(1)))
 	evaluations := []cover.DecisionEvaluation{
 		completed(1, []cover.ConditionState{conditionFalse, notEvaluated}, false),
 		completed(2, []cover.ConditionState{conditionTrue, conditionTrue}, true),
 	}
-	required := maskingWorkspaceBytes(expressionNodeCount(metadata.ExpressionTree), len(metadata.Conditions), 2)
-	result := (MaskingStrategy{Budget: AnalysisBudget{MaxWorkspaceBytes: required - 1}}).Analyze(metadata, evaluations)
+	required := maskingSolverBytes(expressionNodeCount(metadata.ExpressionTree), len(metadata.Conditions), 2)
+	result := (MaskingStrategy{Budget: AnalysisBudget{MaxSolverBytes: required - 1}}).Analyze(metadata, evaluations)
 	condition := result.Conditions[0]
 	if status := mcdcConditionStatus(condition); status != string(cover.CoverageAnalysisIncomplete) {
 		t.Fatalf("target status = %q, want analysis-incomplete: %#v", status, condition)
 	}
-	if !strings.Contains(condition.Reason, "workspace byte") {
-		t.Fatalf("target reason = %q, want workspace byte limit", condition.Reason)
+	if !strings.Contains(condition.Reason, "solver byte") {
+		t.Fatalf("target reason = %q, want solver byte limit", condition.Reason)
 	}
-	exact := (MaskingStrategy{Budget: AnalysisBudget{MaxWorkspaceBytes: required}}).Analyze(metadata, evaluations)
+	exact := (MaskingStrategy{Budget: AnalysisBudget{MaxSolverBytes: required}}).Analyze(metadata, evaluations)
 	if status := mcdcConditionStatus(exact.Conditions[0]); status != string(cover.CoverageCovered) {
-		t.Fatalf("target status = %q, want covered at exact workspace limit: %#v", status, exact.Conditions[0])
+		t.Fatalf("target status = %q, want covered at exact solver-byte limit: %#v", status, exact.Conditions[0])
 	}
 }
 

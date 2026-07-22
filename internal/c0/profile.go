@@ -153,9 +153,6 @@ func parseProfileLine(line string) (string, ProfileBlock, error) {
 		Start: Position{Line: startLineInt, Column: startColumnInt},
 		End:   Position{Line: endLineInt, Column: endColumnInt},
 	}
-	if comparePosition(rangeValue.End, rangeValue.Start) < 0 {
-		return "", ProfileBlock{}, fmt.Errorf("block end %s precedes start %s", formatPosition(rangeValue.End), formatPosition(rangeValue.Start))
-	}
 	return path, ProfileBlock{Position: rangeValue, Statements: statementCount, Count: count}, nil
 }
 

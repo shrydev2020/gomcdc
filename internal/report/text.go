@@ -11,7 +11,7 @@ import (
 	cover "github.com/shrydev2020/gomcdc/internal/coverage"
 )
 
-// RenderText builds input and returns a deterministic schema-v1 text report
+// RenderText builds input and returns a deterministic current-schema text report
 // ending in a newline.
 func RenderText(input Input) string {
 	return RenderTextReport(Build(input))
@@ -20,7 +20,7 @@ func RenderText(input Input) string {
 // RenderTextReport renders an already-built report without rebuilding it.
 func RenderTextReport(report Report) string { return renderText(report) }
 
-// WriteText builds input and writes a deterministic schema-v1 text report.
+// WriteText builds input and writes a deterministic current-schema text report.
 func WriteText(writer io.Writer, input Input) error {
 	_, err := io.WriteString(writer, RenderText(input))
 	return err
@@ -47,6 +47,15 @@ func renderText(report Report) string {
 		report.Run.Results.Threshold,
 	)
 	fmt.Fprintf(&output, "Measurement mode: %s\n", report.MeasurementMode)
+	if limits := report.MaskingAnalysisLimits; limits != nil {
+		fmt.Fprintf(
+			&output,
+			"Masking analysis limits (per condition obligation): evaluation-pairs=%d search-states=%d solver-bytes=%d\n",
+			limits.MaxEvaluationPairs,
+			limits.MaxSearchStates,
+			limits.MaxSolverBytes,
+		)
+	}
 	for _, measurement := range report.Measurements {
 		fmt.Fprintf(
 			&output,
@@ -64,6 +73,17 @@ func renderText(report Report) string {
 		for _, packagePath := range packagePaths {
 			fmt.Fprintf(&output, "  Measurement package: %s status=%s\n", packagePath, measurement.Packages[packagePath])
 		}
+	}
+	for _, outcome := range report.ProducerOutcomes {
+		fmt.Fprintf(
+			&output,
+			"Producer: %s integrity=%s completeness=%s mapping=%s usability=%s\n",
+			outcome.Producer,
+			outcome.Integrity,
+			outcome.Completeness,
+			outcome.Mapping,
+			outcome.Usability,
+		)
 	}
 	output.WriteString("Backend capabilities:\n")
 	for _, producer := range report.Backends {
