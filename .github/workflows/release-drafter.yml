@@ -32,20 +32,13 @@ jobs:
           fi
           published=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
             --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name')
-          if echo "$published" | grep -Eq '^v2\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+          if [ -n "$published" ]; then
             exit 0
           fi
-          baseline=''
-          while IFS= read -r tag; do
-            if [[ "$tag" =~ ^v2\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-              baseline=$tag
-              break
-            fi
-          done < <(git tag --list 'v2.*' --sort=-version:refname)
-          test -n "$baseline"
-          IFS=. read -r major minor patch <<< "${baseline#v}"
+          baseline=$(git describe --tags --abbrev=0)
+          version=$(npx --yes semver@7.8.5 "$baseline" --increment patch)
           echo "from=refs/tags/$baseline" >> "$GITHUB_OUTPUT"
-          echo "version=$major.$minor.$((patch + 1))" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - uses: release-drafter/release-drafter@978bb0b30c5ee8cdd332ced253758157150d43f0 # v7.10.0
         with:
           commitish: ${{ github.sha }}

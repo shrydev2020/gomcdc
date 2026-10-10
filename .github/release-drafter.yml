@@ -1,7 +1,6 @@
 name-template: 'v$RESOLVED_VERSION'
 tag-template: 'v$RESOLVED_VERSION'
 tag-prefix: v
-filter-by-range: '>=2.0.0 <3.0.0'
 categories:
   - type: version-resolver
     semver-increment: minor
