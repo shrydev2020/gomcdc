@@ -8,8 +8,14 @@ import (
 	"strings"
 )
 
+// releaseVersion is set when packaging a release from its source commit.
+var releaseVersion string
+
 // Version returns the release or development identity of the running binary.
 func Version() string {
+	if releaseVersion != "" {
+		return releaseVersion
+	}
 	info, ok := debug.ReadBuildInfo()
 	return resolve(info, ok)
 }

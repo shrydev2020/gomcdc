@@ -1,0 +1,121 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/ci.yml
+      - .github/workflows/release.yml
+      - .github/workflows/release-drafter.yml
+      - .github/release-drafter.yml
+      - .goreleaser.yml
+      - internal/buildinfo/**
+
+concurrency:
+  group: ${{ github.event_name == 'workflow_dispatch' && 'releases' || format('release-preview-{0}', github.ref) }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.draft.outputs.tag }}
+      id: ${{ steps.draft.outputs.id }}
+    steps:
+      - uses: actions/github-script@d746ffe35508b1917358783b479e04febd2b8f71 # v9.0.0
+        id: draft
+        with:
+          script: |
+            if (context.ref !== 'refs/heads/master') {
+              throw new Error('Run Release from master.');
+            }
+            const releases = await github.paginate(github.rest.repos.listReleases, context.repo);
+            const drafts = releases.filter(release => release.draft && !release.prerelease && /^v2\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(release.tag_name));
+            if (drafts.length !== 1) {
+              throw new Error('Expected one v2 release draft. Run Release Drafter first.');
+            }
+            const draft = drafts[0];
+            if (draft.target_commitish !== context.sha) {
+              throw new Error('The draft does not target this master commit. Run Release Drafter first.');
+            }
+            if (!draft.body?.trim()) {
+              throw new Error('The release draft has no notes.');
+            }
+            try {
+              await github.rest.git.getRef({...context.repo, ref: `tags/${draft.tag_name}`});
+              throw new Error(`Tag ${draft.tag_name} already exists.`);
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+            core.setOutput('tag', draft.tag_name);
+            core.setOutput('id', draft.id);
+
+  verify:
+    if: github.event_name == 'workflow_dispatch'
+    needs: prepare
+    uses: ./.github/workflows/ci.yml
+
+  package:
+    needs: [prepare, verify]
+    if: >-
+      always() && !cancelled() &&
+      (github.event_name == 'pull_request' ||
+      (needs.prepare.result == 'success' && needs.verify.result == 'success'))
+    runs-on: ubuntu-latest
+    env:
+      GOMCDC_RELEASE_TAG: ${{ github.event_name == 'pull_request' && 'v2.0.0-dev' || needs.prepare.outputs.tag }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: stable
+          cache: true
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: v2.18.3
+          args: release --snapshot --clean
+      - name: Verify the packaged version and checksums
+        run: |
+          test "$(dist/gomcdc_linux_amd64_v1/gomcdc version)" = "gomcdc $GOMCDC_RELEASE_TAG"
+          (cd dist && sha256sum --check checksums.txt)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-assets
+          path: |
+            dist/*.tar.gz
+            dist/checksums.txt
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'workflow_dispatch'
+    needs: [prepare, package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GOMCDC_RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+      GOMCDC_RELEASE_ID: ${{ needs.prepare.outputs.id }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-assets
+          path: release-assets
+      - name: Publish the draft and create its tag
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/releases/$GOMCDC_RELEASE_ID" \
+            --jq '{draft, tag_name, target_commitish}' > draft.json
+          jq -e --arg tag "$GOMCDC_RELEASE_TAG" --arg sha "$GITHUB_SHA" \
+            '.draft == true and .tag_name == $tag and .target_commitish == $sha' draft.json
+          (cd release-assets && sha256sum --check checksums.txt)
+          gh release upload "$GOMCDC_RELEASE_TAG" release-assets/*.tar.gz release-assets/checksums.txt \
+            --repo "$GITHUB_REPOSITORY" --clobber
+          gh release edit "$GOMCDC_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --draft=false --latest --target "$GITHUB_SHA"

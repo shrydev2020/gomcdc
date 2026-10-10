@@ -28,7 +28,7 @@ test失敗や中断時も検証可能なpartial resultを保持します。
 Go 1.26以降でv2 releaseをインストールします。
 
 ```sh
-go install github.com/shrydev2020/gomcdc/v2@v2.0.0
+go install github.com/shrydev2020/gomcdc/v2@latest
 ```
 
 `gomcdc version`でインストールしたbuildを確認できます。
@@ -201,6 +201,8 @@ gomcdc test \
 - [JSON report schema](schema/report-v2.0.schema.json)
 
 ## 開発時の確認
+
+リリース手順は[Releasing gomcdc](docs/releasing.md)を参照してください。
 
 ```sh
 go test -count=1 ./...

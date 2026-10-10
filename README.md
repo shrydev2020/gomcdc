@@ -29,7 +29,7 @@ that same execution; there is no production dual-run fallback.
 Install the v2 release with Go 1.26 or later:
 
 ```sh
-go install github.com/shrydev2020/gomcdc/v2@v2.0.0
+go install github.com/shrydev2020/gomcdc/v2@latest
 ```
 
 Verify the installed build with `gomcdc version`.
@@ -208,6 +208,8 @@ gomcdc test \
 - [JSON report schema](schema/report-v2.0.schema.json)
 
 ## Development
+
+See [Releasing gomcdc](docs/releasing.md) for the release workflow.
 
 ```sh
 go test -count=1 ./...

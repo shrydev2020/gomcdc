@@ -1,0 +1,35 @@
+version: 2
+project_name: gomcdc
+
+builds:
+  - id: gomcdc
+    main: .
+    binary: gomcdc
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X github.com/shrydev2020/gomcdc/v2/internal/buildinfo.releaseVersion={{ .Env.GOMCDC_RELEASE_TAG }}
+
+archives:
+  - formats: [tar.gz]
+    name_template: '{{ .ProjectName }}_{{ .Env.GOMCDC_RELEASE_TAG }}_{{ .Os }}_{{ .Arch }}'
+    files:
+      - LICENSE
+      - README.md
+      - README.ja.md
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: '{{ trimprefix .Env.GOMCDC_RELEASE_TAG "v" }}'
+
+changelog:
+  disable: true
+
+release:
+  disable: true
