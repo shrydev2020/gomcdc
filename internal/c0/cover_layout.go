@@ -14,29 +14,32 @@ import (
 	"github.com/shrydev2020/gomcdc/v2/internal/processgroup"
 )
 
-// CoverLayout describes the coordinate and region rules observed from the
-// selected go tool cover. It is determined from emitted counters, not a Go
-// version allowlist.
+// CoverLayout describes the coordinate, region, and statement-count rules
+// observed from the selected go tool cover. It is determined from emitted
+// counters, not a Go version allowlist.
 type CoverLayout struct {
-	PhysicalPositions bool
-	SplitCodeRanges   bool
+	PhysicalPositions    bool
+	SplitCodeRanges      bool
+	RangeStatementCounts bool
 }
+
+const coverLayoutProbe = "package p\n\n//line logical.go:100\nfunc F() {\n\t_ = 1\n\n\t_ = 2\n}\n"
 
 // DetectCoverLayout checks the selected coverage producer without building or
 // running the target. The fixture distinguishes physical coordinates and
-// comment/blank-line splitting from logical basic-block coordinates.
+// comment/blank-line splitting from logical basic-block coordinates, as well
+// as whether split counters count statements per range or per basic block.
 func DetectCoverLayout(ctx context.Context) (CoverLayout, error) {
 	if err := ctx.Err(); err != nil {
 		return CoverLayout{}, err
 	}
-	const source = "package p\n\n//line logical.go:100\nfunc F() {\n\t_ = 1\n\n\t_ = 2\n}\n"
 	dir, err := os.MkdirTemp("", "gomcdc-cover-layout-")
 	if err != nil {
 		return CoverLayout{}, err
 	}
 	defer os.RemoveAll(dir)
 	input, output := filepath.Join(dir, "probe.go"), filepath.Join(dir, "covered.go")
-	if err := os.WriteFile(input, []byte(source), 0o600); err != nil {
+	if err := os.WriteFile(input, []byte(coverLayoutProbe), 0o600); err != nil {
 		return CoverLayout{}, err
 	}
 	command := exec.CommandContext(ctx, "go", "tool", "cover", "-mode=set", "-var=GomcdcCoverLayout", "-o="+output, input)
@@ -52,8 +55,16 @@ func DetectCoverLayout(ctx context.Context) (CoverLayout, error) {
 	if err != nil {
 		return CoverLayout{}, err
 	}
-	for _, layout := range []CoverLayout{{}, {PhysicalPositions: true, SplitCodeRanges: true}} {
-		inventory, err := BuildProducerInventory("probe.go", []byte(source), layout)
+	return coverLayoutForMetadata(positions, counts)
+}
+
+func coverLayoutForMetadata(positions, counts []uint64) (CoverLayout, error) {
+	for _, layout := range []CoverLayout{
+		{},
+		{PhysicalPositions: true, SplitCodeRanges: true},
+		{PhysicalPositions: true, SplitCodeRanges: true, RangeStatementCounts: true},
+	} {
+		inventory, err := BuildProducerInventory("probe.go", []byte(coverLayoutProbe), layout)
 		if err != nil {
 			return CoverLayout{}, err
 		}
@@ -124,7 +135,7 @@ func coverMetadata(source []byte) ([]uint64, []uint64, error) {
 }
 
 func matchesCoverMetadata(inventory FileInventory, positions, counts []uint64) bool {
-	if len(inventory.Blocks) != len(counts) {
+	if len(inventory.Blocks) != len(counts) || len(positions) != len(counts)*3 {
 		return false
 	}
 	for index, block := range inventory.Blocks {

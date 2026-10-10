@@ -204,7 +204,11 @@ func (visitor inventoryVisitor) addCounters(
 							units = append(units, statement)
 						}
 					}
-					visitor.record(span.start, span.end, last, units)
+					statementCount := last
+					if visitor.builder.layout.RangeStatementCounts {
+						statementCount = len(units)
+					}
+					visitor.record(span.start, span.end, statementCount, units)
 				}
 			} else {
 				visitor.record(position, end, last, statements[:last])
