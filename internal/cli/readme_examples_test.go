@@ -30,7 +30,7 @@ func TestREADMEForwardedGoTestExampleUsesOnlyAllowedFlags(t *testing.T) {
 	}
 }
 
-func TestREADMEInstallsVersionedV2Module(t *testing.T) {
+func TestREADMEInstallsLatestV2Module(t *testing.T) {
 	t.Parallel()
 	for _, path := range []string{"../../README.md", "../../README.ja.md"} {
 		contents, err := os.ReadFile(path)
@@ -38,8 +38,8 @@ func TestREADMEInstallsVersionedV2Module(t *testing.T) {
 			t.Fatal(err)
 		}
 		text := string(contents)
-		if !strings.Contains(text, "go install github.com/shrydev2020/gomcdc/v2@v2.0.0") {
-			t.Fatalf("%s does not install the versioned v2 module", path)
+		if !strings.Contains(text, "go install github.com/shrydev2020/gomcdc/v2@latest") {
+			t.Fatalf("%s does not install the latest v2 module", path)
 		}
 	}
 }

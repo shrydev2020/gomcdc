@@ -96,3 +96,4 @@ go.work.sum
 # env file
 .env
 /main
+/dist/

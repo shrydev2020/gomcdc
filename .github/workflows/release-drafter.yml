@@ -1,0 +1,53 @@
+name: Release Drafter
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: releases
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Use existing tags as the first release baseline
+        id: baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$GITHUB_REF" != 'refs/heads/master' ]; then
+            echo 'Run Release Drafter from master.' >&2
+            exit 1
+          fi
+          published=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
+            --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name')
+          if echo "$published" | grep -Eq '^v2\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            exit 0
+          fi
+          baseline=''
+          while IFS= read -r tag; do
+            if [[ "$tag" =~ ^v2\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+              baseline=$tag
+              break
+            fi
+          done < <(git tag --list 'v2.*' --sort=-version:refname)
+          test -n "$baseline"
+          IFS=. read -r major minor patch <<< "${baseline#v}"
+          echo "from=refs/tags/$baseline" >> "$GITHUB_OUTPUT"
+          echo "version=$major.$minor.$((patch + 1))" >> "$GITHUB_OUTPUT"
+      - uses: release-drafter/release-drafter@978bb0b30c5ee8cdd332ced253758157150d43f0 # v7.10.0
+        with:
+          commitish: ${{ github.sha }}
+          from: ${{ steps.baseline.outputs.from }}
+          version: ${{ steps.baseline.outputs.version }}
