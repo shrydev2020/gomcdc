@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"math"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 
+	"github.com/shrydev2020/gomcdc/v2/internal/backend"
 	"github.com/shrydev2020/gomcdc/v2/internal/config"
 	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
 	"github.com/shrydev2020/gomcdc/v2/internal/mcdc"
@@ -140,5 +143,128 @@ func TestOfflineReanalysisChangesOnlyMCDCAndProvenance(t *testing.T) {
 	cancel()
 	if _, err := report.AnalyzeSnapshots(ctx, []report.AnalysisSnapshot{{ID: "a", Report: first}}, input.Coverage, mcdc.AnalysisBudget{}); err == nil {
 		t.Fatal("canceled reanalysis succeeded")
+	}
+}
+
+func TestOfflineAnalysisChecksEachCapabilityBoundary(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name   string
+		mutate func(*report.Report)
+	}{
+		{"tool capabilities", func(r *report.Report) {
+			r.Capabilities[backend.CapabilityMCDCMasking] = backend.CapabilityUnknown
+		}},
+		{"producer capabilities", func(r *report.Report) {
+			r.Backends = append(r.Backends, backend.ProducerCapabilities{Backend: "different-producer"})
+		}},
+		{"instrumentation", func(r *report.Report) { r.Instrumentation = backend.InstrumentationReport{} }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			a := report.Build(offlineDecisionInput("a", true))
+			b := report.Build(offlineDecisionInput("b", false))
+			snapshots := []report.AnalysisSnapshot{{ID: "a", Report: a}, {ID: "b", Report: b}}
+			if _, err := report.AnalyzeSnapshots(t.Context(), snapshots, config.AllCoverage(), mcdc.AnalysisBudget{}); err != nil {
+				t.Fatalf("matching capabilities: %v", err)
+			}
+			// Change only the named boundary, keeping the source inventory equal.
+			test.mutate(&snapshots[1].Report)
+			if _, err := report.AnalyzeSnapshots(t.Context(), snapshots, config.AllCoverage(), mcdc.AnalysisBudget{}); err == nil || !strings.Contains(err.Error(), "capabilities differ") {
+				t.Fatalf("changed capability boundary: %v", err)
+			}
+		})
+	}
+}
+
+func TestOfflineAnalysisPreservesFailuresInEitherInputOrder(t *testing.T) {
+	t.Parallel()
+	type outcome struct {
+		status cover.RunStatus
+		kind   cover.RunFailureKind
+		test   report.ResultStatus
+		pkg    string
+	}
+	passed := outcome{cover.RunPassed, cover.RunFailureNone, report.ResultPassed, "passed"}
+	failed := outcome{cover.RunFailed, cover.RunFailureTest, report.ResultFailed, "failed"}
+	buildFailed := outcome{cover.RunFailed, cover.RunFailureBuild, report.ResultNotRun, "build-failed"}
+	timedOut := outcome{cover.RunTimeout, cover.RunFailureTimeout, report.ResultTimeout, "timeout"}
+	for _, test := range []struct {
+		name string
+		a, b outcome
+		want outcome
+	}{
+		{"success", passed, passed, passed},
+		{"test failure", passed, failed, failed},
+		{"repeated failure", failed, failed, failed},
+		{"timeout", passed, timedOut, timedOut},
+		{"mixed failures", failed, buildFailed, outcome{cover.RunFailed, cover.RunFailureMixed, report.ResultFailed, "build-failed"}},
+		{"failure and timeout", failed, timedOut, outcome{cover.RunTimeout, cover.RunFailureMixed, report.ResultTimeout, "timeout"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var snapshots []report.AnalysisSnapshot
+			for i, state := range []outcome{test.a, test.b} {
+				input := offlineDecisionInput([]string{"a", "b"}[i], i == 0)
+				input.RunStatus, input.FailureKind = state.status, state.kind
+				input.Complete = state.status == cover.RunPassed
+				input.PackageStatuses["example.com/m/a"] = state.pkg
+				input.Results = report.RunResults{Test: state.test, Measurement: report.ResultPassed, Integrity: report.ResultPassed, Strict: report.ResultFailed, Threshold: report.ResultFailed}
+				input.Errors = []report.ReportError{
+					{Phase: "policy", Code: "strict-coverage-gap", Message: "original strict failure"},
+					{Phase: "policy", Code: "coverage-threshold-failed", Message: "original threshold failure"},
+				}
+				if state.status != cover.RunPassed {
+					input.Errors = append(input.Errors, report.ReportError{Phase: "test", Code: string(state.kind), Message: "original execution failure"})
+				}
+				snapshots = append(snapshots, report.AnalysisSnapshot{ID: []string{"a", "b"}[i], Report: report.Build(input)})
+			}
+			for range 2 {
+				merged, err := report.AnalyzeSnapshots(t.Context(), snapshots, config.AllCoverage(), mcdc.AnalysisBudget{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if merged.Run.Status != test.want.status || merged.Run.FailureKind != test.want.kind || merged.Run.Results.Test != test.want.test || merged.Packages[0].Status != test.want.pkg {
+					t.Fatalf("merged outcome = %+v, package = %s; want %+v", merged.Run, merged.Packages[0].Status, test.want)
+				}
+				if merged.Run.Complete != (test.want.status == cover.RunPassed) || merged.Run.Results.Strict != report.ResultNotRequested || merged.Run.Results.Threshold != report.ResultNotRequested {
+					t.Fatalf("derived completion/policy results = %+v", merged.Run)
+				}
+				var wantErrors []report.ReportError
+				for i, original := range snapshots {
+					if merged.ContributingRuns[i].Run != original.Report.Run || !reflect.DeepEqual(merged.ContributingRuns[i].Errors, original.Report.Errors) {
+						t.Fatal("original execution or policy outcome changed")
+					}
+					for _, failure := range original.Report.Errors {
+						if failure.Phase == "test" && !slices.Contains(wantErrors, failure) {
+							wantErrors = append(wantErrors, failure)
+						}
+					}
+				}
+				if !slices.Equal(merged.Errors, wantErrors) {
+					t.Fatalf("aggregate errors = %+v, want execution errors %+v", merged.Errors, wantErrors)
+				}
+				slices.Reverse(snapshots)
+			}
+		})
+	}
+}
+
+func TestOfflineAnalysisDeduplicatesEvaluationsAndRejectsConflicts(t *testing.T) {
+	t.Parallel()
+	a := report.Build(offlineDecisionInput("same-run", true))
+	b := report.Build(offlineDecisionInput("same-run", true))
+	snapshots := []report.AnalysisSnapshot{{ID: "a", Report: a}, {ID: "b", Report: b}}
+	merged, err := report.AnalyzeSnapshots(t.Context(), snapshots, config.AllCoverage(), mcdc.AnalysisBudget{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := merged.Packages[0].Files[0].Functions[0].Decisions[0]
+	if len(d.Evaluations) != 1 || merged.Summary.Decision.Covered != 1 || merged.Summary.MCDCMasking.Covered != 0 {
+		t.Fatalf("duplicate observation changed coverage: %+v", d)
+	}
+	// Each vector is valid alone, but the same physical evaluation cannot have
+	// two different outcomes. Treating it as two observations would invent a witness.
+	snapshots[1].Report = report.Build(offlineDecisionInput("same-run", false))
+	if _, err := report.AnalyzeSnapshots(t.Context(), snapshots, config.AllCoverage(), mcdc.AnalysisBudget{}); err == nil || !strings.Contains(err.Error(), "conflicting evaluation identity") {
+		t.Fatalf("conflicting evaluation accepted: %v", err)
 	}
 }
