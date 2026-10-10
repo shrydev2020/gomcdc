@@ -34,7 +34,7 @@ jobs:
               throw new Error('Run Release from master.');
             }
             const releases = await github.paginate(github.rest.repos.listReleases, context.repo);
-            const drafts = releases.filter(release => release.draft && !release.prerelease && /^v2\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(release.tag_name));
+            const drafts = releases.filter(release => release.draft && !release.prerelease && release.tag_name.startsWith('v2.'));
             if (drafts.length !== 1) {
               throw new Error('Expected one v2 release draft. Run Release Drafter first.');
             }

@@ -31,13 +31,13 @@ jobs:
             exit 1
           fi
           published=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
-            --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name')
-          if echo "$published" | grep -Eq '^v2\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name | select(startswith("v2."))')
+          if [ -n "$published" ]; then
             exit 0
           fi
           baseline=''
           while IFS= read -r tag; do
-            if [[ "$tag" =~ ^v2\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            if [[ "$tag" =~ ^v2\.[0-9]+\.[0-9]+$ ]]; then
               baseline=$tag
               break
             fi
