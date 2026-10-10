@@ -86,13 +86,15 @@ type File struct {
 	// Source is the immutable pre-instrumentation revision used for IDs,
 	// rewriting, and final C0 inventory. Consumers must not re-read the live
 	// worktree after tests have started.
-	Source       []byte
-	SourceHash   [sha256.Size]byte
-	Identifiers  []string
-	Decisions    []Decision
-	Clauses      []Clause
-	NoMatches    []cover.NoMatchMetadata
-	LineMappings []LineMapping
+	Source          []byte
+	SourceHash      [sha256.Size]byte
+	Identifiers     []string
+	Decisions       []Decision
+	Clauses         []Clause
+	NoMatches       []cover.NoMatchMetadata
+	LineMappings    []LineMapping
+	TestContexts    TestContexts
+	TestContextOnly bool
 }
 
 // LineMapping describes a source-position segment introduced by a user line

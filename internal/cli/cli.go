@@ -245,6 +245,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 			ModulePath:   loaded.ModulePath,
 			PackagePath:  file.PackagePath,
 		})
+		analysis.TestContexts = file.TestContexts
 		if err := ctx.Err(); err != nil {
 			fmt.Fprintf(stderr, "gomcdc: source analysis interrupted: %v\n", err)
 			return ExitInterrupted
@@ -276,6 +277,28 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 			inventory = &builtInventory
 		}
 		sources = append(sources, sourceInstrumentation{loaded: file, analysis: analysis, inventory: inventory})
+	}
+	if !opts.includeTests {
+		for _, file := range loaded.TestFiles {
+			if file.TestContexts.Empty() {
+				continue
+			}
+			relative, err := filepath.Rel(loaded.ModuleRoot, file.Path)
+			if err != nil {
+				return ExitMeasurementFailed
+			}
+			analysis, err := analyzer.AnalyzeFile(analyzer.FileOptions{
+				Path: file.Path, OriginalPath: filepath.Join(sourceConfiguration.MainModuleDir(), relative),
+				ModuleDir: loaded.ModuleRoot, ModulePath: loaded.ModulePath, PackagePath: file.PackagePath,
+			})
+			if err != nil || analysis.Generated {
+				continue
+			}
+			analysis.Decisions, analysis.Clauses, analysis.NoMatches = nil, nil, nil
+			analysis.TestContexts = file.TestContexts
+			analysis.TestContextOnly = true
+			sources = append(sources, sourceInstrumentation{loaded: file, analysis: analysis})
+		}
 	}
 	analyses := make([]analyzer.File, 0, len(sources))
 	for _, source := range sources {
@@ -449,6 +472,9 @@ func sumEnabledSummaryField(summary report.Summary, value func(report.MetricSumm
 func sourceFileInputs(sources []sourceInstrumentation) []report.SourceFileInput {
 	result := make([]report.SourceFileInput, 0, len(sources))
 	for _, source := range sources {
+		if source.analysis.TestContextOnly {
+			continue
+		}
 		result = append(result, report.SourceFileInput{
 			PackagePath: source.loaded.PackagePath,
 			Path:        source.analysis.RelativePath,
@@ -482,7 +508,7 @@ func instrumentPackages(
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if len(item.analysis.Decisions) == 0 && len(item.analysis.Clauses) == 0 {
+		if len(item.analysis.Decisions) == 0 && len(item.analysis.Clauses) == 0 && item.analysis.TestContexts.Empty() {
 			continue
 		}
 		copyPath := filepath.Join(moduleDir, filepath.FromSlash(item.analysis.RelativePath))
@@ -1085,11 +1111,13 @@ type acceptedEvaluationKey struct {
 	Conditions  string
 	Result      bool
 	Status      cover.EvaluationStatus
+	TestID      string
+	ProcessID   int
 }
 
 func deduplicateAcceptedEvaluations(ctx context.Context, evaluations []cover.DecisionEvaluation) ([]cover.DecisionEvaluation, error) {
 	result := make([]cover.DecisionEvaluation, 0, len(evaluations))
-	seen := make(map[acceptedEvaluationKey]int, len(evaluations))
+	seen := make(map[acceptedEvaluationKey]struct{}, len(evaluations))
 	for _, evaluation := range evaluations {
 		if err := ctx.Err(); err != nil {
 			return result, err
@@ -1105,14 +1133,12 @@ func deduplicateAcceptedEvaluations(ctx context.Context, evaluations []cover.Dec
 			RunID: evaluation.RunID, PackagePath: evaluation.PackagePath,
 			DecisionID: evaluation.DecisionID, Conditions: string(encodedConditions),
 			Result: evaluation.Result, Status: evaluation.Status,
+			TestID: evaluation.TestID, ProcessID: evaluation.ProcessID,
 		}
-		if index, duplicate := seen[key]; duplicate {
-			if result[index].TestID == cover.UnknownTestID && evaluation.TestID != cover.UnknownTestID {
-				result[index].TestID = evaluation.TestID
-			}
+		if _, duplicate := seen[key]; duplicate {
 			continue
 		}
-		seen[key] = len(result)
+		seen[key] = struct{}{}
 		result = append(result, evaluation)
 	}
 	return result, nil

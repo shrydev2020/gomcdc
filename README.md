@@ -58,6 +58,8 @@ Summary:
 
 Below the module summary, the text report expands packages, files, functions,
 decisions, conditions, MC/DC witnesses, and observed evaluation vectors.
+Evaluation records and MC/DC witnesses include the executing test or subtest
+name. `unknown` indicates execution without a test context.
 
 ## Metrics
 

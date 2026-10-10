@@ -56,6 +56,8 @@ Summary:
 
 module summaryの後にpackage、file、function、decision、condition、MC/DC witness、
 観測した評価vectorを展開します。
+評価記録とMC/DCの証拠には、実行したtest／subtestの名前を表示します。
+`unknown`はtest contextがない実行を表します。
 
 ## 指標
 
