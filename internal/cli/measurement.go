@@ -22,6 +22,7 @@ import (
 	"github.com/shrydev2020/gomcdc/v2/internal/loader"
 	"github.com/shrydev2020/gomcdc/v2/internal/report"
 	"github.com/shrydev2020/gomcdc/v2/internal/runtimecov"
+	"github.com/shrydev2020/gomcdc/v2/internal/testcover"
 	"github.com/shrydev2020/gomcdc/v2/internal/workspace"
 )
 
@@ -167,6 +168,35 @@ func measure(request measurementRequest, work *workspace.Workspace, stderr io.Wr
 		}
 	}
 
+	var testSources []testcover.Source
+	if request.needsC0 {
+		for _, source := range request.sources {
+			if source.inventory != nil && strings.HasSuffix(source.analysis.RelativePath, "_test.go") {
+				testSources = append(testSources, testcover.Source{
+					PackagePath: source.loaded.PackagePath, RelativePath: source.analysis.RelativePath,
+					CopyPath: filepath.Join(work.ModuleDir, filepath.FromSlash(source.analysis.RelativePath)),
+				})
+			}
+		}
+	}
+	testCounterDir := filepath.Join(work.RootDir, "test-counters")
+	if len(testSources) > 0 {
+		if err := os.MkdirAll(testCounterDir, 0o700); err != nil {
+			return outcome, err
+		}
+	}
+	var testCounters testcover.Session
+	if !outcome.interrupted && len(testSources) > 0 {
+		testCounters, err = testcover.Instrument(request.context, work.ModuleDir, request.loaded.ModulePath, testSources)
+		if err != nil {
+			if request.context.Err() != nil {
+				markInterrupted()
+			} else {
+				return outcome, fmt.Errorf("test-file coverage instrumentation failed: %w", err)
+			}
+		}
+	}
+
 	compilerToolchain := compileraware.Toolchain{}
 	if !outcome.interrupted && request.needsAST && request.compilerClauseSelection {
 		compilerToolchain, err = compileraware.Prepare(request.context, filepath.Join(work.RootDir, "tools"))
@@ -180,7 +210,7 @@ func measure(request measurementRequest, work *workspace.Workspace, stderr io.Wr
 	}
 
 	runID := ""
-	if !outcome.interrupted && request.needsAST {
+	if !outcome.interrupted && (request.needsAST || len(testSources) > 0) {
 		runID, err = newRunID()
 		if err != nil {
 			return outcome, fmt.Errorf("create coverage run ID: %w", err)
@@ -202,6 +232,10 @@ func measure(request measurementRequest, work *workspace.Workspace, stderr io.Wr
 			}
 		}
 		environment := map[string]string{"GOWORK": goWorkPath, "GOFLAGS": goFlags}
+		if len(testSources) > 0 {
+			environment[testcover.DataDirEnv] = testCounterDir
+			environment[testcover.RunIDEnv] = runID
+		}
 		if request.needsAST {
 			environment[runtimecov.RunIDEnv] = runID
 		}
@@ -309,6 +343,14 @@ func measure(request measurementRequest, work *workspace.Workspace, stderr io.Wr
 		outcome.integrityChecked = true
 		coverProfile := filepath.Join(work.RootDir, "cover.out")
 		profile, profileReadErr := readCoverProfile(coverProfile)
+		testProfile, testReadErr := testCounters.Collect(recoveryContext, testCounterDir, runID)
+		if outcome.testResult != nil && len(outcome.testResult.TestCoverDiagnostics) > 0 {
+			testReadErr = errors.Join(testReadErr, fmt.Errorf("test counter recorder: %s", strings.Join(outcome.testResult.TestCoverDiagnostics, "; ")))
+		}
+		profileReadErr = errors.Join(profileReadErr, testReadErr)
+		if profileReadErr == nil {
+			profile.Files = append(profile.Files, testProfile...)
+		}
 		plans, planErr := sourceCoveragePlans(recoveryContext, request.sources, instrumentationResults)
 		if planErr != nil {
 			return outcome, fmt.Errorf("coverage correspondence assembly failed: %w", planErr)

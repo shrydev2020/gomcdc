@@ -329,3 +329,14 @@ func writeExecutable(t *testing.T, path, contents string) {
 		t.Fatal(err)
 	}
 }
+
+func TestTestCoverDiagnosticsHaveIndependentOwnership(t *testing.T) {
+	writer := &eventWriter{}
+	writer.inspectOutput("gomcdc test cover diagnostic: counter write failed")
+	if len(writer.testCoverDiagnostics) != 1 || writer.testCoverDiagnostics[0] != "counter write failed" {
+		t.Fatalf("test counter diagnostics=%v", writer.testCoverDiagnostics)
+	}
+	if len(writer.runtimeDiagnostics) != 0 {
+		t.Fatalf("test counter error invalidated AST: %v", writer.runtimeDiagnostics)
+	}
+}

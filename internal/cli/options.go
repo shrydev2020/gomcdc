@@ -103,7 +103,7 @@ func parseOptions(args []string, errOut io.Writer) (options, error) {
 	fs.StringVar(&opts.format, "format", "text", "report format: text, json, or html")
 	fs.StringVar(&opts.output, "output", "", "report output file, or directory for html (default: stdout)")
 	fs.Var(&opts.excludes, "exclude", "exclude module-relative glob; repeatable; ** is supported")
-	fs.BoolVar(&opts.includeTests, "include-tests", false, "include active _test.go decisions in the denominator")
+	fs.BoolVar(&opts.includeTests, "include-tests", false, "include active _test.go files in all selected metrics")
 	fs.BoolVar(&opts.keepWorkDir, "keep-workdir", false, "keep the instrumented temporary workspace")
 	fs.BoolVar(&opts.strict, "strict", false, "fail when a requested source entity is unsupported, unknown, analysis-incomplete, or not instrumented")
 	fs.StringVar(&opts.workDirParent, "workdir", "", "parent directory for the temporary workspace")

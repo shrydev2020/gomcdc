@@ -76,11 +76,29 @@ func coverLayoutForMetadata(positions, counts []uint64) (CoverLayout, error) {
 }
 
 func coverMetadata(source []byte) ([]uint64, []uint64, error) {
+	return namedCoverMetadata(source, "GomcdcCoverLayout")
+}
+
+// ValidateCoverMetadata checks the actual selected Go tool's counters against
+// the planned producer inventory before accepting custom counter transport.
+func ValidateCoverMetadata(source []byte, name string, inventory FileInventory) error {
+	positions, counts, err := namedCoverMetadata(source, name)
+	if err != nil {
+		return err
+	}
+	if !matchesCoverMetadata(inventory, positions, counts) {
+		return fmt.Errorf("Go cover metadata differs from planned test-file inventory")
+	}
+	return nil
+}
+
+func namedCoverMetadata(source []byte, variable string) ([]uint64, []uint64, error) {
 	file, err := parser.ParseFile(token.NewFileSet(), "covered.go", source, 0)
 	if err != nil {
 		return nil, nil, err
 	}
 	var positions, counts []uint64
+	found := false
 	for _, decl := range file.Decls {
 		general, ok := decl.(*ast.GenDecl)
 		if !ok || general.Tok != token.VAR {
@@ -88,9 +106,10 @@ func coverMetadata(source []byte) ([]uint64, []uint64, error) {
 		}
 		for _, spec := range general.Specs {
 			value := spec.(*ast.ValueSpec)
-			if len(value.Names) != 1 || value.Names[0].Name != "GomcdcCoverLayout" || len(value.Values) != 1 {
+			if len(value.Names) != 1 || value.Names[0].Name != variable || len(value.Values) != 1 {
 				continue
 			}
+			found = true
 			literal, ok := value.Values[0].(*ast.CompositeLit)
 			if !ok {
 				return nil, nil, fmt.Errorf("Go cover metadata is not a composite literal")
@@ -128,7 +147,7 @@ func coverMetadata(source []byte) ([]uint64, []uint64, error) {
 			}
 		}
 	}
-	if len(counts) == 0 || len(positions) != len(counts)*3 {
+	if !found || len(positions) != len(counts)*3 {
 		return nil, nil, fmt.Errorf("Go cover metadata arrays have inconsistent lengths")
 	}
 	return positions, counts, nil

@@ -12,7 +12,7 @@ For one logical `gomcdc test` measurement request, the tool aggregates eleven me
 
 `gomcdc version` performs no measurement, writes the build identity to standard output, and exits with code 0. A module-version build uses `gomcdc vMAJOR.MINOR.PATCH` (or the complete Go module version); a local build uses `gomcdc devel`, optionally followed by the abbreviated VCS revision and `dirty`. Additional arguments are invalid CLI usage. The identity comes from Go build information and requires no linker flag.
 
-The target environment is Go 1.26.0 or later, Go Modules, Linux, and macOS. The compiler-aware backend applies an exact-anchor patch to the selected Go compiler source and fails explicitly when those anchors are incompatible. Later releases are not rejected by a Go version allowlist. Target sources are packages in the main module returned by `go list` for the supplied package patterns. The target set excludes the standard library, external modules, vendor, tool-generated sources, and sources with the standard Go generated-code comment. `_test.go` belongs to AST metrics only with `--include-tests`; that flag does not affect Statement or Function.
+The target environment is Go 1.26.0 or later, Go Modules, Linux, and macOS. The compiler-aware backend applies an exact-anchor patch to the selected Go compiler source and fails explicitly when those anchors are incompatible. Later releases are not rejected by a Go version allowlist. Target sources are packages in the main module returned by `go list` for the supplied package patterns. The target set excludes the standard library, external modules, vendor, tool-generated sources, and sources with the standard Go generated-code comment. `_test.go` belongs to all selected metrics, including Statement and Function, only with `--include-tests`. Active internal and external test files share the normal build-tag, generated-source, and exclusion rules.
 
 ## 2. Basic domains
 
@@ -241,6 +241,18 @@ test binary exactly once. Go cover, AST runtime, and compiler-aware producers
 observe that same physical execution. The report retains one run status,
 failure kind, and package-status map. Production has no dual-run fallback; the
 former v1 two-run behavior exists only as a deterministic test oracle.
+
+With `--include-tests`, the selected `go tool cover` also instruments test files
+which `go test -cover` omits. Its emitted counter metadata must exactly match the
+planned producer inventory, including AST rewrites, before instrumentation is
+accepted. Test counter transport records set membership, not execution counts.
+A separate file per source and process binds the run ID to a digest of package,
+source path, and instrumented contents. Initialized zero counters are published
+atomically; each first hit is committed synchronously before the source block
+executes. The collector validates identity, shape, and counter values and
+projects them through the same original-source correspondence as ordinary Go
+cover. Missing evidence after interruption remains unknown. No extra test run
+or test-exit callback is required.
 
 ## 7. Execution model
 

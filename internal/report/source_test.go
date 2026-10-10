@@ -151,3 +151,32 @@ func BenchmarkSourceIntervalsSweepLine(b *testing.B) {
 		_ = sourceIntervals(view)
 	}
 }
+
+func BenchmarkSourceIntervalsOutputSize(b *testing.B) {
+	for _, overlap := range []bool{false, true} {
+		name := "disjoint"
+		if overlap {
+			name = "nested"
+		}
+		b.Run(name, func(b *testing.B) {
+			const count = 1000
+			view := SourceFileView{Source: strings.Repeat("x", count*2), Annotations: make([]SourceAnnotation, count)}
+			for index := range view.Annotations {
+				start, end := index*2, index*2+1
+				if overlap {
+					start, end = index, count*2-index
+				}
+				view.Annotations[index] = SourceAnnotation{StartOffset: start, EndOffset: end}
+			}
+			output := 0
+			for _, interval := range sourceIntervals(view) {
+				output += len(interval.anns)
+			}
+			b.ReportAllocs()
+			for b.Loop() {
+				_ = sourceIntervals(view)
+			}
+			b.ReportMetric(float64(output), "annotation-references/op")
+		})
+	}
+}
