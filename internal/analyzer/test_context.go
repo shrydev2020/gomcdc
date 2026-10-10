@@ -13,6 +13,7 @@ import (
 type TestContexts struct {
 	Entries   map[int]TestEntry
 	Callbacks map[int]TestCallback
+	Methods   map[int]string
 	Examples  map[int]string
 }
 
@@ -27,11 +28,11 @@ type TestCallback struct {
 }
 
 func (contexts TestContexts) Empty() bool {
-	return len(contexts.Entries)+len(contexts.Callbacks)+len(contexts.Examples) == 0
+	return len(contexts.Entries)+len(contexts.Callbacks)+len(contexts.Methods)+len(contexts.Examples) == 0
 }
 
 func AnalyzeTestContexts(fset *token.FileSet, file *ast.File, info *types.Info) TestContexts {
-	contexts := TestContexts{Entries: make(map[int]TestEntry), Callbacks: make(map[int]TestCallback), Examples: make(map[int]string)}
+	contexts := TestContexts{Entries: make(map[int]TestEntry), Callbacks: make(map[int]TestCallback), Methods: make(map[int]string), Examples: make(map[int]string)}
 	if info == nil {
 		return contexts
 	}
@@ -62,30 +63,36 @@ func AnalyzeTestContexts(fset *token.FileSet, file *ast.File, info *types.Info) 
 			entry(current.Type, current.Body)
 		case *ast.FuncLit:
 			entry(current.Type, current.Body)
+		case *ast.SelectorExpr:
+			selection := info.Selections[current]
+			if selection == nil || selection.Kind() != types.MethodVal || selection.Obj().Pkg() == nil || selection.Obj().Pkg().Path() != "testing" {
+				return true
+			}
+			signature := selection.Obj().Type().(*types.Signature)
+			switch selection.Obj().Name() {
+			case "Run":
+				if handleName(signature.Recv().Type()) == "T" {
+					contexts.Methods[offset(current.Pos())] = "Run"
+				}
+			case "Cleanup":
+				contexts.Methods[offset(current.Pos())] = "RegisterCleanup"
+			}
 		case *ast.CallExpr:
 			selector, ok := current.Fun.(*ast.SelectorExpr)
 			if !ok {
 				return true
 			}
 			selection := info.Selections[selector]
-			if selection == nil || !isTestHandle(selection.Recv()) || selection.Obj().Pkg() == nil || selection.Obj().Pkg().Path() != "testing" {
+			if selection == nil || selection.Kind() != types.MethodExpr || selection.Obj().Pkg() == nil || selection.Obj().Pkg().Path() != "testing" {
 				return true
 			}
 			switch selection.Obj().Name() {
 			case "Run":
-				if handleName(selection.Recv()) == "T" {
-					index := 1
-					if selection.Kind() == types.MethodExpr {
-						index++
-					}
-					contexts.Callbacks[offset(current.Pos())] = TestCallback{Method: "Test", Argument: index}
+				if handleName(selection.Obj().Type().(*types.Signature).Recv().Type()) == "T" {
+					contexts.Callbacks[offset(current.Pos())] = TestCallback{Method: "Test", Argument: 2}
 				}
 			case "Cleanup":
-				index := 0
-				if selection.Kind() == types.MethodExpr {
-					index++
-				}
-				contexts.Callbacks[offset(current.Pos())] = TestCallback{Method: "Cleanup", Argument: index}
+				contexts.Callbacks[offset(current.Pos())] = TestCallback{Method: "Cleanup", Argument: 1}
 			}
 		}
 		return true

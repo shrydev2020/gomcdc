@@ -877,6 +877,18 @@ func (hooks Hooks) Cleanup(callback func()) func() {
 	}
 }
 
+func (hooks Hooks) Run(run func(string, func(*testing.T)) bool) func(string, func(*testing.T)) bool {
+	return func(name string, callback func(*testing.T)) bool {
+		return run(name, hooks.Test(callback))
+	}
+}
+
+func (hooks Hooks) RegisterCleanup(register func(func())) func(func()) {
+	return func(callback func()) {
+		register(hooks.Cleanup(callback))
+	}
+}
+
 func BeginDecision(decisionID uint64, conditionCount uint16) (evaluationID uint64) {
 	defer func() { _ = recover() }()
 	NewHooks("unknown").BeginInto(&evaluationID, decisionID, conditionCount)

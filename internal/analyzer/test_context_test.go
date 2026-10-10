@@ -70,7 +70,7 @@ func ExampleDocumentationOnly() {}
 			}
 		}
 	}
-	if len(contexts.Callbacks) != 5 {
+	if len(contexts.Callbacks) != 2 || len(contexts.Methods) != 3 {
 		t.Fatalf("typed callbacks=%v, want Run/Cleanup only", contexts.Callbacks)
 	}
 	if len(contexts.Examples) != 1 {

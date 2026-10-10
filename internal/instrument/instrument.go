@@ -25,6 +25,7 @@ import (
 	"github.com/shrydev2020/gomcdc/v2/internal/c0"
 	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
 	"github.com/shrydev2020/gomcdc/v2/internal/transformmap"
+	"golang.org/x/tools/go/ast/astutil"
 )
 
 const defaultHelperBase = "__gomcdcHooks"
@@ -1135,6 +1136,17 @@ func (transformer *fileTransformer) transform(file *ast.File) error {
 			if callback.Method != "" && index >= 0 && index < len(current.Args) {
 				current.Args[index] = &ast.CallExpr{Fun: &ast.SelectorExpr{X: ast.NewIdent(transformer.helperName), Sel: ast.NewIdent(callback.Method)}, Args: []ast.Expr{current.Args[index]}}
 			}
+		}
+		return true
+	})
+	astutil.Apply(file, nil, func(cursor *astutil.Cursor) bool {
+		selector, ok := cursor.Node().(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		method := transformer.testContexts.Methods[transformer.fset.PositionFor(selector.Pos(), false).Offset]
+		if method != "" {
+			cursor.Replace(&ast.CallExpr{Fun: &ast.SelectorExpr{X: ast.NewIdent(transformer.helperName), Sel: ast.NewIdent(method)}, Args: []ast.Expr{selector}})
 		}
 		return true
 	})
