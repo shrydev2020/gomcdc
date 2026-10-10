@@ -2,8 +2,9 @@
 
 Merging a pull request into `master` updates the next release draft with Release
 Drafter. The next version defaults to a patch; the `enhancement` label selects a
-minor version. Until the first GitHub Release exists, the latest v2 tag supplies
-the comparison baseline and the next patch version.
+minor version. Until the first GitHub Release exists, the nearest preceding Git
+tag supplies the comparison baseline; the standard SemVer CLI calculates the
+next patch version.
 
 To release:
 
