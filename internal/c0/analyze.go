@@ -246,6 +246,9 @@ func cloneAndValidateInventory(ctx context.Context, inventory *FileInventory) (*
 		if block.Statements < 0 {
 			return nil, fmt.Errorf("block %d has negative NumStmt %d", index, block.Statements)
 		}
+		if block.CoverStatements < 0 || block.CoverStatements != 0 && block.CoverStatements < block.Statements {
+			return nil, fmt.Errorf("block %d has invalid producer statement count %d", index, block.CoverStatements)
+		}
 		cloned.Blocks[index] = block
 		cloned.Blocks[index].ProfileAnchors = append([]Position(nil), block.ProfileAnchors...)
 		cloned.Blocks[index].StatementUnits = append([]InventoryStatement(nil), block.StatementUnits...)
@@ -275,6 +278,7 @@ func equalInventory(left, right *FileInventory) bool {
 			leftBlock.ProfileFile != rightBlock.ProfileFile ||
 			leftBlock.ProfileRange != rightBlock.ProfileRange ||
 			leftBlock.Statements != rightBlock.Statements ||
+			leftBlock.CoverStatements != rightBlock.CoverStatements ||
 			len(leftBlock.ProfileAnchors) != len(rightBlock.ProfileAnchors) ||
 			len(leftBlock.StatementUnits) != len(rightBlock.StatementUnits) {
 			return false

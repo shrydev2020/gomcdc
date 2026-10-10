@@ -145,6 +145,13 @@ func InstrumentPackage(options PackageOptions) (PackageResult, error) {
 	if err != nil {
 		return PackageResult{}, fmt.Errorf("instrument package: select helper name: %w", err)
 	}
+	var coverLayout c0.CoverLayout
+	if options.PlanCoverageCorrespondence {
+		coverLayout, err = c0.DetectCoverLayout(ctx)
+		if err != nil {
+			return PackageResult{}, err
+		}
+	}
 
 	type transformedFile struct {
 		path string
@@ -185,7 +192,7 @@ func InstrumentPackage(options PackageOptions) (PackageResult, error) {
 			transformations = append(transformations, transformation)
 			if planCoverage {
 				correspondence, err := planRewrittenCoverageCorrespondence(
-					ctx, options.PackagePath, mapping.Analysis.RelativePath, originalInventory, contents, nil,
+					ctx, options.PackagePath, mapping.Analysis.RelativePath, originalInventory, contents, nil, coverLayout,
 				)
 				if err != nil {
 					return PackageResult{}, fmt.Errorf("plan coverage for copied file %q: %w", mapping.CopyPath, err)
@@ -207,7 +214,7 @@ func InstrumentPackage(options PackageOptions) (PackageResult, error) {
 				filepath.ToSlash(filepath.Join(filepath.Dir(mapping.Analysis.RelativePath), transformation.CompilerFile)),
 			}
 			correspondence, err := planRewrittenCoverageCorrespondence(
-				ctx, options.PackagePath, mapping.Analysis.RelativePath, originalInventory, data, generatedProfileFiles,
+				ctx, options.PackagePath, mapping.Analysis.RelativePath, originalInventory, data, generatedProfileFiles, coverLayout,
 			)
 			if err != nil {
 				return PackageResult{}, fmt.Errorf("instrument copied file %q: %w", mapping.CopyPath, err)
@@ -259,8 +266,9 @@ func planRewrittenCoverageCorrespondence(
 	originalInventory c0.FileInventory,
 	rewritten []byte,
 	generatedProfileFiles []string,
+	layout c0.CoverLayout,
 ) (c0.CoverageCorrespondence, error) {
-	rewrittenInventory, err := c0.BuildInventory(originalPath, rewritten)
+	rewrittenInventory, err := c0.BuildProducerInventory(originalPath, rewritten, layout)
 	if err != nil {
 		return c0.CoverageCorrespondence{}, fmt.Errorf("build rewritten coverage inventory: %w", err)
 	}

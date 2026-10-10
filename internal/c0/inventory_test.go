@@ -12,7 +12,7 @@ import (
 	"github.com/shrydev2020/gomcdc/v2/internal/c0"
 )
 
-func TestBuildInventoryMatchesGoTestCoverProfile(t *testing.T) {
+func TestProducerInventoryMatchesGoTestCoverProfile(t *testing.T) {
 	t.Parallel()
 
 	const source = `package fixture
@@ -46,6 +46,20 @@ func Exercise(value int) int {
 }
 
 func Empty() {}
+
+func Gapped() int {
+	value := 1
+
+	// A separate code range in the same basic block.
+	value += 2
+	const (
+		first = 3
+
+		second = 4
+	)
+	value += first + second
+	return value
+}
 `
 	const testSource = `package fixture
 
@@ -54,6 +68,9 @@ import "testing"
 func TestExercise(t *testing.T) {
 	if got := Exercise(1); got != 2 {
 		t.Fatalf("Exercise(1) = %d", got)
+	}
+	if Gapped() != 10 {
+		t.Fatal("unexpected gapped result")
 	}
 }
 `
@@ -77,7 +94,11 @@ func TestExercise(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseProfile: %v", err)
 	}
-	inventory, err := c0.BuildInventory("fixture.go", []byte(source))
+	layout, err := c0.DetectCoverLayout(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	inventory, err := c0.BuildProducerInventory("fixture.go", []byte(source), layout)
 	if err != nil {
 		t.Fatalf("BuildInventory: %v", err)
 	}
@@ -88,7 +109,11 @@ func TestExercise(t *testing.T) {
 	}
 	got := make([]blockShape, 0, len(inventory.Blocks))
 	for _, block := range inventory.Blocks {
-		got = append(got, blockShape{position: block.ProfileRange, statements: block.Statements})
+		statements := block.Statements
+		if block.CoverStatements != 0 {
+			statements = block.CoverStatements
+		}
+		got = append(got, blockShape{position: block.ProfileRange, statements: statements})
 	}
 	var want []blockShape
 	for _, file := range profile.Files {

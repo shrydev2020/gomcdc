@@ -20,12 +20,9 @@ that same execution; there is no production dual-run fallback.
 
 ## Requirements
 
-- Go 1.26.x (1.26.0 or later)
+- Go 1.26.0 or later
 - A target using Go Modules
 - Linux or macOS
-
-The compiler-aware instrumentation validates exact anchors in the selected Go
-1.26.x compiler source and fails explicitly if that source is incompatible.
 
 ## Install
 

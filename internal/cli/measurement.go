@@ -522,6 +522,8 @@ func sourceCoveragePlans(
 	}
 
 	plans := make([]c0.SourceCoveragePlan, 0, len(sources))
+	var coverLayout c0.CoverLayout
+	layoutReady := false
 	for _, source := range sources {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -532,11 +534,23 @@ func sourceCoveragePlans(
 		originalPath := filepath.ToSlash(filepath.Clean(source.analysis.RelativePath))
 		correspondence, instrumented := correspondences[originalPath]
 		if !instrumented {
+			if !layoutReady {
+				var err error
+				coverLayout, err = c0.DetectCoverLayout(ctx)
+				if err != nil {
+					return nil, err
+				}
+				layoutReady = true
+			}
+			producerInventory, err := c0.BuildProducerInventory(originalPath, source.analysis.Source, coverLayout)
+			if err != nil {
+				return nil, err
+			}
 			identity, err := c0.PlanCoverageCorrespondence(ctx, c0.CorrespondencePlanInput{
 				PackagePath:  source.loaded.PackagePath,
 				OriginalPath: originalPath,
 				Original:     *source.inventory,
-				Rewritten:    *source.inventory,
+				Rewritten:    producerInventory,
 			})
 			if err != nil {
 				return nil, fmt.Errorf("plan identity coverage correspondence for %q: %w", originalPath, err)

@@ -35,6 +35,9 @@ type CoverRegion struct {
 	// Statements is the expected Go cover NumStmt for producer
 	// compatibility. It never defines the original-source denominator.
 	Statements int
+	// SourceStatements records the statement units in a split producer range
+	// whose NumStmt still counts its enclosing basic block. Zero means unsplit.
+	SourceStatements int
 }
 
 // RegionCorrespondence records the logical guarantee made by one cover
@@ -160,12 +163,19 @@ func validateRegionCorrespondence(correspondence RegionCorrespondence) error {
 			len(correspondence.Obligations),
 		)
 	}
+	sourceStatements := correspondence.Region.Statements
+	if split := correspondence.Region.SourceStatements; split != 0 {
+		if split < 0 || split > correspondence.Region.Statements {
+			return fmt.Errorf("invalid split cover region statement count: %d", split)
+		}
+		sourceStatements = split
+	}
 	if (correspondence.Relation == CorrespondenceExact || correspondence.Relation == CorrespondenceCoversAll) &&
-		correspondence.Region.Statements != len(correspondence.Obligations) {
+		sourceStatements != len(correspondence.Obligations) {
 		return fmt.Errorf(
-			"projectable relation %q has Go cover statement count %d but %d original obligations",
+			"projectable relation %q has source statement count %d but %d original obligations",
 			correspondence.Relation,
-			correspondence.Region.Statements,
+			sourceStatements,
 			len(correspondence.Obligations),
 		)
 	}

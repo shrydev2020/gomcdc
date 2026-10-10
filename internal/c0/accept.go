@@ -50,13 +50,19 @@ type AcceptedSourceEvidence struct {
 	Blocks         []AcceptedBlockEvidence
 }
 
-// AcceptedBlockEvidence projects rewritten cover regions back to one original
-// Go cover block. Count comes from the region owning statement index zero,
-// which is the original block-entry counter location.
+// AcceptedBlockEvidence retains the original block-entry count. Statements
+// carries individual evidence when split producer ranges differ; an entry
+// counter must not credit a later range that was never reached.
 type AcceptedBlockEvidence struct {
 	BlockIndex int
 	Count      uint64
 	Observed   bool
+	Statements []AcceptedStatementEvidence
+}
+
+type AcceptedStatementEvidence struct {
+	Count    uint64
+	Observed bool
 }
 
 type plannedRegionRef struct {
@@ -262,6 +268,9 @@ func AcceptProfileEvidence(
 				)
 			}
 			observed := entryRegion.observed
+			statements := make([]AcceptedStatementEvidence, block.Statements)
+			statements[0] = AcceptedStatementEvidence{Count: entryRegion.count, Observed: entryRegion.observed}
+			uniform := true
 			for statementIndex := 1; statementIndex < block.Statements; statementIndex++ {
 				obligation := entry
 				obligation.StatementIndex = statementIndex
@@ -275,9 +284,15 @@ func AcceptProfileEvidence(
 					)
 				}
 				observed = observed && region.observed
+				statements[statementIndex] = AcceptedStatementEvidence{Count: region.count, Observed: region.observed}
+				uniform = uniform && statements[statementIndex] == statements[0]
+			}
+			if uniform {
+				statements = nil
 			}
 			source.Blocks = append(source.Blocks, AcceptedBlockEvidence{
 				BlockIndex: blockIndex, Count: entryRegion.count, Observed: observed,
+				Statements: statements,
 			})
 		}
 		accepted.Sources[planIndex] = source
@@ -361,6 +376,30 @@ func ProjectAcceptedEvidence(ctx context.Context, modulePath string, accepted Ac
 				)
 			}
 			evidence := blockEvidence[blockIndex]
+			if len(evidence.Statements) > 0 {
+				if len(evidence.Statements) != inventoryBlock.Statements {
+					return Report{}, fmt.Errorf("project accepted cover evidence %q: block %d has inconsistent statement evidence", originalPath, blockIndex)
+				}
+				for first := 0; first < len(evidence.Statements); {
+					last := first + 1
+					for last < len(evidence.Statements) && evidence.Statements[last] == evidence.Statements[first] {
+						last++
+					}
+					span := inventoryBlock.PhysicalRange
+					if first != 0 {
+						span.Start = inventoryBlock.StatementUnits[first].PhysicalPosition
+					}
+					if last < len(evidence.Statements) {
+						span.End = inventoryBlock.StatementUnits[last].PhysicalPosition
+					}
+					blocks = append(blocks, analyzedProfileBlock{
+						profile:  ProfileBlock{Position: span, Statements: last - first, Count: evidence.Statements[first].Count},
+						evidence: evidence.Statements[first].Observed,
+					})
+					first = last
+				}
+				continue
+			}
 			blocks = append(blocks, analyzedProfileBlock{
 				profile:  ProfileBlock{Position: inventoryBlock.PhysicalRange, Statements: inventoryBlock.Statements, Count: evidence.Count},
 				evidence: evidence.Observed,

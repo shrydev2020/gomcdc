@@ -19,12 +19,9 @@ test失敗や中断時も検証可能なpartial resultを保持します。
 
 ## 動作要件
 
-- Go 1.26.x（1.26.0以降）
+- Go 1.26.0以降
 - Go Modulesを使用する計測対象
 - LinuxまたはmacOS
-
-compiler-aware計装は選択されたGo 1.26.xのcompiler sourceにexact anchorが存在する
-ことを検証し、互換性がなければ明示的に失敗します。
 
 ## インストール
 

@@ -12,7 +12,7 @@
 
 `gomcdc version` は計測を行わず、build identityを標準出力へ書き、終了code 0を返す。module versionからbuildした場合は `gomcdc vMAJOR.MINOR.PATCH`（または完全なGo module version）、local buildでは `gomcdc devel` に省略VCS revisionと `dirty` を必要に応じて付加する。追加argumentはinvalid CLI usageである。identityはGo build informationから取得し、linker flagを必要としない。
 
-対象は安定版Go 1.26.x（1.26.0以降）、Go Modules、Linux、macOS とする。compiler-aware backendは選択されたGo compiler sourceへexact-anchor patchを適用し、anchorに互換性がなければ明示的に失敗する。対象 source は package pattern を `go list` して得た main module 内の package である。標準 library、外部 module、vendor、本ツール生成source、Go標準形式のgenerated-code commentを持つsourceは対象集合に含めない。`_test.go` は `--include-tests` 指定時だけ AST 系指標へ含め、このflagはStatement/Functionへ影響しない。
+対象はGo 1.26.0以降、Go Modules、Linux、macOS とする。compiler-aware backendは選択されたGo compiler sourceへexact-anchor patchを適用し、anchorに互換性がなければ明示的に失敗する。Go versionのallowlistで後続releaseを拒否しない。対象 source は package pattern を `go list` して得た main module 内の package である。標準 library、外部 module、vendor、本ツール生成source、Go標準形式のgenerated-code commentを持つsourceは対象集合に含めない。`_test.go` は `--include-tests` 指定時だけ AST 系指標へ含め、このflagはStatement/Functionへ影響しない。
 
 ## 2. 基本領域
 
@@ -113,7 +113,7 @@ fallthrough による後続 body 到達は body-execution であり、後続 cla
 
 ### D12. Statement Coverage
 
-Go cover profile block の statement count の各 unit を obligation とする。block counter が0より大きいとき、その block の全 unit を covered とする。詳細単位は元 source range、statement count、counter を持つ statement region である。
+変更前の元source inventoryのstatement unitをobligationとする。各unitに対応する受理済みGo cover counterが0より大きいときcoveredとする。producerがbasic blockを複数regionへ分割しても、NumStmtの重複によって元sourceの分母を増やさない。異なるcounterを持つunitは別々のstatement regionとして表示する。詳細単位は元 source range、statement count、counter を持つ statement region である。
 
 ### D13. Function Coverage
 
@@ -195,7 +195,7 @@ module、package、file、function、decision、condition、clause の各階層�
 
 ### D21. Evidence authority
 
-Statement と Function の証拠は元 source を対象とした Go standard cover が生成する。Decision、Condition、MC/DC、3種の Clause Body は AST backend、2種の Clause Selection は compiler-aware backend が生成する。
+Statement と Function の証拠は元 source を対象とした Go standard cover が生成する。選択されたGo coverの座標系とcode range分割は、実際の計装出力から識別する。producerのNumStmtと元sourceのstatement obligation数を分離し、物理座標で出力されるregionでも各statementの論理source identityを保持する。分割されたregionのcounterはstatement単位で保持し、先行counterから未到達の後続regionをcoveredにしない。Decision、Condition、MC/DC、3種の Clause Body は AST backend、2種の Clause Selection は compiler-aware backend が生成する。
 
 変更前の元source Inventoryを唯一のdenominator authorityとする。raw producer出力はintegrity、provenance、producer compatibility、correspondence mapping、実行completenessを検証した後にだけcoverage evidenceとなる。受理済みevidenceを元Inventory obligationへ射影し、生成statementをobligationへ追加しない。
 
@@ -343,7 +343,7 @@ HTMLは各producerのintegrity、completeness、mapping、usabilityをoverall ru
 
 `go test -count=1 ./...`、`go test -race -count=1 ./...`、`go vet ./...` が成功し、fixture module の module 集計と package 集計の整数和が一致することを完成条件とする。
 
-repository CI は最新の安定版Go 1.26.x/Linuxでgomcdc自身を計測し、`.github/self-mcdc-baseline.json` のmoduleおよびcritical package別floorを検証する。このbaselineは仕様上のcoverage適合閾値ではなく、検証済みtest suiteからの後退を防ぐ保守契約である。floorを下げる変更は、失われるobligationと理由を明示してreviewしなければならない。
+repository CI はGo 1.26.xと1.27.xで受け入れsuiteを実行する。最新の安定版Go/Linuxでgomcdc自身を計測し、`.github/self-mcdc-baseline.json` のmoduleおよびcritical package別floorを検証する。このbaselineは仕様上のcoverage適合閾値ではなく、検証済みtest suiteからの後退を防ぐ保守契約である。floorを下げる変更は、失われるobligationと理由を明示してreviewしなければならない。
 
 ## 11. 参考資料
 
