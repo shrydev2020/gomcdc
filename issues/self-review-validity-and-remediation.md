@@ -1,5 +1,12 @@
 # セルフレビューの妥当性と修正計画
 
+## 現行版との差分（2026-10-11）
+
+以下は初回レビューと改善履歴を含む。今回の対応と検証根拠は
+[カバレッジ機能の再検証](coverage-gaps-2026-10.md)にまとめた。
+現行v2はsingle-run、Masking上限はCLI指定可能、HTMLはsweep-line、workspaceは
+対応filesystemでcopy-on-writeを使う。`--include-tests`はStatement/Functionも含む。
+
 ## 結論
 
 提示されたセルフレビューは、問題の所在をほぼ正しく捉えている。ただし、
@@ -12,10 +19,10 @@
 | CLI orchestration | 妥当 | `internal/cli/cli.go` の `runCoverage` がロード、AST解析、workspace管理、計測順序、C0収集、runtime検証、report入力構築、閾値判定、出力を一つの関数で担当している。 |
 | report builder | 妥当 | `internal/report/report.go` の `Build` と補助関数群が、証拠の索引化、階層構築、メトリクス集計、状態分類、source view接続を担当している。 |
 | MC/DC探索 | 部分的に妥当 | Unique-Causeのpair探索は `O(C × E²)`。Maskingは候補pairごとの式評価・completionもあるため、一般には `O(C × E² × S)`（`S` は式木サイズ）であり、`S≈C` なら `O(E² × C²)` まで増える。 |
-| HTML注釈 | 妥当だが下限に注意 | `sourceIntervals` は境界ごとに全注釈を走査するため、区間生成は最悪 `O(A²)`。sweep-lineで走査は改善できるが、重なり結果を全てHTMLへ出すなら出力サイズ `K` 自体が最悪 `O(A²)` になる。 |
-| runtime event記録 | 妥当 | `recordMu` を保持したままJSON marshal、ファイルwrite、一定回数ごとのcompactionを行うため、goroutine数とイベント量に応じて競合・I/O待ちが増える。 |
-| workspace copy | 妥当 | 現在はmodule treeを毎回全コピーする。単純なhardlinkは計装時の書き込みが元sourceへ波及するため不適切。 |
-| dual-run | 「ボトルネック」ではあるが現状は仕様どおり | C0は元sourceのGo標準cover、AST系は計装workspaceで取得するため、両方を選ぶと2 runになる。仕様D22がこの動作を明示しており、削除は最適化ではなく証拠モデルの変更になる。 |
+| HTML注釈 | 改善済み、出力下限は残る | `sourceIntervals` はsweep-line。境界処理は `O(A log A)`、重複注釈出力は `O(K)`。全ての重複を表示する出力サイズ `K` 自体は最悪 `O(A²)`。 |
+| runtime event記録 | 改善済み、同期I/Oは残る | active evaluationを64 shardへ分割し、writerはpackageごとに直列化する。checkpointはtail byte量に応じて適応的に行う。 |
+| workspace copy | 改善済み | treeは毎回走査するが、対応filesystemでは独立inodeのcopy-on-writeを使用する。非対応時は通常copy。 |
+| dual-run | v2で解消済み | 現行D22はsingle-run。計装前後のcoverage correspondenceを検証し、同一実行の証拠を統合する。 |
 
 ## ライセンスの現状
 
@@ -84,8 +91,8 @@ HTML source viewは引き続き`WriteHTMLReport`の投影処理だけが担当�
 
 ## 性能評価と修正計画
 
-現状には専用benchmarkがないため、下記の計算量はコードからの分析であり、実測値
-ではない。最適化前に代表的なfixtureと人工的な最悪ケースをbenchmarkへ追加する。
+初回レビュー時の計算量分析を基にbenchmarkを追加した。以下の過去計測値と、
+2026-10-11の再検証値は別の実装・実行条件なので直接比較しない。
 
 ### PERF-001 MC/DC評価pair探索
 
@@ -102,8 +109,9 @@ path constraintで不要なassignmentを展開せず完了することを回帰�
 この項目の実装とbenchmarkを完了とする。
 
 **現状:** `mcdc.UniqueCauseStrategy` はtarget以外の状態vector索引を使用する。
-`MaskingStrategy` はcompletion列挙を一度行い、pairごとの式木再走査を避ける。
-completion列挙自体は一般に指数的だが、短絡pathとpivotal pathの制約で探索空間を削減する。
+Maskingはread-once AND/OR/NOT式に対する厳密なjoint searchであり、completion pairの
+Cartesian productを列挙しない。obligationごとのpair/state/solver-byte上限はCLIで
+変更可能。上限到達は`analysis-incomplete`となり、通常の未達やinfeasibleへ変換しない。
 
 **修正計画:**
 
@@ -120,18 +128,13 @@ completion列挙自体は一般に指数的だが、短絡pathとpivotal pathの
 
 ### PERF-002 HTML source annotation
 
-**現状:** `sourceIntervals` は全境界をsortした後、各intervalについて全annotationを
-調べる。注釈数を `A` とすると区間生成は最悪 `O(A²)`。
+**実施状況:** start/end eventをsortするsweep-lineへ置換済み。active集合を
+イベント単位で更新し、非重複caseのbenchmarkと重複区間の回帰テストがある。
+境界処理は`O(A log A)`、active集合の出力は`O(K)`。さらにintervalごとの注釈struct
+複製を参照共有へ変更し、重複fixtureの割り当て量を約119 MBから約9 MBへ削減した。
 
-**修正計画:** start/end eventをsortするsweep-lineへ置き換え、active annotationの
-更新をイベント単位で行う。active集合の出力順は現在の決定論的順序を維持する。
-
-ただし、重なりを個別tooltipとして出力する限り、出力されるactive組合せ数 `K` は
-最悪 `O(A²)` であり、アルゴリズムだけでHTML全体を常に `O(A log A)` にはできない。
-重複表示を減らす場合は表示仕様の変更として別途承認する。
-
-**完了条件:** source annotationのbyte範囲、metric class、tooltip、HTML snapshotが
-変わらず、非重複ケースの生成時間と重複ケースの出力サイズを別々に計測できる。
+重複情報を全て表示する場合の出力サイズ`K`は最悪`O(A²)`になる。これは残っている
+全注釈走査ではなく、出力そのものの下限である。注釈情報を省略する変更は行わない。
 
 ### PERF-003 runtime event記録
 
@@ -145,10 +148,11 @@ terminal recordを書き込んでからactive stateを削除することで、co
 compaction、recorder failure fixtureと通常/raceの全テストを通過している。collector benchmarkは維持し、writerの
 単独マイクロベンチマークは別途追加しない限り速度改善の定量根拠にはしない。
 
-**現状:** `internal/runtimecov` は `activeMu`、`writersMu`、`diagnosticMu` と
-packageごとの `writerState.mu` で共有状態を保護する。Conditionはactive stateの
-短い更新だけをロックし、Begin/terminal/clause eventの同期I/Oとcompactionは対象
-packageのwriterだけを直列化する。非同期channelへ置き換えてはいない。
+**現状:** active evaluationを評価IDによる64 shardへ分割し、Condition更新が全体の
+mutexを奪い合わないようにした。writer mapはread lockで参照し、未作成時だけwrite
+lockを取得する。Begin/terminal/clause eventの同期I/Oとcompactionは対象packageの
+writerだけを直列化する。非同期channelへは置き換えず、process異常終了時の回収を維持する。
+生成runtimeのwriter benchmarkと並行condition benchmarkも現在は存在する。
 
 **修正計画:**
 
@@ -167,26 +171,14 @@ runtime eventが失われず、`go test -race ./...` が通ること。writerの
 
 ### PERF-004 workspace copy
 
-**実施状況:** 200 regular files（各ファイル約40 bytes）のmoduleを作るbenchmarkを追加し、
-Apple M2 Proで `35.0 ms/op`、`6.9 MB/op`、`3,888 allocs/op` を観測した。hardlinkは
-計装時の書き込みを元sourceへ伝播させるため採用しない。reflinkはOS依存のため、利用可能性
-検出とsymlink・mode・cleanupを含むfixtureを先に用意するまで変更しない。
+**実施状況:** macOSのclonefile、LinuxのFICLONEによるcopy-on-writeを追加した。
+利用不可なら既存streaming copyへ戻す。hardlinkは使わない。source bytesとmode、
+symlinkのtree内制限、relative replace、cleanupの既存テストに加え、inode独立性と
+copyへの書込みが元sourceを変えないこと、既存destinationを上書きしないことを検証する。
 
-**現状:** `workspace.copyTree` はmodule全体のregular fileを毎回コピーする。AST計装
-がcopyへ書き込むため、単純なhardlinkは元sourceの変更を引き起こし、意味保存条件に
-反する。
-
-**修正計画:**
-
-- まずcopy対象のファイル数、byte数、所要時間を記録する。
-- 利用可能な場合だけOSのreflink/copy-on-writeを使い、失敗時は通常copyへ戻す。
-- 差分コピーを導入する場合は、削除、rename、symlink、mode、relative replace、
-  module外参照を含むfixtureを用意する。
-- hardlinkを使う場合は、書き込み対象を完全に別inodeへ分離する仕組みが必要であり、
-  `os.Link`だけの実装は許可しない。
-
-**完了条件:** source bytes、mode、symlink境界、計装結果、cleanupが現状と同じで、
-  コピー時間またはI/O量の改善を実測できる。
+16 MiB fileのmacOS計測では0.150–0.198 ms/op、streamingでは28.94–34.70 ms/opだった。
+64 B fileでは時間短縮を確認していない。詳細は再検証文書を参照する。tree走査は毎回行い、
+差分cacheは追加していない。
 
 ### PERF-006 test harness build cache
 
@@ -201,21 +193,15 @@ test result再利用禁止は維持したまま、build cacheだけを共有す�
 
 ### PERF-005 dual-runの扱い
 
-**判定:** 直ちに削除・統合しない。仕様D22は、C0とAST系を同時に要求したとき、
-元source runと計装runを一回ずつ実行し、run statusを分離することを定義している。
-これは単なる重複実行ではなく、異なるevidence producerを同じsource modelへ統合する
-ための境界である。
+**状態:** v2で完了。現行仕様D22はsingle-runを定義する。Statement/Functionの元source
+inventoryと計装後Go cover regionのcorrespondenceを実行前に構築し、同じtest実行から
+C0/AST/compiler-selectionを取得する。証拠はproducer単位で検証・受理する。
 
-**計画:**
+integration fixtureの実行markerでpackageごとに一回の実行を確認し、v1 dual-runの
+比較oracleでC0/ASTの意味が一致することを検証する。`--include-tests`追加後も一回の
+実行を維持する。
 
-1. dual-runのworkspace作成、build、test、C0解析、AST収集それぞれを計測する。
-2. 仕様D32のAST-only 2倍以内、両MC/DC込み5倍以内という目標と比較する。
-3. 同一processで両証拠を得る方法を検討するのは、Go cover profileとAST計装の干渉を
-   fixtureで証明できる場合だけにする。
-4. 実行回数を減らす変更は、side effect、panic、defer、test cache、package failure、
-   C0/ASTの証拠帰属を再検証してから別issueで提案する。
-
-## 実施順序
+## 初回計画時の実施順序（履歴）
 
 1. **L-001:** プロジェクトライセンスの決定（完了: MIT License）。
 2. **計測基盤:** MC/DC、HTML、runtime、workspace、dual-runのbenchmarkを追加する。

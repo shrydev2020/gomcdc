@@ -268,7 +268,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 			continue
 		}
 		var inventory *c0.FileInventory
-		if needsC0 && !strings.HasSuffix(analysis.RelativePath, "_test.go") {
+		if needsC0 {
 			builtInventory, inventoryErr := c0.BuildInventory(analysis.RelativePath, analysis.Source)
 			if inventoryErr != nil {
 				fmt.Fprintf(stderr, "gomcdc: C0 inventory failed %q: %v\n", relative, inventoryErr)

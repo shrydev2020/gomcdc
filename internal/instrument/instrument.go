@@ -1134,7 +1134,7 @@ func (transformer *fileTransformer) transform(file *ast.File) error {
 			callback := transformer.testContexts.Callbacks[transformer.fset.PositionFor(current.Pos(), false).Offset]
 			index := callback.Argument
 			if callback.Method != "" && index >= 0 && index < len(current.Args) {
-				current.Args[index] = &ast.CallExpr{Fun: &ast.SelectorExpr{X: ast.NewIdent(transformer.helperName), Sel: ast.NewIdent(callback.Method)}, Args: []ast.Expr{current.Args[index]}}
+				current.Args[index] = &ast.CallExpr{Fun: &ast.SelectorExpr{X: &ast.Ident{Name: transformer.helperName, NamePos: current.Args[index].Pos()}, Sel: ast.NewIdent(callback.Method)}, Args: []ast.Expr{current.Args[index]}}
 			}
 		}
 		return true
@@ -1146,7 +1146,7 @@ func (transformer *fileTransformer) transform(file *ast.File) error {
 		}
 		method := transformer.testContexts.Methods[transformer.fset.PositionFor(selector.Pos(), false).Offset]
 		if method != "" {
-			cursor.Replace(&ast.CallExpr{Fun: &ast.SelectorExpr{X: ast.NewIdent(transformer.helperName), Sel: ast.NewIdent(method)}, Args: []ast.Expr{selector}})
+			cursor.Replace(&ast.CallExpr{Fun: &ast.SelectorExpr{X: &ast.Ident{Name: transformer.helperName, NamePos: selector.Pos()}, Sel: ast.NewIdent(method)}, Args: []ast.Expr{selector}})
 		}
 		return true
 	})
@@ -1218,8 +1218,9 @@ func (transformer *fileTransformer) enterTest(signature *ast.FuncType, body *ast
 	}
 	enter := &ast.CallExpr{Fun: &ast.SelectorExpr{X: ast.NewIdent(transformer.helperName), Sel: ast.NewIdent(method)}, Args: []ast.Expr{argument}}
 	prologue := &ast.DeferStmt{Call: &ast.CallExpr{Fun: enter}}
-	body.List = append([]ast.Stmt{prologue}, body.List...)
-	transformer.recordGenerated("test-context", body, 1)
+	prefix := append([]ast.Stmt{prologue}, transformer.coverageBoundary(body.Lbrace)...)
+	body.List = append(prefix, body.List...)
+	transformer.recordGenerated("test-context", body, uint32(len(prefix)))
 }
 
 func (transformer *fileTransformer) transformFunction(body *ast.BlockStmt) error {
@@ -1276,6 +1277,9 @@ func (state *functionState) transformStatements(statements []ast.Stmt) ([]ast.St
 }
 
 func (state *functionState) transformStatement(statement ast.Stmt) ([]ast.Stmt, error) {
+	if classifyGeneratedStatement(statement, state.transformer.helperName) != generatedLineNone {
+		return []ast.Stmt{statement}, nil
+	}
 	switch current := statement.(type) {
 	case *ast.BlockStmt:
 		list, err := state.transformStatements(current.List)

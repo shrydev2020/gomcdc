@@ -137,7 +137,7 @@ gomcdc test --coverage=decision,condition,mcdc-unique,mcdc-masking ./...
 # Exclude module-relative paths; --exclude is repeatable and supports **
 gomcdc test --exclude='internal/generated/**' ./...
 
-# Include active _test.go decisions in AST metric denominators
+# Include active _test.go files in every selected metric
 gomcdc test --include-tests ./...
 
 # Forward arguments to go test after --
@@ -148,7 +148,7 @@ gomcdc test ./... -- -run TestCritical
 | --- | --- |
 | `--coverage=<list>` | Select comma-separated metrics; default is `all` |
 | `--exclude=<glob>` | Exclude a module-relative source glob; repeatable |
-| `--include-tests` | Include active `_test.go` decisions in AST metrics |
+| `--include-tests` | Include active `_test.go` files, including statements and functions |
 | `--format=text\|json\|html` | Select report format |
 | `--output=<path>` | Write a file, or a directory for HTML |
 | `--strict` | Fail on requested unsupported, unknown, analysis-incomplete, or uninstrumented entities |
@@ -194,8 +194,9 @@ gomcdc test \
   comment are excluded.
 - An active `go.work` is supported when it contains exactly one main module.
   Workspaces with multiple main modules are rejected explicitly.
-- `_test.go` decisions enter AST metrics only with `--include-tests`;
-  Statement and Function Coverage remain based on standard Go coverage.
+- `_test.go` files enter the selected metrics only with `--include-tests`.
+  This includes Statement and Function Coverage for test helpers and tests,
+  using the same Go cover counter placement as ordinary source files.
 - Windows, assembly internals, cgo internals, compiler-IR obligations, path
   coverage, and distributed test execution are outside v2.
 - The target module is built and tested with the current user's authority. The

@@ -12,7 +12,7 @@
 
 `gomcdc version` は計測を行わず、build identityを標準出力へ書き、終了code 0を返す。module versionからbuildした場合は `gomcdc vMAJOR.MINOR.PATCH`（または完全なGo module version）、local buildでは `gomcdc devel` に省略VCS revisionと `dirty` を必要に応じて付加する。追加argumentはinvalid CLI usageである。identityはGo build informationから取得し、linker flagを必要としない。
 
-対象はGo 1.26.0以降、Go Modules、Linux、macOS とする。compiler-aware backendは選択されたGo compiler sourceへexact-anchor patchを適用し、anchorに互換性がなければ明示的に失敗する。Go versionのallowlistで後続releaseを拒否しない。対象 source は package pattern を `go list` して得た main module 内の package である。標準 library、外部 module、vendor、本ツール生成source、Go標準形式のgenerated-code commentを持つsourceは対象集合に含めない。`_test.go` は `--include-tests` 指定時だけ AST 系指標へ含め、このflagはStatement/Functionへ影響しない。
+対象はGo 1.26.0以降、Go Modules、Linux、macOS とする。compiler-aware backendは選択されたGo compiler sourceへexact-anchor patchを適用し、anchorに互換性がなければ明示的に失敗する。Go versionのallowlistで後続releaseを拒否しない。対象 source は package pattern を `go list` して得た main module 内の package である。標準 library、外部 module、vendor、本ツール生成source、Go標準形式のgenerated-code commentを持つsourceは対象集合に含めない。`_test.go` は `--include-tests` 指定時だけ、Statement/Functionを含む選択した全指標へ含める。activeなinternal/external test fileにも、通常のbuild tag、generated source、除外規則を適用する。
 
 ## 2. 基本領域
 
@@ -216,6 +216,16 @@ backend は entity ごとに SupportStatus を出力する。Instrumentation Cov
 ### D22. Measurement
 
 MeasurementMode は `standard-cover` または `single-run` である。Statement/Functionだけなら `standard-cover`、非standard-cover指標を一つでも含む要求は、全11指標要求を含めて `single-run` とする。一つのmeasurement sessionは一つのdisposable workspaceを作り、選択された各packageのtest binaryを正確に一度だけ実行する。Go cover、AST runtime、compiler-aware producerは同じ物理実行を観測する。reportは一つのrun status、failure kind、package-status mapを保持する。productionにdual-run fallbackを設けず、旧v1二実行動作は決定的test oracleにだけ残す。
+
+`--include-tests` 指定時は、`go test -cover` が省くtest fileにも選択された
+`go tool cover`を適用する。出力されたcounter metadataは、AST書換えを含む
+producer inventoryとの完全一致を計装時に検証する。test counter transportは
+実行回数ではなくset membershipを記録する。source/processごとの独立fileに、
+run IDとpackage、source path、計装済み内容のdigestを保持する。初期値0のcounterを
+atomicに公開し、各counterの初回hitをsource block実行前に同期書込みする。
+collectorはidentity、長さ、counter値を検証し、通常Go coverと同じ元sourceへの
+correspondenceで投影する。中断時に欠けた証拠はunknownとする。追加test runや
+test終了callbackには依存しない。
 
 ## 7. 実行モデル
 

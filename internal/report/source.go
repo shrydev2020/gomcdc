@@ -51,7 +51,9 @@ type sourceMapping struct {
 
 type sourceInterval struct {
 	start, end int
-	anns       []SourceAnnotation
+	// Annotations are immutable; intervals retain references instead of copying
+	// every string-bearing annotation for every overlap.
+	anns []*SourceAnnotation
 }
 
 type sourceBoundaryEvent struct {
@@ -320,9 +322,9 @@ func sourceIntervals(view SourceFileView) []sourceInterval {
 			positions[annotationIndex] = len(active)
 			active = append(active, annotationIndex)
 		}
-		activeAnnotations := make([]SourceAnnotation, 0, len(active))
+		activeAnnotations := make([]*SourceAnnotation, 0, len(active))
 		for _, annotationIndex := range active {
-			activeAnnotations = append(activeAnnotations, view.Annotations[annotationIndex])
+			activeAnnotations = append(activeAnnotations, &view.Annotations[annotationIndex])
 		}
 		intervals = append(intervals, sourceInterval{start: start, end: end, anns: activeAnnotations})
 	}
@@ -389,7 +391,7 @@ func conditionCoverageState(condition ConditionReport) string {
 	}
 }
 
-func sourceClass(annotations []SourceAnnotation) string {
+func sourceClass(annotations []*SourceAnnotation) string {
 	classes := make([]string, 0, len(annotations))
 	seen := make(map[string]struct{}, len(annotations))
 	for _, annotation := range annotations {

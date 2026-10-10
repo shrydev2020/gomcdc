@@ -49,11 +49,12 @@ const (
 )
 
 type Result struct {
-	Status             cover.RunStatus
-	FailureKind        cover.RunFailureKind
-	Err                error
-	Packages           map[string]PackageStatus
-	RuntimeDiagnostics []string
+	Status               cover.RunStatus
+	FailureKind          cover.RunFailureKind
+	Err                  error
+	Packages             map[string]PackageStatus
+	RuntimeDiagnostics   []string
+	TestCoverDiagnostics []string
 }
 
 // Run disables the Go test result cache because cached tests cannot emit
@@ -143,20 +144,20 @@ func Run(ctx context.Context, opts Options) Result {
 	}
 	packageStatuses := events.packages
 	if err == nil {
-		return Result{Status: cover.RunPassed, FailureKind: cover.RunFailureNone, Packages: packageStatuses, RuntimeDiagnostics: runtimeDiagnostics(events)}
+		return Result{Status: cover.RunPassed, FailureKind: cover.RunFailureNone, Packages: packageStatuses, RuntimeDiagnostics: runtimeDiagnostics(events), TestCoverDiagnostics: append([]string(nil), events.testCoverDiagnostics...)}
 	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return Result{Status: cover.RunTimeout, FailureKind: cover.RunFailureTimeout, Err: fmt.Errorf("go test timed out: %w", ctx.Err()), Packages: packageStatuses, RuntimeDiagnostics: runtimeDiagnostics(events)}
+		return Result{Status: cover.RunTimeout, FailureKind: cover.RunFailureTimeout, Err: fmt.Errorf("go test timed out: %w", ctx.Err()), Packages: packageStatuses, RuntimeDiagnostics: runtimeDiagnostics(events), TestCoverDiagnostics: append([]string(nil), events.testCoverDiagnostics...)}
 	}
 	if errors.Is(ctx.Err(), context.Canceled) {
-		return Result{Status: cover.RunFailed, FailureKind: cover.RunFailureInterrupted, Err: fmt.Errorf("go test interrupted: %w", ctx.Err()), Packages: packageStatuses, RuntimeDiagnostics: runtimeDiagnostics(events)}
+		return Result{Status: cover.RunFailed, FailureKind: cover.RunFailureInterrupted, Err: fmt.Errorf("go test interrupted: %w", ctx.Err()), Packages: packageStatuses, RuntimeDiagnostics: runtimeDiagnostics(events), TestCoverDiagnostics: append([]string(nil), events.testCoverDiagnostics...)}
 	}
 	failureKind := classifyFailure(events)
 	status := cover.RunFailed
 	if failureKind == cover.RunFailureTimeout {
 		status = cover.RunTimeout
 	}
-	return Result{Status: status, FailureKind: failureKind, Err: fmt.Errorf("go test failed: %w", err), Packages: packageStatuses, RuntimeDiagnostics: runtimeDiagnostics(events)}
+	return Result{Status: status, FailureKind: failureKind, Err: fmt.Errorf("go test failed: %w", err), Packages: packageStatuses, RuntimeDiagnostics: runtimeDiagnostics(events), TestCoverDiagnostics: append([]string(nil), events.testCoverDiagnostics...)}
 }
 
 // quoteGoCommandArgument mirrors the single-argument subset of cmd/go's
@@ -211,14 +212,15 @@ type testEvent struct {
 // diagnostic stream while package terminal states remain available to mark
 // partial reports accurately.
 type eventWriter struct {
-	pending            bytes.Buffer
-	output             io.Writer
-	packages           map[string]PackageStatus
-	buildFailures      map[string]struct{}
-	testFailed         bool
-	executionFailed    bool
-	goTestTimedOut     bool
-	runtimeDiagnostics []string
+	pending              bytes.Buffer
+	output               io.Writer
+	packages             map[string]PackageStatus
+	buildFailures        map[string]struct{}
+	testFailed           bool
+	executionFailed      bool
+	goTestTimedOut       bool
+	runtimeDiagnostics   []string
+	testCoverDiagnostics []string
 }
 
 // plainEventWriter preserves the semantics of an ordinary go test invocation
@@ -369,11 +371,15 @@ func (w *eventWriter) inspectOutput(line string) {
 	if strings.Contains(line, "panic: test timed out after ") || strings.Contains(line, "test timed out after ") {
 		w.goTestTimedOut = true
 	}
-	const prefix = "gomcdc runtime diagnostic:"
-	if index := strings.Index(line, prefix); index >= 0 {
-		message := strings.TrimSpace(line[index+len(prefix):])
-		if message != "" {
-			w.runtimeDiagnostics = append(w.runtimeDiagnostics, message)
+	for prefix, destination := range map[string]*[]string{
+		"gomcdc runtime diagnostic:":    &w.runtimeDiagnostics,
+		"gomcdc test cover diagnostic:": &w.testCoverDiagnostics,
+	} {
+		if index := strings.Index(line, prefix); index >= 0 {
+			message := strings.TrimSpace(line[index+len(prefix):])
+			if message != "" {
+				*destination = append(*destination, message)
+			}
 		}
 	}
 }

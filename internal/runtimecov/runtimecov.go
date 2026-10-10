@@ -741,6 +741,22 @@ type evaluation struct {
 	terminalPending bool
 }
 
+// Evaluation IDs distribute concurrent condition updates across independent locks.
+const activeShardCount = 64
+
+type evaluationShard struct {
+ mu sync.RWMutex
+ items map[uint64]*evaluation
+}
+
+func shardFor(id uint64) *evaluationShard { return &activeShards[id % activeShardCount] }
+
+func newActiveShards() [activeShardCount]evaluationShard {
+ var shards [activeShardCount]evaluationShard
+ for index := range shards { shards[index].items = make(map[uint64]*evaluation) }
+ return shards
+}
+
 type writerState struct {
 	mu sync.Mutex
 	packagePath string
@@ -780,10 +796,9 @@ var (
 	runID = initializeRunID()
 	processID = os.Getpid()
 	nextEvaluation atomic.Uint64
-	activeMu sync.RWMutex
-	writersMu sync.Mutex
+	writersMu sync.RWMutex
 	diagnosticMu sync.Mutex
-	active = make(map[uint64]*evaluation)
+	activeShards = newActiveShards()
 	writers = make(map[string]*writerState)
 	diagnosticFile *os.File
 	diagnosticSeen = make(map[string]struct{})
@@ -920,9 +935,10 @@ func (hooks Hooks) BeginInto(slot *uint64, decisionID uint64, conditionCount uin
 	id := nextEvaluation.Add(1)
 	if id == 0 { id = nextEvaluation.Add(1) }
 	item := &evaluation{packagePath: hooks.packagePath, decisionID: decisionID, conditions: make([]uint8, int(conditionCount)), testID: currentTestID()}
-	activeMu.Lock()
-	active[id] = item
-	activeMu.Unlock()
+	shard := shardFor(id)
+	shard.mu.Lock()
+	shard.items[id] = item
+	shard.mu.Unlock()
 	*slot = id
 	writeEvent(hooks.packagePath, record{Type:"begin", EvaluationID:id, DecisionID:decisionID, ConditionCount:int(conditionCount), TestID:item.testID})
 	return proceed
@@ -931,15 +947,16 @@ func (hooks Hooks) BeginInto(slot *uint64, decisionID uint64, conditionCount uin
 func (hooks Hooks) Condition(evaluationID uint64, index uint16, value bool) (result bool) {
 	result = value
 	defer func() { _ = recover() }()
-	activeMu.Lock()
-	item := active[evaluationID]
+	shard := shardFor(evaluationID)
+	shard.mu.Lock()
+	item := shard.items[evaluationID]
 	if item == nil || item.terminalPending || int(index) >= len(item.conditions) {
-		activeMu.Unlock()
+		shard.mu.Unlock()
 		diagnostic(hooks.packagePath, "condition referenced an unknown evaluation or index")
 		return result
 	}
 	if value { item.conditions[index] = conditionTrue } else { item.conditions[index] = conditionFalse }
-	activeMu.Unlock()
+	shard.mu.Unlock()
 	return result
 }
 
@@ -995,43 +1012,46 @@ func (hooks Hooks) CompilerNoMatch(switchID uint64) {
 }
 
 func finish(id uint64, result bool, status uint8, skippedDecisionIDs []uint64) {
-	activeMu.Lock()
-	item := active[id]
+	shard := shardFor(id)
+	shard.mu.Lock()
+	item := shard.items[id]
 	if item == nil || item.terminalPending {
-		activeMu.Unlock()
+		shard.mu.Unlock()
 		diagnostic("unknown", "terminal referenced an unknown evaluation")
 		return
 	}
 	item.terminalPending = true
 	event := record{Type:"terminal", EvaluationID:id, DecisionID:item.decisionID, TestID:item.testID, Conditions:append([]uint8(nil), item.conditions...), Result:result, Status:status, SkippedDecisionIDs:append([]uint64(nil), skippedDecisionIDs...)}
-	activeMu.Unlock()
+	shard.mu.Unlock()
 	writeTerminal(item, event)
 }
 
 func abort(id uint64) {
 	if id == 0 { return }
-	activeMu.Lock()
-	item := active[id]
-	if item == nil || item.terminalPending { activeMu.Unlock(); return }
+	shard := shardFor(id)
+	shard.mu.Lock()
+	item := shard.items[id]
+	if item == nil || item.terminalPending { shard.mu.Unlock(); return }
 	item.terminalPending = true
 	event := record{Type:"terminal", EvaluationID:id, DecisionID:item.decisionID, TestID:item.testID, Conditions:append([]uint8(nil), item.conditions...), Status:statusAborted}
-	activeMu.Unlock()
+	shard.mu.Unlock()
 	writeTerminal(item, event)
 }
 
 func writeTerminal(item *evaluation, event record) {
+ shard := shardFor(event.EvaluationID)
 	state := writerFor(item.packagePath)
 	if state == nil {
-		activeMu.Lock()
-		if current := active[event.EvaluationID]; current == item { delete(active, event.EvaluationID) }
-		activeMu.Unlock()
+		shard.mu.Lock()
+		if current := shard.items[event.EvaluationID]; current == item { delete(shard.items, event.EvaluationID) }
+		shard.mu.Unlock()
 		return
 	}
 	state.mu.Lock()
 	if writeEventLocked(state, event) {
-		activeMu.Lock()
-		if current := active[event.EvaluationID]; current == item { delete(active, event.EvaluationID) }
-		activeMu.Unlock()
+		shard.mu.Lock()
+		if current := shard.items[event.EvaluationID]; current == item { delete(shard.items, event.EvaluationID) }
+		shard.mu.Unlock()
 		delete(state.terminalIDs, event.EvaluationID)
 		delete(state.beginIDs, event.EvaluationID)
 	}
@@ -1054,10 +1074,14 @@ func recordClause(packagePath string, switchID, clauseID uint64, alternativeInde
 
 func writerFor(packagePath string) *writerState {
 	if dataDir == "" { return nil }
-	writersMu.Lock()
-	defer writersMu.Unlock()
-	state := writers[packagePath]
-	if state != nil { return state }
+ writersMu.RLock()
+ state := writers[packagePath]
+ writersMu.RUnlock()
+ if state != nil { return state }
+ writersMu.Lock()
+ defer writersMu.Unlock()
+ state = writers[packagePath]
+ if state != nil { return state }
 	encodedPackage := filenameComponent(packagePath)
 	encodedRun := filenameComponent(runID)
 	pattern := eventPrefix + encodedPackage + "-pid_" + strconv.Itoa(processID) + "-run_" + encodedRun + "-*" + eventSuffix
@@ -1174,10 +1198,12 @@ func compactLocked(state *writerState) {
 		}
 	}
 
-	activeMu.RLock()
-	activeEvents := make([]record, 0, len(active))
-	activeIDs := make([]uint64, 0, len(active))
-	for id, item := range active {
+ var activeEvents []record
+ var activeIDs []uint64
+ for index := range activeShards {
+ shard := &activeShards[index]
+ shard.mu.RLock()
+ for id, item := range shard.items {
 		if item.packagePath != state.packagePath { continue }
 		if _, terminalRecorded := state.terminalIDs[id]; terminalRecorded { continue }
 		activeIDs = append(activeIDs, id)
@@ -1186,7 +1212,8 @@ func compactLocked(state *writerState) {
 			EvaluationID: id, DecisionID: item.decisionID, ConditionCount: len(item.conditions), TestID: item.testID,
 		})
 	}
-	activeMu.RUnlock()
+	shard.mu.RUnlock()
+ }
 	sort.Slice(activeEvents, func(i, j int) bool { return activeEvents[i].EvaluationID < activeEvents[j].EvaluationID })
 	for _, event := range activeEvents {
 		written, err := writeRecord(temporary, event)

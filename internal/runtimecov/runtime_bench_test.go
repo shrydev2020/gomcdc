@@ -140,3 +140,40 @@ func main() {
 	}
 	return binary
 }
+
+// The process includes synchronous journal writes as well as contended
+// condition updates. It measures the generated runtime, not collection alone.
+func BenchmarkInjectedRuntimeConcurrentConditions(b *testing.B) {
+	body := `
+ done := make(chan struct{}, 16)
+ for worker := 0; worker < 16; worker++ {
+  go func() {
+   for iteration := 0; iteration < 250; iteration++ {
+    var slot uint64
+    hooks.BeginInto(&slot, 17, 64)
+    for condition := 0; condition < 64; condition++ { hooks.Condition(slot, uint16(condition), true) }
+    hooks.End(slot, true)
+   }
+   done <- struct{}{}
+  }()
+ }
+ for worker := 0; worker < 16; worker++ { <-done }
+`
+	binary := buildWriterBenchmarkProbe(b, body)
+	root := b.TempDir()
+	b.ReportMetric(4000, "evaluations/op")
+	for b.Loop() {
+		dir, err := os.MkdirTemp(root, "run-")
+		if err != nil {
+			b.Fatal(err)
+		}
+		command := exec.CommandContext(b.Context(), binary)
+		command.Env = environmentReplace(environmentWith(DataDirEnv, dir), RunIDEnv, "concurrent-benchmark")
+		if output, err := command.CombinedOutput(); err != nil {
+			b.Fatalf("%v\n%s", err, output)
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

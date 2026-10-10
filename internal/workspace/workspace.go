@@ -438,6 +438,16 @@ func copiedSymlinkTarget(sourceDir, destinationDir, sourcePath, destinationPath,
 }
 
 func copyRegularFile(ctx context.Context, sourcePath, destinationPath string, mode fs.FileMode) (err error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if cloned, err := cloneRegularFile(sourcePath, destinationPath, mode); cloned || err != nil {
+		return err
+	}
+	return streamRegularFile(ctx, sourcePath, destinationPath, mode)
+}
+
+func streamRegularFile(ctx context.Context, sourcePath, destinationPath string, mode fs.FileMode) (err error) {
 	source, err := os.Open(sourcePath)
 	if err != nil {
 		return fmt.Errorf("open source file %q: %w", sourcePath, err)

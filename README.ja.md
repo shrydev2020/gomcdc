@@ -131,7 +131,7 @@ gomcdc test --coverage=decision,condition,mcdc-unique,mcdc-masking ./...
 # module-relative pathを除外。--excludeは繰り返し可能で**を使用可能
 gomcdc test --exclude='internal/generated/**' ./...
 
-# activeな_test.go decisionをAST metricの分母へ追加
+# activeな_test.goを選択した全指標の対象へ追加
 gomcdc test --include-tests ./...
 
 # --以降をgo testへ渡す
@@ -142,7 +142,7 @@ gomcdc test ./... -- -run TestCritical
 | --- | --- |
 | `--coverage=<list>` | comma区切りで指標を選択。defaultは`all` |
 | `--exclude=<glob>` | module-relative source globを除外。繰り返し可能 |
-| `--include-tests` | activeな`_test.go` decisionをAST metricへ追加 |
+| `--include-tests` | activeな`_test.go`をStatement／Functionを含めた対象指標へ追加 |
 | `--format=text\|json\|html` | report形式を選択 |
 | `--output=<path>` | fileへ出力。HTMLの場合はdirectory |
 | `--strict` | requested entityにunsupported、unknown、analysis-incomplete、未計装があれば失敗 |
@@ -187,8 +187,9 @@ gomcdc test \
   除外します。
 - activeな`go.work`はmain moduleが一つの場合に対応します。複数main moduleを
   持つworkspaceは明示的に拒否します。
-- `_test.go` decisionは`--include-tests`指定時だけAST metricへ含めます。
-  Statement/Function CoverageはGo標準coverageに基づきます。
+- `_test.go`は`--include-tests`指定時だけ選択した指標へ含めます。テストと
+  テスト用helperのStatement／Functionも、通常sourceと同じGo coverの
+  カウンター配置に基づいて計測します。
 - Windows、assembly内部、cgo内部、compiler IR obligation、path coverage、
   distributed test executionはv2対象外です。
 - 対象moduleを現在ユーザーの権限でbuild/testします。temporary workspaceは
