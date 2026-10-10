@@ -4,6 +4,7 @@ package modulecontext
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"os/exec"
@@ -238,6 +239,29 @@ func (settings SourceConfiguration) Active() bool { return settings.goWorkPath !
 
 // Valid reports whether the source configuration contains a main go.mod.
 func (settings SourceConfiguration) Valid() bool { return settings.goModPath != "" }
+
+// ConfigurationDigests identifies the snapshotted configuration before its
+// local paths are relocated. Keys are roles, never absolute source paths.
+func (settings SourceConfiguration) ConfigurationDigests() map[string]string {
+	files := map[string][]byte{"go.mod": settings.goMod}
+	if settings.Active() {
+		files["go.work"] = settings.goWork
+		if settings.goWorkSumSet {
+			files["go.work.sum"] = settings.goWorkSum
+		}
+	}
+	if settings.HasAlternateModFile() {
+		files["alternate.mod"] = settings.alternateMod
+		if settings.alternateSumSet {
+			files["alternate.sum"] = settings.alternateSum
+		}
+	}
+	digests := make(map[string]string, len(files))
+	for name, contents := range files {
+		digests[name] = fmt.Sprintf("%x", sha256.Sum256(contents))
+	}
+	return digests
+}
 
 // GoWorkPath returns the source go.work path for diagnostics and workspace
 // construction. Go commands must use the relocated request-owned copy.

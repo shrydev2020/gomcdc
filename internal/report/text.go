@@ -47,6 +47,16 @@ func renderText(report Report) string {
 		report.Run.Results.Threshold,
 	)
 	fmt.Fprintf(&output, "Measurement mode: %s\n", report.MeasurementMode)
+	for _, origin := range report.ContributingRuns {
+		fmt.Fprintf(&output, "Input snapshot: %s mode=%s status=%s complete=%t\n", origin.ID, origin.MeasurementMode, origin.Run.Status, origin.Run.Complete)
+		fmt.Fprintf(&output, "  Original results: test=%s measurement=%s integrity=%s strict=%s threshold=%s\n", origin.Run.Results.Test, origin.Run.Results.Measurement, origin.Run.Results.Integrity, origin.Run.Results.Strict, origin.Run.Results.Threshold)
+		for _, outcome := range origin.ProducerOutcomes {
+			fmt.Fprintf(&output, "  Input producer: %s integrity=%s completeness=%s mapping=%s usability=%s\n", outcome.Producer, outcome.Integrity, outcome.Completeness, outcome.Mapping, outcome.Usability)
+		}
+		for _, failure := range origin.Errors {
+			fmt.Fprintf(&output, "  Input error: phase=%s code=%s package=%s path=%s %s\n", failure.Phase, failure.Code, failure.Package, failure.Path, failure.Message)
+		}
+	}
 	if limits := report.MaskingAnalysisLimits; limits != nil {
 		fmt.Fprintf(
 			&output,

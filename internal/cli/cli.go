@@ -27,6 +27,7 @@ import (
 	"github.com/shrydev2020/gomcdc/v2/internal/mcdc"
 	"github.com/shrydev2020/gomcdc/v2/internal/modulecontext"
 	"github.com/shrydev2020/gomcdc/v2/internal/report"
+	"github.com/shrydev2020/gomcdc/v2/internal/resultfile"
 	"github.com/shrydev2020/gomcdc/v2/internal/runtimecov"
 	"github.com/shrydev2020/gomcdc/v2/internal/workspace"
 )
@@ -58,9 +59,9 @@ func classifyExit(invalidUsage, measurementFailure, testsFailed, thresholdFailur
 
 // Run executes the CLI with the process working directory.
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	// Only measurement needs a working directory. Informational and invalid
+	// Measurement and report paths need a working directory. Informational and invalid
 	// top-level commands must remain usable even when no module is available.
-	if len(args) == 0 || args[0] != "test" {
+	if len(args) == 0 || (args[0] != "test" && args[0] != "report" && args[0] != "merge" && args[0] != "reanalyze") {
 		return runAt(ctx, "", args, stdout, stderr)
 	}
 	workingDir, err := os.Getwd()
@@ -95,6 +96,12 @@ func runAt(ctx context.Context, workingDir string, args []string, stdout, stderr
 		fmt.Fprintf(stdout, "gomcdc %s\n", buildinfo.Version())
 		return ExitSuccess
 	}
+	if args[0] == "report" {
+		return runReport(ctx, workingDir, args[1:], stdout, stderr)
+	}
+	if args[0] == "merge" || args[0] == "reanalyze" {
+		return runAnalysis(ctx, workingDir, args[0], args[1:], stdout, stderr)
+	}
 	if args[0] != "test" {
 		fmt.Fprintf(stderr, "gomcdc: unknown subcommand %q\n", args[0])
 		writeTopUsage(stderr)
@@ -123,6 +130,10 @@ type sourceInstrumentation struct {
 }
 
 func runCoverage(ctx context.Context, workingDir string, opts options, stdout, stderr io.Writer) (exitCode int) {
+	if err := validateSaveDestination(opts, workingDir); err != nil {
+		fmt.Fprintf(stderr, "gomcdc: %v\n", err)
+		return ExitInvalidUsage
+	}
 	excludes, err := config.CompileExcludes(opts.excludes)
 	if err != nil {
 		fmt.Fprintf(stderr, "gomcdc: %v\n", err)
@@ -215,6 +226,18 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		}
 		fmt.Fprintf(stderr, "gomcdc: package load failed: %v\n", err)
 		return ExitMeasurementFailed
+	}
+	var savedSettings resultfile.Settings
+	if opts.save != "" {
+		savedSettings, err = captureResultSettings(ctx, opts, loaded, work, filteredGOFLAGS)
+		if err != nil {
+			fmt.Fprintf(stderr, "gomcdc: save settings: %v\n", err)
+			if ctx.Err() != nil {
+				return ExitInterrupted
+			}
+			return ExitMeasurementFailed
+		}
+		savedSettings.ModuleConfigDigests = sourceConfiguration.ConfigurationDigests()
 	}
 	var sources []sourceInstrumentation
 	var generatedFiles []c0map.GeneratedFile
@@ -377,6 +400,13 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		})
 	}
 	built = report.WithRunResultsAndErrors(built, input.Results, input.Errors)
+	if opts.save != "" {
+		saved := resultfile.New(savedSettings, built, input.SourceFiles)
+		if err := resultfile.Write(resolveOutputPath(workingDir, opts.save), saved); err != nil {
+			fmt.Fprintf(stderr, "gomcdc: save result: %v\n", err)
+			return ExitMeasurementFailed
+		}
+	}
 	if opts.format == "html" {
 		built = report.WithSourceViews(built, input.SourceFiles)
 	}
@@ -432,17 +462,12 @@ func requestedResult(requested, passed bool) report.ResultStatus {
 }
 
 func thresholdRequested(opts options) bool {
-	return opts.failUnderStatement.set ||
-		opts.failUnderFunction.set ||
-		opts.failUnderDecision.set ||
-		opts.failUnderSwitchClauseBody.set ||
-		opts.failUnderTypeSwitchClauseBody.set ||
-		opts.failUnderSelectClauseBody.set ||
-		opts.failUnderSwitchClauseSelection.set ||
-		opts.failUnderTypeSwitchClauseSelection.set ||
-		opts.failUnderCondition.set ||
-		opts.failUnderMCDCUnique.set ||
-		opts.failUnderMCDCMasking.set
+	for _, threshold := range thresholdSettings(opts) {
+		if threshold.value.set {
+			return true
+		}
+	}
+	return false
 }
 
 func summaryAnalysisIncomplete(summary report.Summary) int {

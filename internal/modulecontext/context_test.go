@@ -1,6 +1,7 @@
 package modulecontext
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,7 +34,11 @@ func TestDiscoverSnapshotsSingleModuleWorkspace(t *testing.T) {
 	}
 	// Mutation after discovery must not alter the configuration used by the
 	// copied test workspace.
+	digests := settings.ConfigurationDigests()
 	writeContextFile(t, goWork, "go 1.26\n\nuse ./dependency\n")
+	if !maps.Equal(digests, settings.ConfigurationDigests()) {
+		t.Fatal("source mutation changed captured configuration hashes")
+	}
 	copiedWorkspace := t.TempDir()
 	copiedModule := filepath.Join(copiedWorkspace, "module")
 	contents, err := settings.RelocatedGoWork(t.Context(), module, copiedWorkspace, copiedModule)
@@ -95,7 +100,11 @@ func TestDiscoverFreezesAndRelocatesAlternateModFileAndSum(t *testing.T) {
 	if !strings.Contains(string(mod), "=> "+wantReplacement) {
 		t.Fatalf("relocated alternate modfile does not target copied module:\n%s", mod)
 	}
+	digests := settings.ConfigurationDigests()
 	writeContextFile(t, alternateSum, "changed\n")
+	if !maps.Equal(digests, settings.ConfigurationDigests()) {
+		t.Fatal("source mutation changed alternate configuration hashes")
+	}
 	_, frozenSum, frozenSumSet, err := settings.RelocatedAlternateMod(t.Context(), copiedModule)
 	if err != nil {
 		t.Fatal(err)

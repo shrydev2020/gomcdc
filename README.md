@@ -16,7 +16,7 @@ test run fails or is interrupted.
 
 One measurement session executes each selected package test binary once. Go
 cover, AST runtime instrumentation, and compiler-aware selection hooks observe
-that same execution; there is no production dual-run fallback.
+that same execution.
 
 ## Requirements
 
@@ -45,8 +45,7 @@ gomcdc test ./...
 
 All eleven metrics are enabled by default and the text report is written to
 standard output. Each enabled summary has a covered count, denominator,
-percentage, and separate counts for evidence that cannot be treated as ordinary
-covered or not-covered data:
+percentage, and separate counts for each support and analysis state:
 
 ```text
 Summary:
@@ -59,7 +58,7 @@ Summary:
 Below the module summary, the text report expands packages, files, functions,
 decisions, conditions, MC/DC witnesses, and observed evaluation vectors.
 Evaluation records and MC/DC witnesses include the executing test or subtest
-name. `unknown` indicates execution without a test context.
+name. Initializers and other execution outside a test context use `unknown`.
 
 ## Metrics
 
@@ -88,8 +87,8 @@ self-contained report to the requested directory.
 
 Schema 2.0 exposes an outcome for every requested evidence producer. Integrity,
 execution completeness, source mapping, and the final usability decision remain
-separate, so a rejected compiler-selection stream does not erase valid AST or
-Go-cover evidence.
+separate. Valid AST and Go-cover evidence remains available even when the
+compiler-selection stream is rejected.
 
 ```sh
 # Text on stdout
@@ -102,7 +101,49 @@ gomcdc test --format json --output coverage.json ./...
 gomcdc test --format html --output coverage-html ./...
 ```
 
-Interpret non-ordinary states separately:
+Use `--save` to create several reports from one measurement. `report` reads
+its results and original sources entirely from the saved file and renders
+them offline.
+
+```sh
+gomcdc test --save coverage.gomcdc.json --format json --output coverage.json ./...
+gomcdc report --format html --output coverage-html coverage.gomcdc.json
+gomcdc report coverage.gomcdc.json
+```
+
+The saved file includes original sources, source hashes, the Go version and
+build environment, selected metrics, exclusions, and test arguments. Sharing
+it also shares those sources and arguments. Supply a file created by `--save`
+to `report`. `--format json` produces a rendered report for other consumers.
+Original failures, partial results, and threshold outcomes are preserved;
+`report` itself returns 0 when rendering succeeds.
+
+Use `merge` for test shards measured against the same sources, packages,
+metrics, and Go/build settings. It unions observations and recomputes MC/DC,
+including witness pairs whose evaluations came from different executions.
+
+```sh
+gomcdc test --save shard-a.gomcdc.json ./... -- -run '^TestA'
+gomcdc test --save shard-b.gomcdc.json ./... -- -run '^TestB'
+gomcdc merge --output merged.gomcdc.json shard-a.gomcdc.json shard-b.gomcdc.json
+gomcdc reanalyze --output analyzed.gomcdc.json --mcdc-masking-max-search-states 8000000 merged.gomcdc.json
+gomcdc report --format html --output coverage-html analyzed.gomcdc.json
+```
+
+Both commands process the saved files offline and write a new saved-result
+file. `reanalyze` recomputes the selected Unique-Cause and Masking metrics from
+recorded observations. Both accept the same three `--mcdc-masking-max-*` limits
+as `test`. Unspecified limits use defaults for `merge` and the input's recorded
+limits for `reanalyze`.
+
+Repeated inputs and nested merges count each original snapshot once.
+Different package sets, sources, or build settings produce a compatibility
+error. Original failures, interruptions, and strict/threshold outcomes remain
+available for each input. The derived report uses `not-requested` for its
+strict/threshold fields. The offline command's exit code reports the save
+outcome, with 0 for success.
+
+Interpret support and analysis states separately from coverage misses:
 
 | State | Meaning |
 | --- | --- |
@@ -112,8 +153,8 @@ Interpret non-ordinary states separately:
 | `unknown` | Evidence authority or measurement completeness is insufficient to decide coverage |
 | `analysis-incomplete` | Exact analysis did not complete for the obligation, including when Masking MC/DC reaches its bounded search budget |
 
-`unknown`, `unsupported-by-backend`, `infeasible`, and `analysis-incomplete` are
-not silently counted as ordinary misses. Failed tests, panics, timeouts, and
+`unknown`, `unsupported-by-backend`, `infeasible`, and `analysis-incomplete`
+each retain their own status and count. Failed tests, panics, timeouts, and
 truncated runtime evidence produce a partial report when trustworthy evidence
 survives.
 
@@ -122,8 +163,7 @@ is 1,000,000 candidate evaluation pairs, 4,000,000 search states, and 64 MiB of
 primary solver backing arrays. The solver-byte limit excludes validated input,
 result witnesses, goroutine stacks, and all other process memory; it is not a
 process-wide heap, RSS, or total-memory limit. A search that would exceed a
-limit yields `analysis-incomplete`; it is never reported as `not-covered` or
-`infeasible`.
+limit yields `analysis-incomplete`.
 The three `--mcdc-masking-max-*` options override these positive per-obligation
 limits. Raising them can multiply total work across conditions and decisions.
 Reports record the effective values as `maskingAnalysisLimits`.
@@ -151,6 +191,7 @@ gomcdc test ./... -- -run TestCritical
 | `--include-tests` | Include active `_test.go` files, including statements and functions |
 | `--format=text\|json\|html` | Select report format |
 | `--output=<path>` | Write a file, or a directory for HTML |
+| `--save=<path>` | Save original sources, measurement settings, and results for `gomcdc report` |
 | `--strict` | Fail on requested unsupported, unknown, analysis-incomplete, or uninstrumented entities |
 | `--fail-under-<metric>=<percent>` | Fail when one enabled metric is below a threshold |
 | `--mcdc-masking-max-evaluation-pairs=<count>` | Override candidate evaluation pairs per Masking condition obligation; default 1,000,000 |
@@ -164,7 +205,7 @@ Run `gomcdc test --help` for the complete option list.
 
 ## CI policy
 
-Use `--strict` to reject incomplete measurement and `--fail-under-*` to enforce
+Use `--strict` to require complete measurement and `--fail-under-*` to enforce
 coverage policy. A threshold is valid only for a metric selected by
 `--coverage`.
 
@@ -193,7 +234,6 @@ gomcdc test \
   library, external modules, `vendor`, and files marked with Go's generated-code
   comment are excluded.
 - An active `go.work` is supported when it contains exactly one main module.
-  Workspaces with multiple main modules are rejected explicitly.
 - `_test.go` files enter the selected metrics only with `--include-tests`.
   This includes Statement and Function Coverage for test helpers and tests,
   using the same Go cover counter placement as ordinary source files.
@@ -201,14 +241,14 @@ gomcdc test \
   coverage, and distributed test execution are outside v2.
 - The target module is built and tested with the current user's authority. The
   temporary workspace is not a sandbox for malicious target code.
-- `gomcdc` defines coverage semantics; it does not claim safety certification,
-  DO-178C compliance, or tool qualification.
 
 ## Reference
 
 - [Normative specification](docs/specification.ja.md)
 - [English reference specification](docs/specification.md)
-- [JSON report schema](schema/report-v2.0.schema.json)
+- [Measurement JSON schema](schema/report-v2.0.schema.json)
+- [Offline analysis JSON schema](schema/report-v2.1.schema.json)
+- [Saved-result schema](schema/saved-result-v1.1.schema.json)
 
 ## Development
 

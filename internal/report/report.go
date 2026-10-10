@@ -17,6 +17,10 @@ import (
 // SchemaVersion identifies the current stable JSON and text report schema.
 const SchemaVersion = "2.0"
 
+// OfflineSchemaVersion adds explicit provenance for derived multi-run reports.
+// Ordinary measurement output retains the existing 2.0 contract.
+const OfflineSchemaVersion = "2.1"
+
 const statusDisabled = "disabled"
 
 type MeasurementMode string
@@ -24,6 +28,7 @@ type MeasurementMode string
 const (
 	MeasurementSingleRun     MeasurementMode = "single-run"
 	MeasurementStandardCover MeasurementMode = "standard-cover"
+	MeasurementMerged        MeasurementMode = "merged"
 )
 
 // Input contains all static metadata, runtime evidence, and run state needed
@@ -82,6 +87,18 @@ type Report struct {
 	Summary               Summary                        `json:"summary"`
 	Packages              []PackageReport                `json:"packages"`
 	Errors                []ReportError                  `json:"errors"`
+	ContributingRuns      []ContributingRun              `json:"contributingRuns,omitempty"`
+}
+
+// ContributingRun preserves the execution and policy outcomes of one original
+// snapshot. ID identifies that snapshot in the saved result's inputs.
+type ContributingRun struct {
+	ID               string            `json:"id"`
+	Run              Run               `json:"run"`
+	MeasurementMode  MeasurementMode   `json:"measurementMode"`
+	Measurements     []MeasurementRun  `json:"measurements"`
+	ProducerOutcomes []ProducerOutcome `json:"producerOutcomes"`
+	Errors           []ReportError     `json:"errors"`
 }
 
 // MaskingAnalysisLimits records the effective resource limits used for each
