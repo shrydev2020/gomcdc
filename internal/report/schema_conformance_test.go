@@ -1,6 +1,7 @@
 package report_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -15,6 +16,7 @@ import (
 	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
 	"github.com/shrydev2020/gomcdc/v2/internal/gotest"
 	"github.com/shrydev2020/gomcdc/v2/internal/report"
+	"github.com/shrydev2020/gomcdc/v2/internal/resultfile"
 )
 
 type schemaNode struct {
@@ -132,8 +134,8 @@ func TestCheckedInSchemaMatchesPublicReportTypes(t *testing.T) {
 	if document.Schema != "https://json-schema.org/draft/2020-12/schema" {
 		t.Fatalf("unexpected JSON Schema dialect %q", document.Schema)
 	}
-	if document.Root.Properties["schemaVersion"].Const != report.SchemaVersion {
-		t.Fatalf("schemaVersion const = %#v, want %q", document.Root.Properties["schemaVersion"].Const, report.SchemaVersion)
+	if document.Root.Properties["schemaVersion"].Const != report.OfflineSchemaVersion {
+		t.Fatalf("schemaVersion const = %#v, want %q", document.Root.Properties["schemaVersion"].Const, report.OfflineSchemaVersion)
 	}
 	if err := checkSchemaShape(document, document.Root, reflect.TypeOf(report.Report{}), "report"); err != nil {
 		t.Fatal(err)
@@ -148,6 +150,71 @@ func TestCheckedInSchemaMatchesPublicReportTypes(t *testing.T) {
 		if _, exists := capabilityDefinition.Properties[string(capability)]; !exists {
 			t.Errorf("schema omits capability %q", capability)
 		}
+	}
+}
+
+func TestMeasurementSchemaRemainsUnchanged(t *testing.T) {
+	t.Parallel()
+	data, err := os.ReadFile("../../schema/report-v2.0.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var original reportSchema
+	if err := json.Unmarshal(data, &original); err != nil {
+		t.Fatal(err)
+	}
+	if original.Root.Properties["schemaVersion"].Const != report.SchemaVersion {
+		t.Fatal("ordinary measurement schema changed")
+	}
+	// Offline provenance is omitted on ordinary measurement reports. All other
+	// fields must still match the immutable 2.0 contract exactly.
+	var fields []reflect.StructField
+	current := reflect.TypeFor[report.Report]()
+	for i := range current.NumField() {
+		field := current.Field(i)
+		if field.Name != "ContributingRuns" {
+			fields = append(fields, field)
+		}
+	}
+	if err := checkSchemaShape(&original, original.Root, reflect.StructOf(fields), "measurement"); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := report.RenderJSON(report.Input{})
+	if err != nil || bytes.Contains(encoded, []byte(`"contributingRuns"`)) {
+		t.Fatal("ordinary output acquired offline provenance")
+	}
+}
+
+func TestSavedResultSchemaMatchesItsPayload(t *testing.T) {
+	t.Parallel()
+	data, err := os.ReadFile("../../schema/saved-result-v1.1.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved reportSchema
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Root.Properties["format"].Const != resultfile.Format || saved.Root.Properties["version"].Const != resultfile.Version || !sameStringSet(saved.Root.Required, []string{"format", "version", "sha256", "result"}) {
+		t.Fatal("saved result envelope contract drift")
+	}
+	if refs := saved.Defs["result"].Properties["report"].OneOf; len(refs) != 2 || refs[0].Ref != "report-v2.0.schema.json" || refs[1].Ref != "report-v2.1.schema.json" {
+		t.Fatal("saved result does not reference the existing report contract")
+	}
+	// Resolve the file-local reference for the existing shape checker without
+	// duplicating the report schema in the saved-result contract.
+	current := readReportSchema(t)
+	for name, definition := range current.Defs {
+		saved.Defs[name] = definition
+	}
+	saved.Defs["savedReport"] = current.Root
+	saved.Defs["result"].Properties["report"] = schemaNode{Ref: "#/$defs/savedReport"}
+	if saved.Defs["snapshot"].Properties["report"].Ref != "report-v2.0.schema.json" {
+		t.Fatal("original snapshot report contract drift")
+	}
+	saved.Defs["snapshot"].Properties["report"] = schemaNode{Ref: "#/$defs/savedReport"}
+	if err := checkSchemaShape(&saved, saved.Defs["result"], reflect.TypeFor[resultfile.Result](), "savedResult"); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -213,7 +280,7 @@ func TestRenderedReportsCarrySchemaAndToolIdentities(t *testing.T) {
 
 func readReportSchema(t *testing.T) *reportSchema {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "report-v2.0.schema.json"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "report-v2.1.schema.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +293,7 @@ func readReportSchema(t *testing.T) *reportSchema {
 
 func readReportSchemaJSON(t *testing.T) map[string]any {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "report-v2.0.schema.json"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "schema", "report-v2.1.schema.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,6 +348,9 @@ func checkSchemaShape(document *reportSchema, node schemaNode, goType reflect.Ty
 		}
 		return checkStructSchema(document, node, goType, path)
 	case reflect.Slice:
+		if goType.Elem().Kind() == reflect.Uint8 {
+			return requireSchemaType(path, schemaTypes, "string")
+		}
 		if !slices.Contains(schemaTypes, "array") || node.Items == nil {
 			return fmt.Errorf("%s: Go slice requires schema array with items", path)
 		}

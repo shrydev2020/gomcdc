@@ -20,6 +20,7 @@ type options struct {
 	metrics                            config.CoverageSet
 	format                             string
 	output                             string
+	save                               string
 	excludes                           stringList
 	includeTests                       bool
 	keepWorkDir                        bool
@@ -102,6 +103,7 @@ func parseOptions(args []string, errOut io.Writer) (options, error) {
 	fs.StringVar(&opts.coverage, "coverage", "all", "coverage metrics: all,statement,function,decision,switch-clause-body,type-switch-clause-body,select-clause-body,switch-clause-selection,type-switch-clause-selection,condition,mcdc-unique,mcdc-masking")
 	fs.StringVar(&opts.format, "format", "text", "report format: text, json, or html")
 	fs.StringVar(&opts.output, "output", "", "report output file, or directory for html (default: stdout)")
+	fs.StringVar(&opts.save, "save", "", "save the measured result, original sources, and measurement settings for gomcdc report")
 	fs.Var(&opts.excludes, "exclude", "exclude module-relative glob; repeatable; ** is supported")
 	fs.BoolVar(&opts.includeTests, "include-tests", false, "include active _test.go files in all selected metrics")
 	fs.BoolVar(&opts.keepWorkDir, "keep-workdir", false, "keep the instrumented temporary workspace")
@@ -162,6 +164,9 @@ func splitGoTestArgs(args []string) (tool, goTest []string) {
 }
 
 func validateOptions(opts options) error {
+	if opts.save == "-" {
+		return errors.New("--save requires a file path, not stdout")
+	}
 	if opts.format != "text" && opts.format != "json" && opts.format != "html" {
 		return fmt.Errorf("unsupported --format=%q; use text, json, or html", opts.format)
 	}
@@ -171,29 +176,13 @@ func validateOptions(opts options) error {
 	if opts.timeout < 0 {
 		return errors.New("--timeout must be non-negative")
 	}
-	thresholds := []struct {
-		name   string
-		metric config.Metric
-		value  optionalFloat
-	}{
-		{"--fail-under-statement", config.MetricStatement, opts.failUnderStatement},
-		{"--fail-under-function", config.MetricFunction, opts.failUnderFunction},
-		{"--fail-under-decision", config.MetricDecision, opts.failUnderDecision},
-		{"--fail-under-switch-clause-body", config.MetricSwitchClauseBody, opts.failUnderSwitchClauseBody},
-		{"--fail-under-type-switch-clause-body", config.MetricTypeSwitchClauseBody, opts.failUnderTypeSwitchClauseBody},
-		{"--fail-under-select-clause-body", config.MetricSelectClauseBody, opts.failUnderSelectClauseBody},
-		{"--fail-under-switch-clause-selection", config.MetricSwitchClauseSelection, opts.failUnderSwitchClauseSelection},
-		{"--fail-under-type-switch-clause-selection", config.MetricTypeSwitchClauseSelection, opts.failUnderTypeSwitchClauseSelection},
-		{"--fail-under-condition", config.MetricCondition, opts.failUnderCondition},
-		{"--fail-under-mcdc-unique", config.MetricMCDCUnique, opts.failUnderMCDCUnique},
-		{"--fail-under-mcdc-masking", config.MetricMCDCMasking, opts.failUnderMCDCMasking},
-	}
-	for _, threshold := range thresholds {
-		if err := validateThreshold(threshold.name, threshold.value); err != nil {
+	for _, threshold := range thresholdSettings(opts) {
+		name := "--fail-under-" + threshold.name
+		if err := validateThreshold(name, threshold.value); err != nil {
 			return err
 		}
-		if threshold.value.set && !opts.metrics.Enabled(threshold.metric) {
-			return fmt.Errorf("%s requires --coverage to include %s", threshold.name, threshold.metric)
+		if threshold.value.set && !opts.metrics.Enabled(config.Metric(threshold.name)) {
+			return fmt.Errorf("%s requires --coverage to include %s", name, threshold.name)
 		}
 	}
 	maskingLimits := []struct {
@@ -223,6 +212,22 @@ func (opts options) maskingAnalysisBudget() mcdc.AnalysisBudget {
 	}
 }
 
+type thresholdSetting struct {
+	name  string
+	value optionalFloat
+}
+
+func thresholdSettings(opts options) []thresholdSetting {
+	return []thresholdSetting{
+		{"statement", opts.failUnderStatement}, {"function", opts.failUnderFunction},
+		{"decision", opts.failUnderDecision}, {"condition", opts.failUnderCondition},
+		{"switch-clause-body", opts.failUnderSwitchClauseBody}, {"type-switch-clause-body", opts.failUnderTypeSwitchClauseBody},
+		{"select-clause-body", opts.failUnderSelectClauseBody}, {"switch-clause-selection", opts.failUnderSwitchClauseSelection},
+		{"type-switch-clause-selection", opts.failUnderTypeSwitchClauseSelection},
+		{"mcdc-unique", opts.failUnderMCDCUnique}, {"mcdc-masking", opts.failUnderMCDCMasking},
+	}
+}
+
 func validateThreshold(name string, value optionalFloat) error {
 	if value.set && (math.IsNaN(value.value) || math.IsInf(value.value, 0) || value.value < 0 || value.value > 100) {
 		return fmt.Errorf("%s must be between 0 and 100", name)
@@ -233,6 +238,9 @@ func validateThreshold(name string, value optionalFloat) error {
 func writeTopUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "  gomcdc test [options] [package patterns] [-- go test arguments]")
+	fmt.Fprintln(w, "  gomcdc report [--format=text|json|html] [--output=path] <saved-result>")
+	fmt.Fprintln(w, "  gomcdc merge --output=merged.gomcdc.json [options] INPUT INPUT...")
+	fmt.Fprintln(w, "  gomcdc reanalyze --output=analyzed.gomcdc.json [options] INPUT")
 	fmt.Fprintln(w, "  gomcdc version")
 	fmt.Fprintln(w, "\nBy default all canonical coverage metrics are measured.")
 }

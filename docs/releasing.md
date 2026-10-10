@@ -21,8 +21,9 @@ If the draft targets an older commit, run Actions → Release Drafter on `master
 before running Release. Failed validation or packaging leaves the release as a
 draft. A failed upload can be retried by rerunning the workflow.
 
-Pull requests that change release configuration build the same archives without
-publishing. GoReleaser can also build them locally:
+Pull requests that change release configuration build the same archives for
+validation. Publication takes place through the Release workflow described
+above. GoReleaser can also build the archives locally:
 
 ```sh
 GOMCDC_RELEASE_TAG=v2.0.0-dev goreleaser release --snapshot --clean
