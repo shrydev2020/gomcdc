@@ -64,6 +64,15 @@ func TestAccess(t *testing.T) {
 		t.Fatalf("access report counts = %#v", built.Summary)
 	}
 	decision := built.Packages[0].Files[0].Functions[0].Decisions[0]
+	for _, evaluation := range decision.Evaluations {
+		if evaluation.TestID != "TestAccess" {
+			t.Fatalf("access evaluation test = %q", evaluation.TestID)
+		}
+	}
+	witness := decision.Conditions[0].MCDCMasking.Witness
+	if witness == nil || witness.First.TestID != "TestAccess" || witness.Second.TestID != "TestAccess" {
+		t.Fatalf("access witness lost its test: %#v", witness)
+	}
 	expired := decision.Conditions[1]
 	if expired.Expression != "expired" || expired.True || !expired.False || expired.NotEvaluated != 1 ||
 		expired.MCDCUnique.Status != "not-covered" || expired.MCDCMasking.Status != "not-covered" ||

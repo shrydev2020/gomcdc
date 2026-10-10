@@ -93,7 +93,7 @@ type DecisionEvaluation struct {
 }
 ```
 
-開始時に全 condition state を `not-evaluated` とする。実際に評価した Atom だけを true または false へ更新する。`EndDecision` に到達した評価だけを completed とし、panic、`runtime.Goexit`、process interruption 等で到達しなかった評価を aborted とする。TestID は補助情報であり、取得不能時は `unknown` とする。
+開始時に全 condition state を `not-evaluated` とする。実際に評価した Atom だけを true または false へ更新する。`EndDecision` に到達した評価だけを completed とし、panic、`runtime.Goexit`、process interruption 等で到達しなかった評価を aborted とする。TestID は評価を実行した Go test／subtest の名前を保持し、その test が起動した goroutine と cleanup callback にも引き継ぐ。test の入口の計装は `--include-tests` と独立して行い、test code を指標の分母へ追加しない。異なる test／process の同一 vector は report の証拠として別々に保持する。MC/DC 判定では証拠 pair の探索時に同一 vector を集約できる。初期化など test context がない実行は `unknown` とする。
 
 ### D10. 評価関数
 

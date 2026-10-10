@@ -965,8 +965,8 @@ func TestEvaluationEvidenceIsVerifiedBeforeSemanticDeduplication(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "invalid process provenance") {
 		t.Fatalf("invalid duplicate provenance was hidden: accepted=%#v err=%v", accepted, err)
 	}
-	if len(accepted.Evaluations) != 1 || accepted.Evaluations[0].TestID != "TestNamed" {
-		t.Fatalf("valid duplicates were not projected idempotently: %#v", accepted.Evaluations)
+	if len(accepted.Evaluations) != 2 || accepted.Evaluations[0].TestID != cover.UnknownTestID || accepted.Evaluations[1].TestID != "TestNamed" {
+		t.Fatalf("distinct test/process provenance was discarded: %#v", accepted.Evaluations)
 	}
 }
 

@@ -93,7 +93,7 @@ type DecisionEvaluation struct {
 }
 ```
 
-Every condition starts as `not-evaluated`. Only an Atom that actually evaluates is updated to true or false. An evaluation is completed only upon reaching `EndDecision`; it is aborted when panic, `runtime.Goexit`, process interruption, or another termination prevents that. TestID is auxiliary information and is `unknown` when unavailable.
+Every condition starts as `not-evaluated`. Only an Atom that actually evaluates is updated to true or false. An evaluation is completed only upon reaching `EndDecision`; it is aborted when panic, `runtime.Goexit`, process interruption, or another termination prevents that. TestID carries the Go test or subtest name for attributed evaluations, including goroutines spawned from that test and cleanup callbacks. Test entry-point instrumentation is independent of `--include-tests` and does not add test code to the metric denominator. Identical vectors from different tests or processes remain separate report evidence; MC/DC analysis may still deduplicate identical vectors when finding witnesses. Initializers and other execution without a test context retain `unknown`.
 
 ### D10. Evaluation function
 

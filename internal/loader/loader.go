@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/shrydev2020/gomcdc/v2/internal/analyzer"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -32,15 +33,17 @@ type Options struct {
 }
 
 type File struct {
-	Path        string
-	PackagePath string
-	PackageName string
+	Path         string
+	PackagePath  string
+	PackageName  string
+	TestContexts analyzer.TestContexts
 }
 
 type Result struct {
 	ModulePath       string
 	ModuleRoot       string
 	Files            []File
+	TestFiles        []File
 	PackageImportSet []string
 	// CoverPackageImportSet contains production packages whose initial load had
 	// no build/type diagnostics. Excluding broken packages prevents -coverpkg
@@ -114,12 +117,13 @@ func Load(ctx context.Context, opts Options) (Result, error) {
 		}
 	}
 
-	if opts.IncludeTests {
+	var attributionFiles []File
+	{
 		testCfg := *cfg
 		testCfg.Tests = true
-		// Test packages are metadata-only so their compile/type errors remain
-		// go test failures and can still yield a partial runtime report.
-		testCfg.Mode = packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedModule
+		// Type information identifies testing handles and callbacks. Diagnostics
+		// remain owned by go test and do not abort other package measurements.
+		testCfg.Mode = mode
 		testPkgs, loadErr := packages.Load(&testCfg, opts.Patterns...)
 		if loadErr != nil && len(testPkgs) == 0 {
 			return Result{}, fmt.Errorf("load test package metadata: %w", loadErr)
@@ -127,7 +131,17 @@ func Load(ctx context.Context, opts Options) (Result, error) {
 		// Do not promote test-package diagnostics to an instrumentation error.
 		// The actual go test command owns compile/test failures and can still
 		// leave useful events from other packages behind.
-		addPackageFiles(files, imports, testPkgs, moduleRoot, modulePath, true, false)
+		testFiles := make(map[string]File)
+		addPackageFiles(testFiles, imports, testPkgs, moduleRoot, modulePath, true, false)
+		for name, file := range testFiles {
+			if opts.IncludeTests {
+				files[name] = file
+			}
+		}
+		// Keep test entry points separate from the coverage denominator.
+		for _, file := range testFiles {
+			attributionFiles = append(attributionFiles, file)
+		}
 	}
 
 	if len(files) == 0 {
@@ -136,6 +150,7 @@ func Load(ctx context.Context, opts Options) (Result, error) {
 	result := Result{
 		ModulePath: modulePath,
 		ModuleRoot: moduleRoot,
+		TestFiles:  attributionFiles,
 	}
 	for _, file := range files {
 		result.Files = append(result.Files, file)
@@ -147,6 +162,7 @@ func Load(ctx context.Context, opts Options) (Result, error) {
 		result.CoverPackageImportSet = append(result.CoverPackageImportSet, importPath)
 	}
 	sort.Slice(result.Files, func(i, j int) bool { return result.Files[i].Path < result.Files[j].Path })
+	sort.Slice(result.TestFiles, func(i, j int) bool { return result.TestFiles[i].Path < result.TestFiles[j].Path })
 	sort.Strings(result.PackageImportSet)
 	sort.Strings(result.CoverPackageImportSet)
 	return result, nil
@@ -230,7 +246,14 @@ func addPackageFiles(
 			if _, exists := dst[abs]; exists {
 				continue
 			}
-			dst[abs] = File{Path: abs, PackagePath: pkg.PkgPath, PackageName: pkg.Name}
+			file := File{Path: abs, PackagePath: pkg.PkgPath, PackageName: pkg.Name}
+			for _, syntax := range pkg.Syntax {
+				if pkg.Fset.PositionFor(syntax.Pos(), false).Filename == name {
+					file.TestContexts = analyzer.AnalyzeTestContexts(pkg.Fset, syntax, pkg.TypesInfo)
+					break
+				}
+			}
+			dst[abs] = file
 			if collectImports {
 				imports[pkg.PkgPath] = struct{}{}
 			}

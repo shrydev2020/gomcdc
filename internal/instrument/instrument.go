@@ -177,7 +177,7 @@ func InstrumentPackage(options PackageOptions) (PackageResult, error) {
 				}
 			}
 		}
-		if len(mapping.Analysis.Decisions) == 0 && len(mapping.Analysis.Clauses) == 0 {
+		if len(mapping.Analysis.Decisions) == 0 && len(mapping.Analysis.Clauses) == 0 && mapping.Analysis.TestContexts.Empty() {
 			contents, err := os.ReadFile(mapping.CopyPath)
 			if err != nil {
 				return PackageResult{}, fmt.Errorf("inspect unchanged copied file %q: read: %w", mapping.CopyPath, err)
@@ -285,7 +285,7 @@ func InstrumentFile(copyPath string, analysis analyzer.File, helperName string) 
 	if !token.IsIdentifier(helperName) {
 		return fmt.Errorf("instrument copied file %q: invalid helper name %q", copyPath, helperName)
 	}
-	if len(analysis.Decisions) == 0 && len(analysis.Clauses) == 0 {
+	if len(analysis.Decisions) == 0 && len(analysis.Clauses) == 0 && analysis.TestContexts.Empty() {
 		return nil
 	}
 	data, mode, _, err := transformCopiedFile(copyPath, analysis, helperName, false)
@@ -343,7 +343,8 @@ func SelectHelperName(ctx context.Context, activeFiles []string) (string, error)
 		_, slotsExist := used[candidate+"Slots"]
 		_, runtimeAliasExists := used[candidate+"Runtime"]
 		_, evaluationTypeExists := used[candidate+"EvaluationID"]
-		if !helperExists && !slotsExist && !runtimeAliasExists && !evaluationTypeExists {
+		_, testNameExists := used[candidate+"Test"]
+		if !helperExists && !slotsExist && !runtimeAliasExists && !evaluationTypeExists && !testNameExists {
 			return candidate, nil
 		}
 	}
@@ -838,6 +839,11 @@ func classifyGeneratedStatement(statement ast.Stmt, helperName string) generated
 		if method, ok := generatedHelperMethod(current.Call, helperName); ok && method == "AbortSlots" {
 			return generatedLineRuntime
 		}
+		if enter, ok := current.Call.Fun.(*ast.CallExpr); ok {
+			if method, ok := generatedHelperMethod(enter, helperName); ok && (method == "EnterTest" || method == "EnterNamedTest") {
+				return generatedLineRuntime
+			}
+		}
 	case *ast.ExprStmt:
 		call, ok := current.X.(*ast.CallExpr)
 		if !ok {
@@ -1062,6 +1068,8 @@ type fileTransformer struct {
 	generatedRegions  []GeneratedRegion
 	reservedNames     map[string]struct{}
 	boundaryCount     int
+	testContexts      analyzer.TestContexts
+	testContextOnly   bool
 }
 
 type functionState struct {
@@ -1084,6 +1092,8 @@ func newFileTransformer(fset *token.FileSet, helperName string, analysis analyze
 		originalFile:      analysis.RelativePath,
 		compilerSelection: compilerClauseSelection,
 		reservedNames:     make(map[string]struct{}, len(analysis.Identifiers)),
+		testContexts:      analysis.TestContexts,
+		testContextOnly:   analysis.TestContextOnly,
 	}
 	for _, identifier := range analysis.Identifiers {
 		transformer.reservedNames[identifier] = struct{}{}
@@ -1113,6 +1123,24 @@ func newFileTransformer(fset *token.FileSet, helperName string, analysis analyze
 }
 
 func (transformer *fileTransformer) transform(file *ast.File) error {
+	ast.Inspect(file, func(node ast.Node) bool {
+		switch current := node.(type) {
+		case *ast.FuncDecl:
+			transformer.enterTest(current.Type, current.Body)
+		case *ast.FuncLit:
+			transformer.enterTest(current.Type, current.Body)
+		case *ast.CallExpr:
+			callback := transformer.testContexts.Callbacks[transformer.fset.PositionFor(current.Pos(), false).Offset]
+			index := callback.Argument
+			if callback.Method != "" && index >= 0 && index < len(current.Args) {
+				current.Args[index] = &ast.CallExpr{Fun: &ast.SelectorExpr{X: ast.NewIdent(transformer.helperName), Sel: ast.NewIdent(callback.Method)}, Args: []ast.Expr{current.Args[index]}}
+			}
+		}
+		return true
+	})
+	if transformer.testContextOnly {
+		return nil
+	}
 	for _, declaration := range file.Decls {
 		function, ok := declaration.(*ast.FuncDecl)
 		if ok && function.Body != nil {
@@ -1148,6 +1176,38 @@ func (transformer *fileTransformer) transform(file *ast.File) error {
 		return fmt.Errorf("matched %d of %d analyzed no-match switches", len(transformer.matchedNoMatch), len(transformer.noMatches))
 	}
 	return nil
+}
+
+func (transformer *fileTransformer) enterTest(signature *ast.FuncType, body *ast.BlockStmt) {
+	if body == nil {
+		return
+	}
+	offset := transformer.fset.PositionFor(body.Lbrace, false).Offset
+	method := "EnterTest"
+	var argument ast.Expr
+	if name, ok := transformer.testContexts.Examples[offset]; ok {
+		method = "EnterNamedTest"
+		argument = &ast.BasicLit{ValuePos: body.Lbrace + 1, Kind: token.STRING, Value: strconv.Quote(name)}
+	} else if entry, ok := transformer.testContexts.Entries[offset]; ok {
+		field := signature.Params.List[entry.Field]
+		name := transformer.helperName + "Test"
+		if len(field.Names) == 0 {
+			field.Names = []*ast.Ident{ast.NewIdent(name)}
+		} else {
+			if field.Names[entry.Name].Name != "_" {
+				name = field.Names[entry.Name].Name
+			}
+			field.Names[entry.Name].Name = name
+		}
+		argument = ast.NewIdent(name)
+		argument.(*ast.Ident).NamePos = body.Lbrace + 1
+	} else {
+		return
+	}
+	enter := &ast.CallExpr{Fun: &ast.SelectorExpr{X: ast.NewIdent(transformer.helperName), Sel: ast.NewIdent(method)}, Args: []ast.Expr{argument}}
+	prologue := &ast.DeferStmt{Call: &ast.CallExpr{Fun: enter}}
+	body.List = append([]ast.Stmt{prologue}, body.List...)
+	transformer.recordGenerated("test-context", body, 1)
 }
 
 func (transformer *fileTransformer) transformFunction(body *ast.BlockStmt) error {
