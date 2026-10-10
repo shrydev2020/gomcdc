@@ -158,8 +158,8 @@ func TestReadFileHonorsCancellation(t *testing.T) {
 	}
 }
 
-func TestPrepareRejectsUnsupportedGoVersionBeforeReadingCompilerSources(t *testing.T) {
-	for _, version := range []string{"go1.25.9", "go1.26", "go1.26.", "go1.26rc1", "go1.26.5-custom", "go1.27.0", "devel go1.27-abcdef"} {
+func TestPrepareChecksCompilerSourceWithoutVersionAllowlist(t *testing.T) {
+	for _, version := range []string{"go1.26.5", "go1.27.1", "go1.28.0", "devel go1.28-abcdef"} {
 		t.Run(version, func(t *testing.T) {
 			fakeBin := t.TempDir()
 			fakeGo := filepath.Join(fakeBin, "go")
@@ -170,20 +170,11 @@ func TestPrepareRejectsUnsupportedGoVersionBeforeReadingCompilerSources(t *testi
 			t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 			_, err := Prepare(t.Context(), t.TempDir())
-			want := "requires stable Go 1.26.x, got " + version
+			want := "read Go " + version + " switch lowering source"
 			if err == nil || !strings.Contains(err.Error(), want) {
 				t.Fatalf("Prepare error = %v, want %q", err, want)
 			}
 		})
-	}
-}
-
-func TestSupportedGoVersionAcceptsStableGo126Patches(t *testing.T) {
-	t.Parallel()
-	for _, version := range []string{"go1.26.0", "go1.26.4", "go1.26.5", "go1.26.999"} {
-		if !isSupportedGoVersion(version) {
-			t.Errorf("isSupportedGoVersion(%q) = false", version)
-		}
 	}
 }
 
@@ -252,7 +243,7 @@ func setFakeGoEnv(t *testing.T, goroot, version string) {
 	t.Setenv("PATH", fakeBin)
 }
 
-func TestPatchInstalledGo126SwitchLowering(t *testing.T) {
+func TestPatchInstalledGoSwitchLowering(t *testing.T) {
 	command := exec.Command("go", "env", "GOROOT", "GOVERSION")
 	command.Env = buildEnvironment(os.Environ())
 	output, err := command.Output()
@@ -260,8 +251,8 @@ func TestPatchInstalledGo126SwitchLowering(t *testing.T) {
 		t.Fatalf("go env: %v", err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	if len(lines) != 2 || !isSupportedGoVersion(lines[1]) {
-		t.Skipf("installed toolchain is not stable Go 1.26.x: %q", strings.TrimSpace(string(output)))
+	if len(lines) != 2 {
+		t.Fatalf("unexpected go env output: %q", output)
 	}
 	source, err := os.ReadFile(filepath.Join(lines[0], "src", "cmd", "compile", "internal", "walk", "switch.go"))
 	if err != nil {

@@ -145,8 +145,11 @@ func PlanCoverageCorrespondence(ctx context.Context, input CorrespondencePlanInp
 			Region: CoverRegion{
 				ProfilePath: normalizeCorrespondenceProfilePath(block.ProfileFile),
 				Range:       block.ProfileRange,
-				Statements:  block.Statements,
+				Statements:  block.coverStatements(),
 			},
+		}
+		if block.coverStatements() != len(units) {
+			region.Region.SourceStatements = len(units)
 		}
 		generatedCount := 0
 		ambiguous := false

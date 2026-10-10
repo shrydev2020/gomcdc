@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/parser"
+	"go/scanner"
 	"go/token"
 )
 
@@ -14,6 +15,12 @@ import (
 // instrumentation, without compiling, editing, or executing the source.
 // filename should be the stable module-relative original path.
 func BuildInventory(filename string, source []byte) (FileInventory, error) {
+	return BuildProducerInventory(filename, source, CoverLayout{})
+}
+
+// BuildProducerInventory retains each statement's logical source identity but
+// emits regions in the coordinate space observed from the selected Go cover.
+func BuildProducerInventory(filename string, source []byte, layout CoverLayout) (FileInventory, error) {
 	if filename == "" {
 		return FileInventory{}, fmt.Errorf("build C0 inventory: filename is empty")
 	}
@@ -27,6 +34,7 @@ func BuildInventory(filename string, source []byte) (FileInventory, error) {
 		source: append([]byte(nil), source...),
 		seen:   make(map[inventoryPositionPair]struct{}),
 		blocks: make([]InventoryBlock, 0),
+		layout: layout,
 	}
 	ast.Walk(inventoryVisitor{builder: builder}, file)
 	return FileInventory{
@@ -39,6 +47,7 @@ type inventoryBuilder struct {
 	source []byte
 	seen   map[inventoryPositionPair]struct{}
 	blocks []InventoryBlock
+	layout CoverLayout
 }
 
 type inventoryVisitor struct {
@@ -153,7 +162,12 @@ func (visitor inventoryVisitor) addCounters(
 	extendToClosingBrace bool,
 ) {
 	if len(statements) == 0 {
-		visitor.record(insertPosition, blockEnd, 0, nil)
+		if visitor.builder.layout.SplitCodeRanges {
+			ranges := visitor.builder.codeRanges(insertPosition, blockEnd)
+			visitor.record(ranges[0].start, ranges[0].end, 0, nil)
+		} else {
+			visitor.record(insertPosition, blockEnd, 0, nil)
+		}
 		return
 	}
 	statements = append([]ast.Stmt(nil), statements...)
@@ -182,7 +196,23 @@ func (visitor inventoryVisitor) addCounters(
 			end = blockEnd
 		}
 		if position != end {
-			visitor.record(position, end, last, statements[:last])
+			if visitor.builder.layout.SplitCodeRanges {
+				for _, span := range mergeCodeRanges(visitor.builder.codeRanges(position, end), statements[:last]) {
+					units := make([]ast.Stmt, 0, last)
+					for _, statement := range statements[:last] {
+						if statement.Pos() >= span.start && statement.Pos() < span.end {
+							units = append(units, statement)
+						}
+					}
+					statementCount := last
+					if visitor.builder.layout.RangeStatementCounts {
+						statementCount = len(units)
+					}
+					visitor.record(span.start, span.end, statementCount, units)
+				}
+			} else {
+				visitor.record(position, end, last, statements[:last])
+			}
 		}
 		statements = statements[last:]
 		if len(statements) == 0 {
@@ -201,6 +231,9 @@ func (visitor inventoryVisitor) record(start, end token.Pos, statementCount int,
 	profileFile := visitor.profileFile
 	if profileFile == "" {
 		profileFile = profileStart.Filename
+	}
+	if builder.layout.PhysicalPositions {
+		profileStart, profileEnd = physicalStart, physicalEnd
 	}
 	pair := inventoryPositionPair{
 		startFile: profileStart.Filename,
@@ -228,17 +261,90 @@ func (visitor inventoryVisitor) record(start, end token.Pos, statementCount int,
 			ProfilePosition:  logicalPosition,
 		})
 	}
+	producerStatements := 0
+	if statementCount != len(statements) {
+		producerStatements = statementCount
+	}
 	builder.blocks = append(builder.blocks, InventoryBlock{
 		PhysicalRange: SourceRange{
 			Start: Position{Line: physicalStart.Line, Column: physicalStart.Column},
 			End:   Position{Line: physicalEnd.Line, Column: physicalEnd.Column},
 		},
-		ProfileFile:    profileFile,
-		ProfileRange:   SourceRange{Start: pair.start, End: pair.end},
-		ProfileAnchors: anchors,
-		StatementUnits: statementUnits,
-		Statements:     statementCount,
+		ProfileFile:     profileFile,
+		ProfileRange:    SourceRange{Start: pair.start, End: pair.end},
+		ProfileAnchors:  anchors,
+		StatementUnits:  statementUnits,
+		Statements:      len(statements),
+		CoverStatements: producerStatements,
 	})
+}
+
+type codeRange struct{ start, end token.Pos }
+
+// codeRanges follows cmd/cover's token-based removal of blank and comment-only
+// lines. Logical //line positions are deliberately ignored while scanning.
+func (builder *inventoryBuilder) codeRanges(start, end token.Pos) []codeRange {
+	original := builder.fset.File(start)
+	startOffset, endOffset := original.Offset(start), original.Offset(end)
+	source := builder.source[startOffset:endOffset]
+	file := token.NewFileSet().AddFile("", -1, len(source))
+	var lexer scanner.Scanner
+	lexer.Init(file, source, nil, 0)
+	var ranges []codeRange
+	var codeStart token.Pos
+	previousEndLine := 0
+	for {
+		position, kind, literal := lexer.Scan()
+		if kind == token.EOF {
+			break
+		}
+		if kind == token.LBRACE || kind == token.RBRACE || kind == token.SEMICOLON && literal == "\n" {
+			continue
+		}
+		startLine := file.PositionFor(position, false).Line
+		endLine := startLine
+		if kind == token.STRING {
+			endLine = file.PositionFor(position+token.Pos(len(literal)), false).Line
+		}
+		if previousEndLine == 0 {
+			codeStart = original.Pos(startOffset + file.Offset(position))
+		} else if startLine > previousEndLine+1 {
+			codeEnd := original.Pos(startOffset + file.Offset(file.LineStart(previousEndLine+1)))
+			ranges = append(ranges, codeRange{codeStart, codeEnd})
+			codeStart = original.Pos(startOffset + file.Offset(position))
+		}
+		previousEndLine = max(previousEndLine, endLine)
+	}
+	if previousEndLine > 0 {
+		codeEnd := end
+		if previousEndLine < file.LineCount() {
+			codeEnd = original.Pos(startOffset + file.Offset(file.LineStart(previousEndLine+1)))
+		}
+		ranges = append(ranges, codeRange{codeStart, codeEnd})
+	}
+	if len(ranges) == 0 {
+		return []codeRange{{start, start}}
+	}
+	return ranges
+}
+
+func mergeCodeRanges(ranges []codeRange, statements []ast.Stmt) []codeRange {
+	merged := make([]codeRange, 0, len(ranges))
+	for _, span := range ranges {
+		insideStatement := false
+		for _, statement := range statements {
+			if statement.Pos() < span.start && span.start < statement.End() {
+				insideStatement = true
+				break
+			}
+		}
+		if len(merged) > 0 && insideStatement {
+			merged[len(merged)-1].end = span.end
+		} else {
+			merged = append(merged, span)
+		}
+	}
+	return merged
 }
 
 func (builder *inventoryBuilder) findText(position token.Pos, text string) int {

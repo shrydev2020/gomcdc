@@ -88,6 +88,17 @@ type InventoryBlock struct {
 	ProfileAnchors []Position           `json:"profile_anchors"`
 	StatementUnits []InventoryStatement `json:"statement_units,omitempty"`
 	Statements     int                  `json:"statements"`
+	// CoverStatements is the producer's NumStmt when a basic block is split
+	// into code ranges. It may count the whole block rather than this range's
+	// statement units; zero retains the unsplit Statements count.
+	CoverStatements int `json:"cover_statements,omitzero"`
+}
+
+func (block InventoryBlock) coverStatements() int {
+	if block.CoverStatements != 0 {
+		return block.CoverStatements
+	}
+	return block.Statements
 }
 
 // InventoryStatement identifies one original statement unit in both physical

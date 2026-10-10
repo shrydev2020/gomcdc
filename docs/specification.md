@@ -12,7 +12,7 @@ For one logical `gomcdc test` measurement request, the tool aggregates eleven me
 
 `gomcdc version` performs no measurement, writes the build identity to standard output, and exits with code 0. A module-version build uses `gomcdc vMAJOR.MINOR.PATCH` (or the complete Go module version); a local build uses `gomcdc devel`, optionally followed by the abbreviated VCS revision and `dirty`. Additional arguments are invalid CLI usage. The identity comes from Go build information and requires no linker flag.
 
-The target environment is stable Go 1.26.x (1.26.0 or later), Go Modules, Linux, and macOS. The compiler-aware backend applies an exact-anchor patch to the selected Go compiler source and fails explicitly when those anchors are incompatible. Target sources are packages in the main module returned by `go list` for the supplied package patterns. The target set excludes the standard library, external modules, vendor, tool-generated sources, and sources with the standard Go generated-code comment. `_test.go` belongs to AST metrics only with `--include-tests`; that flag does not affect Statement or Function.
+The target environment is Go 1.26.0 or later, Go Modules, Linux, and macOS. The compiler-aware backend applies an exact-anchor patch to the selected Go compiler source and fails explicitly when those anchors are incompatible. Later releases are not rejected by a Go version allowlist. Target sources are packages in the main module returned by `go list` for the supplied package patterns. The target set excludes the standard library, external modules, vendor, tool-generated sources, and sources with the standard Go generated-code comment. `_test.go` belongs to AST metrics only with `--include-tests`; that flag does not affect Statement or Function.
 
 ## 2. Basic domains
 
@@ -113,7 +113,7 @@ Reaching a later body through fallthrough is body-execution, not direct-selectio
 
 ### D12. Statement Coverage
 
-Each unit in a Go cover-profile block's statement count is an obligation. If the block counter is greater than zero, all its units are covered. The detail unit is a statement region carrying original source range, statement count, and counter.
+Each statement unit in the unchanged original-source inventory is an obligation. A unit is covered when its corresponding accepted Go cover counter is greater than zero. Splitting a producer basic block into multiple regions does not duplicate original obligations through repeated NumStmt values. Units with different counters are displayed as separate statement regions. The detail unit is a statement region carrying original source range, statement count, and counter.
 
 ### D13. Function Coverage
 
@@ -200,7 +200,7 @@ The module, package, file, function, decision, condition, and clause levels sum 
 
 ### D21. Evidence authority
 
-Go standard cover over original sources supplies Statement and Function evidence. The AST backend supplies Decision, Condition, both MC/DC metrics, and the three Clause Body metrics. A compiler-aware backend supplies the two Clause Selection metrics.
+Go standard cover over original sources supplies Statement and Function evidence. The selected Go cover's coordinates and code-range splitting are identified from its emitted instrumentation. Producer NumStmt is separate from original-source statement obligations; physical producer regions retain each statement's logical source identity. Split regions preserve individual statement counts so an earlier counter cannot credit a later region that was not reached. The AST backend supplies Decision, Condition, both MC/DC metrics, and the three Clause Body metrics. A compiler-aware backend supplies the two Clause Selection metrics.
 
 The unchanged original-source Inventory is the sole denominator authority. Raw
 producer output becomes coverage evidence only after integrity, provenance,
@@ -370,7 +370,7 @@ The acceptance suite includes AND, OR, NOT, nested expressions, a fixed-seed sem
 
 Completion requires successful `go test -count=1 ./...`, `go test -race -count=1 ./...`, and `go vet ./...`, and integer equality between fixture-module aggregation and the sum of its package aggregations.
 
-Repository CI measures gomcdc itself on the latest stable Go 1.26.x/Linux toolchain and checks the module and critical-package floors in `.github/self-mcdc-baseline.json`. This baseline is a maintenance contract that prevents regression from the verified test suite, not a coverage-conformance threshold defined by this specification. A change that lowers a floor must identify and justify the obligations being lost during review.
+Repository CI runs the acceptance suite on Go 1.26.x and 1.27.x. It measures gomcdc itself on the latest stable Go/Linux toolchain and checks the module and critical-package floors in `.github/self-mcdc-baseline.json`. This baseline is a maintenance contract that prevents regression from the verified test suite, not a coverage-conformance threshold defined by this specification. A change that lowers a floor must identify and justify the obligations being lost during review.
 
 ## 11. References
 
