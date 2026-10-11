@@ -22,10 +22,10 @@ jobs:
         with:
           go-version: ${{ matrix.go }}
           cache: true
-      - run: go test -count=1 ./...
+      - run: make test
       - if: runner.os == 'Linux'
-        run: go test -count=1 -race ./...
-      - run: go vet ./...
+        run: make race
+      - run: make vet
 
   self-mcdc:
     runs-on: ubuntu-latest
@@ -36,14 +36,7 @@ jobs:
           go-version: stable
           cache: true
       - name: Verify gomcdc with its own MC/DC report
-        run: >-
-          go run . test
-          --timeout=10m
-          --coverage=decision,condition,mcdc-unique,mcdc-masking
-          --strict
-          --format=json
-          --output=${{ runner.temp }}/gomcdc-self-mcdc.json
-          ./...
+        run: make self-mcdc SELF_MCDC_REPORT=${{ runner.temp }}/gomcdc-self-mcdc.json
       - name: Enforce critical-package MC/DC baselines
         env:
           GOMCDC_REPORT: ${{ runner.temp }}/gomcdc-self-mcdc.json
