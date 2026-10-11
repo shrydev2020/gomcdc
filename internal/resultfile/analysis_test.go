@@ -8,8 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/shrydev2020/gomcdc/v2/internal/config"
 	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
 	"github.com/shrydev2020/gomcdc/v2/internal/mcdc"
 	"github.com/shrydev2020/gomcdc/v2/internal/report"
@@ -37,6 +39,90 @@ func TestAnalysisSourceOrderIsIndependentOfInputOrder(t *testing.T) {
 	right, _ := Encode(second)
 	if !bytes.Equal(left, right) {
 		t.Fatal("source ordering changed the derived result")
+	}
+}
+
+func TestAnalyzePreservesBuildAndBinaryArgumentBoundaries(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name, diagnostic string
+		left, right      []string
+		goFlags          string
+	}{
+		{"runtime selection", "", []string{"-run=First"}, []string{"-test.run=Second"}, ""},
+		{"binary selection", "incompatible saved results", []string{"-args", "-run=First"}, []string{"-args", "-run=Second"}, ""},
+		{"unknown flag", "incompatible saved results", []string{"-custom=first"}, []string{"-custom=second"}, ""},
+		{"build flag value resembles runtime flag", "incompatible saved results", []string{"-ldflags", "-run=First"}, []string{"-ldflags", "-run=Second"}, ""},
+		{"missing value", "requires a value", nil, []string{"-run"}, ""},
+		{"GOFLAGS missing value", "requires a value", nil, nil, "-run"},
+		{"GOFLAGS open quote", "unterminated", nil, nil, `-tags="open`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			a, b := c0Snapshot(strings.Repeat("a", 32)), c0Snapshot(strings.Repeat("b", 32))
+			a.Settings.GoTestArgs, b.Settings.GoTestArgs = test.left, test.left
+			if _, err := Analyze(t.Context(), []Result{a, b}, mcdc.AnalysisBudget{}); err != nil {
+				t.Fatalf("matching control: %v", err)
+			}
+			b.Settings.GoTestArgs, b.Settings.GOFLAGS = test.right, test.goFlags
+			for range 2 {
+				_, err := Analyze(t.Context(), []Result{a, b}, mcdc.AnalysisBudget{})
+				if test.diagnostic == "" {
+					if err != nil {
+						t.Fatalf("compatible runtime selection: %v", err)
+					}
+				} else if err == nil || !strings.Contains(err.Error(), test.diagnostic) {
+					t.Fatalf("want %q, got %v", test.diagnostic, err)
+				}
+				a, b = b, a
+			}
+		})
+	}
+}
+
+func TestAnalyzeRequiresIndependentPhysicalRuns(t *testing.T) {
+	t.Parallel()
+	snapshot := func(id string, value bool) Result {
+		r := c0Snapshot(id)
+		source := []byte("package p\nfunc Check(a bool) bool { if a { return true }; return false }\n")
+		r.Sources[0].Content, r.Sources[0].SHA256 = source, Digest(source)
+		r.Settings.SourceDigests["p.go"] = Digest(source)
+		r.Settings.Coverage = []string{"decision", "condition", "mcdc-unique", "mcdc-masking"}
+		state := cover.ConditionFalse
+		if value {
+			state = cover.ConditionTrue
+		}
+		location := cover.SourceLocation{File: "p.go", Start: cover.Position{Line: 2, Column: 30}, End: cover.Position{Line: 2, Column: 31}}
+		r.Report = report.Build(report.Input{
+			ModulePath: "example.test/p", ToolVersion: "test-version", Coverage: config.AllCoverage(),
+			RunStatus: cover.RunPassed, FailureKind: cover.RunFailureNone, Complete: true, MeasurementMode: report.MeasurementSingleRun,
+			Decisions:   []cover.DecisionMetadata{{ID: 1, Package: "example.test/p", Function: "Check", Kind: cover.DecisionIf, Location: location, Expression: "a", ExpressionTree: cover.NewConditionExpression(0), Conditions: []cover.ConditionMetadata{{ID: 2, Index: 0, Location: location, Expression: "a"}}}},
+			Evaluations: []cover.DecisionEvaluation{{DecisionID: 1, EvaluationID: 1, RunID: id, PackagePath: "example.test/p", ProcessID: 1, Conditions: []cover.ConditionState{state}, Result: value, Status: cover.EvaluationCompleted}},
+		})
+		return r
+	}
+	for _, test := range []struct{ name, runID, diagnostic string }{
+		{"independent", strings.Repeat("b", 32), ""},
+		{"overlapping", strings.Repeat("a", 32), "overlap the same physical run"},
+		{"missing", "", "missing its run identity"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			a, b := snapshot(strings.Repeat("a", 32), true), snapshot(strings.Repeat("b", 32), false)
+			b.Report.Packages[0].Files[0].Functions[0].Decisions[0].Evaluations[0].RunID = test.runID
+			// Distinct evaluations from one physical run still represent overlapping
+			// exports, even when the evaluation identities themselves do not collide.
+			b.Report.Packages[0].Files[0].Functions[0].Decisions[0].Evaluations[0].EvaluationID = "2"
+			for range 2 {
+				merged, err := Analyze(t.Context(), []Result{a, b}, mcdc.AnalysisBudget{})
+				if test.diagnostic != "" {
+					if err == nil || !strings.Contains(err.Error(), test.diagnostic) || merged.Report.SchemaVersion != "" {
+						t.Fatalf("ambiguous evidence: %v", err)
+					}
+				} else if err != nil || len(merged.Inputs) != 2 || merged.Report.Summary.MCDCMasking.Covered != 1 || merged.Report.Summary.MCDCUnique.Covered != 1 {
+					t.Fatalf("independent observations should form one witness: %+v %v", merged.Report.Summary, err)
+				}
+				a, b = b, a
+			}
+		})
 	}
 }
 

@@ -64,6 +64,69 @@ func TestOfflineAnalysisKeepsRejectedEvidenceOutOfWitnesses(t *testing.T) {
 	}
 }
 
+func TestOfflineAnalysisCombinesAcceptedPartialEvidenceInEveryOrder(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name         string
+		partialValue bool
+		wantCovered  int
+	}{
+		{"partial completes witness", false, 1},
+		{"only rejected run completes witness", true, 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			complete := report.Build(offlineDecisionInput("complete", true))
+			partialInput := offlineDecisionInput("partial", test.partialValue)
+			partialInput.Complete = false
+			partialInput.RunStatus = cover.RunFailed
+			partialInput.FailureKind = cover.RunFailureInterrupted
+			partialInput.ProducerOutcomes[0].Completeness = report.ProducerCompletenessPartial
+			partial := report.Build(partialInput)
+			rejectedInput := offlineDecisionInput("rejected", false)
+			rejectedInput.Complete = false
+			rejectedInput.RunStatus = cover.RunFailed
+			rejectedInput.Results.Integrity = report.ResultFailed
+			rejectedInput.ProducerOutcomes[0].Integrity = report.ProducerIntegrityInvalid
+			rejectedInput.ProducerOutcomes[0].Usability = report.ProducerUsabilityRejected
+			rejected := report.Build(rejectedInput)
+			originals := []report.AnalysisSnapshot{{ID: "complete", Report: complete}, {ID: "partial", Report: partial}, {ID: "rejected", Report: rejected}}
+			before, err := json.Marshal(originals)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, order := range [][3]int{{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}} {
+				inputs := []report.AnalysisSnapshot{originals[order[0]], originals[order[1]], originals[order[2]]}
+				merged, err := report.AnalyzeSnapshots(t.Context(), inputs, config.AllCoverage(), mcdc.AnalysisBudget{})
+				if err != nil {
+					t.Fatalf("order %v: %v", order, err)
+				}
+				if merged.Summary.MCDCUnique.Covered != test.wantCovered || merged.Summary.MCDCMasking.Covered != test.wantCovered || merged.Summary.MCDCMasking.Total != 1 || merged.Summary.MCDCMasking.Unknown != 0 {
+					t.Fatalf("order %v changed accepted evidence: %+v", order, merged.Summary)
+				}
+				if merged.Run.Complete || merged.Run.Results.Integrity != report.ResultFailed {
+					t.Fatalf("order %v lost incomplete execution or integrity failure: %+v", order, merged.Run)
+				}
+				evaluations := merged.Packages[0].Files[0].Functions[0].Decisions[0].Evaluations
+				if len(evaluations) != 2 {
+					t.Fatalf("order %v: expected both accepted observations, got %+v", order, evaluations)
+				}
+				for _, evaluation := range evaluations {
+					if evaluation.RunID != "complete" && evaluation.RunID != "partial" {
+						t.Fatalf("rejected evidence became a witness candidate: %+v", evaluation)
+					}
+				}
+				if len(merged.ContributingRuns) != 3 {
+					t.Fatalf("original run provenance: %+v", merged.ContributingRuns)
+				}
+			}
+			after, err := json.Marshal(originals)
+			if err != nil || string(before) != string(after) {
+				t.Fatalf("analysis changed original evidence: %v", err)
+			}
+		})
+	}
+}
+
 func TestOfflineAnalysisRejectsChangedInventoriesAndInvalidVectors(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
