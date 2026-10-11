@@ -13,6 +13,7 @@ import (
 
 	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
 	"github.com/shrydev2020/gomcdc/v2/internal/buildinfo"
+	"github.com/shrydev2020/gomcdc/v2/internal/config"
 	"github.com/shrydev2020/gomcdc/v2/internal/mcdc"
 	"github.com/shrydev2020/gomcdc/v2/internal/measurement"
 	"github.com/shrydev2020/gomcdc/v2/internal/requirements"
@@ -119,10 +120,11 @@ func runMeasurementStage(ctx context.Context, dir, command string, args []string
 			return ExitInvalidUsage
 		}
 		var built analysis.Result
-		built, err = analysis.FromMeasurement(ctx, archive, mcdc.AnalysisBudget{MaxEvaluationPairs: pairs.value, MaxSearchStates: states.value, MaxSolverBytes: solver.value})
+		settings := analysis.NewSettings(mcdc.AnalysisBudget{MaxEvaluationPairs: pairs.value, MaxSearchStates: states.value, MaxSolverBytes: solver.value})
+		built, err = analysis.FromMeasurement(ctx, archive, settings.MaskingBudget())
 		if err == nil {
 			built.ToolVersion = buildinfo.Version()
-			err = resultfile.WriteContext(ctx, resolveOutputPath(dir, output), resultfile.NewMeasurement(archive, built))
+			err = resultfile.WriteContext(ctx, resolveOutputPath(dir, output), resultfile.NewMeasurement(archive, settings, built))
 		}
 	}
 	if err != nil {
@@ -177,9 +179,32 @@ func runRequire(ctx context.Context, dir string, args []string, stdout, stderr i
 		fmt.Fprintf(stderr, "gomcdc: require: read analysis %q: %v\n", fs.Arg(0), err)
 		return ExitMeasurementFailed
 	}
-	// The saved report is a presentation snapshot. Gate on the archived
-	// evidence under its recorded analysis limits, never on cached outcomes.
-	built, err := analysis.FromMeasurement(ctx, saved.Measurement, savedAnalysisBudget(saved))
+	var selected config.CoverageSet
+	if !requested.Complete {
+		selected = make(config.CoverageSet)
+		for name := range requested.Minimum {
+			selected[config.Metric(name)] = true
+		}
+		if len(selected) == 0 {
+			fmt.Fprintln(stderr, "specify at least one coverage requirement")
+			return ExitInvalidUsage
+		}
+	}
+	measured, err := config.ParseCoverage(strings.Join(saved.Measurement.Plan.Settings.Coverage, ","))
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return ExitMeasurementFailed
+	}
+	for name := range requested.Minimum {
+		if !measured.Enabled(config.Metric(name)) {
+			fmt.Fprintf(stderr, "%s was not measured\n", name)
+			return ExitInvalidUsage
+		}
+	}
+	// Evidence and analysis settings are inputs; the saved report is only an
+	// output snapshot. --complete needs every recorded metric, other requests
+	// need only their selected metrics.
+	built, err := analysis.FromMeasurementMetrics(ctx, saved.Measurement, saved.AnalysisSettings.MaskingBudget(), selected)
 	if ctx.Err() != nil {
 		fmt.Fprintf(stderr, "gomcdc: require: interrupted: %v\n", ctx.Err())
 		return ExitInterrupted

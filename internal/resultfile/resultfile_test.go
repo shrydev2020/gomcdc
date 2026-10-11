@@ -13,6 +13,7 @@ import (
 	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
 	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
 	"github.com/shrydev2020/gomcdc/v2/internal/evidence"
+	"github.com/shrydev2020/gomcdc/v2/internal/mcdc"
 	"github.com/shrydev2020/gomcdc/v2/internal/measurement"
 	"github.com/shrydev2020/gomcdc/v2/internal/report"
 )
@@ -24,7 +25,7 @@ func fixture() Result {
 	archive := measurement.Archive{Plan: measurement.Plan{Definition: measurement.Definition, ToolVersion: "test-version", Module: "example.test/p", Settings: planSettings, Sources: []measurement.Source{{PackagePath: "example.test/p", Path: "p.go", Content: source, SHA256: Digest(source)}}}, Runs: []measurement.Run{{ID: settings.InvocationID, Settings: settings, Status: cover.RunPassed, FailureKind: cover.RunFailureNone, Complete: true, Mode: "single-run", Results: measurement.RunResults{Test: measurement.ResultPassed, Measurement: measurement.ResultPassed, Integrity: measurement.ResultPassed, Strict: measurement.ResultNotRequested, Threshold: measurement.ResultNotRequested}, Producers: []evidence.ProducerOutcome{{Producer: evidence.ProducerASTRuntime, Integrity: evidence.ProducerIntegrityValid, Completeness: evidence.ProducerCompletenessComplete, Mapping: evidence.ProducerMappingComplete, Usability: evidence.ProducerUsabilityAccepted}}}}}
 	built := analysis.Analyze(analysis.Input{ModulePath: "example.test/p", ToolVersion: "test-version"})
 	built.Packages = []analysis.PackageReport{{Path: "example.test/p", Files: []analysis.FileReport{{Path: "p.go", Functions: []analysis.FunctionReport{{Statements: []analysis.StatementReport{{Count: 1<<60 + 1}}}}}}}}
-	return NewMeasurement(archive, built)
+	return NewMeasurement(archive, analysis.NewSettings(mcdc.AnalysisBudget{}), built)
 }
 
 func TestSavedResultPreservesSourceBytesAndReport(t *testing.T) {
@@ -65,11 +66,11 @@ func TestSavedResultRejectsCorruptionAndUnsupportedFormats(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, data := range map[string][]byte{
-		"old version 1.0": bytes.Replace(encoded, []byte(`"version": "2.0"`), []byte(`"version": "1.0"`), 1),
-		"old version 1.1": bytes.Replace(encoded, []byte(`"version": "2.0"`), []byte(`"version": "1.1"`), 1),
+		"old version 1.0": bytes.Replace(encoded, []byte(`"version": "2.1"`), []byte(`"version": "1.0"`), 1),
+		"old version 1.1": bytes.Replace(encoded, []byte(`"version": "2.1"`), []byte(`"version": "1.1"`), 1),
 		"truncated":       encoded[:len(encoded)/2],
 		"trailing":        append(bytes.Clone(encoded), []byte("{}")...),
-		"future format":   bytes.Replace(encoded, []byte(`"version": "2.0"`), []byte(`"version": "9.0"`), 1),
+		"future format":   bytes.Replace(encoded, []byte(`"version": "2.1"`), []byte(`"version": "9.0"`), 1),
 		"changed report":  bytes.Replace(encoded, []byte("test-version"), []byte("fake-version"), 1),
 		"plain report":    []byte(`{"schemaVersion":"2.0"}`),
 	} {
@@ -87,6 +88,10 @@ func TestSavedResultRejectsCorruptionAndUnsupportedFormats(t *testing.T) {
 			delete(v["report"].(map[string]any)["summary"].(map[string]any)["decision"].(map[string]any), "covered")
 		}},
 		{"missing measurement", "missing fields", func(v map[string]any) { delete(v, "measurement") }},
+		{"missing settings", "missing fields", func(v map[string]any) { delete(v, "analysisSettings") }},
+		{"zero analysis limit", "positive masking limits", func(v map[string]any) {
+			v["analysisSettings"].(map[string]any)["maskingAnalysisLimits"].(map[string]any)["maxSolverBytes"] = 0
+		}},
 		{"unknown property", `unknown field "invented"`, func(v map[string]any) { v["invented"] = true }},
 		{"report version", "unsupported report schema", func(v map[string]any) { v["report"].(map[string]any)["schemaVersion"] = "9.0" }},
 		{"missing source", "missing original source", func(v map[string]any) {
@@ -151,6 +156,54 @@ func TestWriteDoesNotReplaceExistingResultOnValidationFailure(t *testing.T) {
 	info, err := os.Stat(path)
 	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("saved result permissions: %v %v", info, err)
+	}
+}
+
+func TestLegacyResultImportsAnalysisSettings(t *testing.T) {
+	for _, limits := range []*analysis.MaskingAnalysisLimits{nil, {}, {MaxEvaluationPairs: 11, MaxSearchStates: 23, MaxSolverBytes: 4096}} {
+		original := fixture()
+		original.Report.MaskingAnalysisLimits = limits
+		payload, err := json.Marshal(legacyResult{Measurement: original.Measurement, Report: original.Report})
+		if err != nil {
+			t.Fatal(err)
+		}
+		canonical, err := canonicalJSON(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := json.Marshal(envelope{Format: Format, Version: "2.0", SHA256: Digest(canonical), Result: payload})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := Decode(bytes.NewReader(data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := analysis.NewSettings(mcdc.AnalysisBudget{})
+		if limits != nil {
+			want = analysis.NewSettings((analysis.Settings{MaskingAnalysisLimits: *limits}).MaskingBudget())
+		}
+		if got.AnalysisSettings != want {
+			t.Fatalf("imported settings = %+v, want %+v", got.AnalysisSettings, want)
+		}
+		if got.Report.MaskingAnalysisLimits != nil {
+			got.Report.MaskingAnalysisLimits.MaxSolverBytes = 1
+		}
+		if got.AnalysisSettings != want {
+			t.Fatal("settings alias the legacy report")
+		}
+		upgraded, err := Encode(got)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wire envelope
+		if err := json.Unmarshal(upgraded, &wire); err != nil || wire.Version != "2.1" {
+			t.Fatalf("upgrade version %q: %v", wire.Version, err)
+		}
+		roundtrip, err := Decode(bytes.NewReader(upgraded))
+		if err != nil || roundtrip.AnalysisSettings != want {
+			t.Fatalf("upgrade lost settings: %+v, %v", roundtrip.AnalysisSettings, err)
+		}
 	}
 }
 

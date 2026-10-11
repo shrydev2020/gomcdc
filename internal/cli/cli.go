@@ -445,7 +445,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		for _, d := range built.Errors {
 			archive.Runs[0].Diagnostics = append(archive.Runs[0].Diagnostics, measurementdata.Diagnostic{Phase: d.Phase, Code: d.Code, Message: d.Message, Package: d.Package, Path: d.Path})
 		}
-		saved := resultfile.NewMeasurement(archive, built)
+		saved := resultfile.NewMeasurement(archive, analysis.NewSettings(opts.maskingAnalysisBudget()), built)
 		if err := resultfile.Write(resolveOutputPath(workingDir, opts.save), saved); err != nil {
 			fmt.Fprintf(stderr, "gomcdc: save result: %v\n", err)
 			return ExitMeasurementFailed

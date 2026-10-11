@@ -188,7 +188,7 @@ func TestMeasurementSchemaRemainsUnchanged(t *testing.T) {
 
 func TestSavedResultSchemaMatchesItsPayload(t *testing.T) {
 	t.Parallel()
-	data, err := os.ReadFile("../../schema/saved-result-v2.0.schema.json")
+	data, err := os.ReadFile("../../schema/saved-result-v2.1.schema.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,8 +213,11 @@ func TestSavedResultSchemaMatchesItsPayload(t *testing.T) {
 	if saved.Defs["result"].Properties["measurement"].Ref != "measurement-v1.0.schema.json#/$defs/measurement.Archive" {
 		t.Fatal("measurement schema reference changed")
 	}
-	if !sameStringSet(saved.Defs["result"].Required, []string{"measurement", "report"}) || len(saved.Defs["result"].Properties) != 2 {
+	if !sameStringSet(saved.Defs["result"].Required, []string{"measurement", "analysisSettings", "report"}) || len(saved.Defs["result"].Properties) != 3 {
 		t.Fatal("saved result wire fields changed")
+	}
+	if err := checkSchemaShape(&saved, saved.Defs["result"].Properties["analysisSettings"], reflect.TypeFor[analysis.Settings](), "analysisSettings"); err != nil {
+		t.Fatal(err)
 	}
 
 }

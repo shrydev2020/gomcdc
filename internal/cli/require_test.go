@@ -38,8 +38,14 @@ func TestRequireUsesMeasurementEvidence(t *testing.T) {
 		{"unmeasured metric", func(r *resultfile.Result) {
 			r.Report.Summary.Decision = r.Report.Summary.MCDCMasking
 		}, []string{"--decision=100"}, ExitInvalidUsage, "decision was not measured"},
-		{"recorded solver limit", func(r *resultfile.Result) {
+		{"report solver limit", func(r *resultfile.Result) {
 			r.Report.MaskingAnalysisLimits.MaxSolverBytes = 1
+		}, []string{"--complete", "--mcdc-masking=100"}, ExitSuccess, "1/1; minimum 100.00%"},
+		{"removed report limits", func(r *resultfile.Result) {
+			r.Report.MaskingAnalysisLimits = nil
+		}, []string{"--complete", "--mcdc-masking=100"}, ExitSuccess, "1/1; minimum 100.00%"},
+		{"recorded solver limit", func(r *resultfile.Result) {
+			r.AnalysisSettings.MaskingAnalysisLimits.MaxSolverBytes = 1
 		}, []string{"--complete", "--mcdc-masking=100"}, ExitCoverageThreshold, "analysis-incomplete"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

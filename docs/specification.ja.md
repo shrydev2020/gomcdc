@@ -319,7 +319,9 @@ HTMLは各producerのintegrity、completeness、mapping、usabilityをoverall ru
 
 ### D33. 保存結果とreport
 
-`gomcdc test --save FILE`は[保存結果2.0](../schema/saved-result-v2.0.schema.json)を出力する。payloadは計測アーカイブ`measurement`と判定済み`report`からなる。元ソースと計測条件はアーカイブに保持する。test失敗や中断時も回収した証拠と結果を保存する。
+`gomcdc test --save FILE`は[保存結果2.1](../schema/saved-result-v2.1.schema.json)を出力する。payloadは計測アーカイブ`measurement`、解析条件`analysisSettings`、判定済み`report`からなる。元ソースと計測条件はアーカイブに保持する。`analysisSettings.maskingAnalysisLimits`はD19の3つの実効上限を正の整数で保持し、requireとreanalyzeの入力になる。report内の上限は表示用で、解析条件の決定権を持たない。test失敗や中断時も回収した証拠と結果を保存する。
+
+既存の[保存結果2.0](../schema/saved-result-v2.0.schema.json)も読み込める。2.0の読込時に限り、reportの上限を独立したanalysisSettingsへ取り込む。省略・0値は従来どおり既定値で補い、再保存は2.1とする。2.1ではanalysisSettingsの欠落・0値を拒否し、reportから補完しない。解析条件はartifactに記録された入力であり、CI側が固定するリソース制約を表すものではない。
 
 保存fileは`format`、`version`、`sha256`、payloadを持つ。checksumは整数精度を保持し、object keyを整列したcompact JSONのSHA-256とする。必須field、version、checksum、元ソースのhashと所有関係を検証する。permission 0600の一時fileからrenameで公開する。
 
@@ -327,7 +329,7 @@ HTMLは各producerのintegrity、completeness、mapping、usabilityをoverall ru
 
 ### D34. MC/DC再解析
 
-`gomcdc reanalyze --output FILE [解析上限] INPUT`は保存結果の計測アーカイブから被覆を再計算する。D19の3つの上限を指定でき、未指定値は入力の実効上限を引き継ぐ。
+`gomcdc reanalyze --output FILE [解析上限] INPUT`は保存結果の計測アーカイブから被覆を再計算する。D19の3つの上限を指定でき、未指定値はanalysisSettingsの実効上限を引き継ぐ。出力のanalysisSettingsには上書き後の実効上限を保存する。
 
 複数実行の解析と再解析は[Report 2.1](../schema/report-v2.1.schema.json)の`contributingRuns`に元実行の結果、policy判定、producer結果、診断を保持する。複数実行では`measurementMode=merged`とし、`measurements`に各実計測を列挙する。全体のtest・measurement・integrityは元の失敗を引き継ぎ、`complete`は全実行がcompleteの場合にtrueとなる。解析操作のstrict・閾値判定は`not-requested`とする。
 
@@ -349,7 +351,7 @@ HTMLは各producerのintegrity、completeness、mapping、usabilityをoverall ru
 
 analyzeはPlanのBoolean構造と受理された評価を使い、実行を跨ぐMC/DC証拠ペアを求める。C0の各RunはPlan内の全ソースのinventoryを持ち、統合は元ソースのstatement単位で行う。counter加算のoverflowはエラーとする。元実行の失敗と証拠の出所を保持する。
 
-requireは計測アーカイブと保存された解析上限から被覆・完全性を再計算し、その結果で要求を判定する。保存済みreportの集計値は判定に使用せず、入力fileも変更しない。`--complete`は実行・証拠・計装・解析の完全性を要求する。指標の最低率は、計測済みで実現可能な対象が1個以上あり、unknown・unsupported・analysis-incompleteが0、丸め前の達成率が指定値以上の場合に満たす。指定値は0〜100の有限数とする。
+requireは計測アーカイブとanalysisSettingsから被覆・完全性を再計算し、その結果で要求を判定する。保存済みreportの集計値・解析上限は判定に使用せず、入力fileも変更しない。最低率だけを指定した場合は要求された指標のみを解析し、`--complete`を指定した場合は計測された全指標を解析して実行・証拠・計装・解析の完全性を要求する。どちらもアーカイブ全体の整合性を検証し、未計測の指標は引数エラーとする。指標の最低率は、計測済みで実現可能な対象が1個以上あり、unknown・unsupported・analysis-incompleteが0、丸め前の達成率が指定値以上の場合に満たす。指定値は0〜100の有限数とする。
 
 recordはtest失敗で1、計測失敗で2を返す。merge・analyze・reanalyze・reportは処理成功で0、requireは全充足で0、未充足で3を返す。引数の誤りは4、読出し・解析・出力失敗は2、中断は130とする。保存はatomicに公開し、公開前の失敗では既存出力を保持する。recordとtestにはcheckoutとGo環境が必要で、以降の処理は保存fileだけで実行する。
 

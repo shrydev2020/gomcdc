@@ -94,6 +94,16 @@ func TestFalseA(t *testing.T) { Choose(false,false) }
 		}
 	}
 	run(outputs, ExitSuccess, "require", "--complete", "--mcdc-masking=100", "result.json")
+	// A statement-only gate does not need Masking analysis, while --complete
+	// must still enforce every recorded metric under the saved settings.
+	limited := readSaved(t, baselinePath)
+	limited.AnalysisSettings.MaskingAnalysisLimits.MaxSolverBytes = 1
+	if err := resultfile.Write(filepath.Join(outputs, "limited.json"), limited); err != nil {
+		t.Fatal(err)
+	}
+	run(outputs, ExitSuccess, "require", "--statement=100", "--function=100", "limited.json")
+	run(outputs, ExitCoverageThreshold, "require", "--statement=100", "--complete", "limited.json")
+	run(outputs, ExitCoverageThreshold, "require", "--mcdc-masking=100", "limited.json")
 	run(outputs, ExitSuccess, "report", "--format=html", "--output=html", "result.json")
 	run(outputs, ExitSuccess, "analyze", "--output=partial.json", paths[0])
 	run(outputs, ExitCoverageThreshold, "require", "--mcdc-masking=100", "partial.json")
