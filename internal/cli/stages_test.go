@@ -94,14 +94,40 @@ func TestFalseA(t *testing.T) { Choose(false,false) }
 		}
 	}
 	run(outputs, ExitSuccess, "require", "--complete", "--mcdc-masking=100", "result.json")
+	// A statement-only gate does not need Masking analysis, while --complete
+	// must still enforce every recorded metric under the saved settings.
+	limited := readSaved(t, baselinePath)
+	limited.AnalysisSettings.MaskingAnalysisLimits.MaxSolverBytes = 1
+	if err := resultfile.Write(filepath.Join(outputs, "limited.json"), limited); err != nil {
+		t.Fatal(err)
+	}
+	run(outputs, ExitSuccess, "require", "--statement=100", "--function=100", "limited.json")
+	run(outputs, ExitCoverageThreshold, "require", "--statement=100", "--complete", "limited.json")
+	run(outputs, ExitCoverageThreshold, "require", "--mcdc-masking=100", "limited.json")
 	run(outputs, ExitSuccess, "report", "--format=html", "--output=html", "result.json")
 	run(outputs, ExitSuccess, "analyze", "--output=partial.json", paths[0])
 	run(outputs, ExitCoverageThreshold, "require", "--mcdc-masking=100", "partial.json")
+	t.Run("require ignores inflated summary", func(t *testing.T) {
+		run(outputs, ExitSuccess, "analyze", "--output=half.json", paths[0], paths[1])
+		half := readSaved(t, filepath.Join(outputs, "half.json"))
+		if metric := half.Report.Summary.MCDCMasking; metric.Covered != 1 || metric.Total != 2 {
+			t.Fatalf("expected 50%% masking coverage: %+v", metric)
+		}
+		half.Report.Summary.MCDCMasking.Covered = 2
+		if err := resultfile.Write(filepath.Join(outputs, "inflated.json"), half); err != nil {
+			t.Fatal(err)
+		}
+		out := run(outputs, ExitCoverageThreshold, "require", "--mcdc-masking=100", "inflated.json")
+		if !strings.Contains(out, "1/2; minimum 100.00%") {
+			t.Fatalf("require did not use measurement coverage: %s", out)
+		}
+	})
 	// Reanalysis uses archived evidence, never the saved presentation values.
 	saved.Report.Summary.MCDCMasking.Covered = 0
 	if err := resultfile.Write(filepath.Join(outputs, "modified.json"), saved); err != nil {
 		t.Fatal(err)
 	}
+	run(outputs, ExitSuccess, "require", "--complete", "--mcdc-masking=100", "modified.json")
 	run(outputs, ExitSuccess, "reanalyze", "--output=restored.json", "modified.json")
 	if readSaved(t, filepath.Join(outputs, "restored.json")).Report.Summary.MCDCMasking.Covered != 2 {
 		t.Fatal("reanalyze trusted saved summary")

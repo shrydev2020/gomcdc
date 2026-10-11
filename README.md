@@ -143,5 +143,5 @@ go vet ./...
 
 - [Normative specification (Japanese)](docs/specification.ja.md) · [English reference](docs/specification.md)
 - [Report schema](schema/report-v2.0.schema.json) · [Multi-run and reanalysis schema](schema/report-v2.1.schema.json)
-- [Measurement archive schema](schema/measurement-v1.0.schema.json) · [Saved-result schema](schema/saved-result-v2.0.schema.json)
+- [Measurement archive schema](schema/measurement-v1.0.schema.json) · [Saved-result schema](schema/saved-result-v2.1.schema.json)
 - [Releasing](docs/releasing.md) · [MIT License](LICENSE)

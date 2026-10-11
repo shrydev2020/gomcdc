@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/shrydev2020/gomcdc/schema/saved-result-v2.1.schema.json",
+  "title": "gomcdc saved measurement, analysis settings, and report 2.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "version",
+    "sha256",
+    "result"
+  ],
+  "properties": {
+    "format": {
+      "const": "gomcdc-saved-result"
+    },
+    "version": {
+      "const": "2.1"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "result": {
+      "$ref": "#/$defs/result"
+    }
+  },
+  "$defs": {
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "measurement",
+        "analysisSettings",
+        "report"
+      ],
+      "properties": {
+        "report": {
+          "oneOf": [
+            {
+              "$ref": "report-v2.0.schema.json"
+            },
+            {
+              "$ref": "report-v2.1.schema.json"
+            }
+          ]
+        },
+        "measurement": {
+          "$ref": "measurement-v1.0.schema.json#/$defs/measurement.Archive"
+        },
+        "analysisSettings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "maskingAnalysisLimits"
+          ],
+          "properties": {
+            "maskingAnalysisLimits": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "maxEvaluationPairs",
+                "maxSearchStates",
+                "maxSolverBytes"
+              ],
+              "properties": {
+                "maxEvaluationPairs": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 18446744073709551615
+                },
+                "maxSearchStates": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 18446744073709551615
+                },
+                "maxSolverBytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 18446744073709551615
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

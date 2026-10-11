@@ -11,7 +11,6 @@ import (
 
 	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
 	"github.com/shrydev2020/gomcdc/v2/internal/buildinfo"
-	"github.com/shrydev2020/gomcdc/v2/internal/mcdc"
 	"github.com/shrydev2020/gomcdc/v2/internal/resultfile"
 )
 
@@ -69,11 +68,7 @@ func runReanalysis(ctx context.Context, workingDir string, args []string, stdout
 		fmt.Fprintln(stderr, "gomcdc: Masking limits require mcdc-masking in the saved coverage selection")
 		return ExitInvalidUsage
 	}
-	budget := mcdc.AnalysisBudget{}
-	if saved.Report.MaskingAnalysisLimits != nil {
-		previous := saved.Report.MaskingAnalysisLimits
-		budget = mcdc.AnalysisBudget{MaxEvaluationPairs: previous.MaxEvaluationPairs, MaxSearchStates: previous.MaxSearchStates, MaxSolverBytes: previous.MaxSolverBytes}
-	}
+	budget := saved.AnalysisSettings.MaskingBudget()
 	if pairs.set {
 		budget.MaxEvaluationPairs = pairs.value
 	}
@@ -96,7 +91,7 @@ func runReanalysis(ctx context.Context, workingDir string, args []string, stdout
 		return ExitInterrupted
 	}
 	built.ToolVersion = buildinfo.Version()
-	result := resultfile.NewMeasurement(saved.Measurement, built)
+	result := resultfile.NewMeasurement(saved.Measurement, analysis.NewSettings(budget), built)
 	if err := resultfile.WriteContext(ctx, resolveOutputPath(workingDir, output), result); err != nil {
 		fmt.Fprintf(stderr, "gomcdc: save analysis: %v\n", err)
 		if ctx.Err() != nil {

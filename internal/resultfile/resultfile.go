@@ -18,9 +18,17 @@ import (
 )
 
 const Format = "gomcdc-saved-result"
-const Version = "2.0"
+const Version = "2.1"
 
 type Result struct {
+	Measurement      measurement.Archive `json:"measurement"`
+	AnalysisSettings analysis.Settings   `json:"analysisSettings"`
+	Report           analysis.Result     `json:"report"`
+}
+
+// legacyResult is only the v2.0 wire format. Its limits are imported once at
+// the decoding boundary; current-format consumers always use AnalysisSettings.
+type legacyResult struct {
 	Measurement measurement.Archive `json:"measurement"`
 	Report      analysis.Result     `json:"report"`
 }
@@ -37,8 +45,8 @@ func Digest(contents []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func NewMeasurement(archive measurement.Archive, built analysis.Result) Result {
-	return Result{Measurement: archive, Report: built}
+func NewMeasurement(archive measurement.Archive, settings analysis.Settings, built analysis.Result) Result {
+	return Result{Measurement: archive, AnalysisSettings: settings, Report: built}
 }
 
 // SourceFiles returns embedded originals without consulting the checkout.
@@ -51,6 +59,10 @@ func (result Result) SourceFiles() []analysis.SourceFileInput {
 }
 
 func validate(result Result) error {
+	limits := result.AnalysisSettings.MaskingAnalysisLimits
+	if limits.MaxEvaluationPairs == 0 || limits.MaxSearchStates == 0 || limits.MaxSolverBytes == 0 {
+		return errors.New("saved analysis settings require positive masking limits")
+	}
 	if err := measurement.Validate(context.Background(), result.Measurement); err != nil {
 		return fmt.Errorf("validate saved measurement: %w", err)
 	}
@@ -133,7 +145,7 @@ func Decode(reader io.Reader) (Result, error) {
 	if err := requireEOF(decoder); err != nil {
 		return Result{}, fmt.Errorf("read saved result envelope: %w", err)
 	}
-	if saved.Format != Format || saved.Version != Version {
+	if saved.Format != Format || (saved.Version != Version && saved.Version != "2.0") {
 		return Result{}, fmt.Errorf("unsupported saved result format/version %q/%q; use a file written by gomcdc test --save", saved.Format, saved.Version)
 	}
 	canonical, err := canonicalJSON(saved.Result)
@@ -146,12 +158,17 @@ func Decode(reader io.Reader) (Result, error) {
 	decoder = json.NewDecoder(bytes.NewReader(saved.Result))
 	decoder.DisallowUnknownFields()
 	var result Result
-	if err := decoder.Decode(&result); err != nil {
+	var legacy legacyResult
+	var payload any = &result
+	if saved.Version == "2.0" {
+		payload = &legacy
+	}
+	if err := decoder.Decode(payload); err != nil {
 		return Result{}, fmt.Errorf("decode saved result: %w", err)
 	}
 	// Every non-optional field must survive the typed round trip. Without this,
 	// missing booleans or counts would silently become valid-looking zeroes.
-	reencoded, err := json.Marshal(result)
+	reencoded, err := json.Marshal(payload)
 	if err != nil {
 		return Result{}, fmt.Errorf("marshal decoded saved result: %w", err)
 	}
@@ -161,6 +178,14 @@ func Decode(reader io.Reader) (Result, error) {
 	}
 	if !bytes.Equal(canonical, normalized) {
 		return Result{}, errors.New("saved result has missing fields or non-canonical field values")
+	}
+	if saved.Version == "2.0" {
+		settings := analysis.Settings{}
+		if legacy.Report.MaskingAnalysisLimits != nil {
+			settings.MaskingAnalysisLimits = *legacy.Report.MaskingAnalysisLimits
+		}
+		// v2.0 used default limits for omitted or zero fields.
+		result = NewMeasurement(legacy.Measurement, analysis.NewSettings(settings.MaskingBudget()), legacy.Report)
 	}
 	if err := validate(result); err != nil {
 		return Result{}, fmt.Errorf("validate decoded saved result: %w", err)

@@ -62,7 +62,7 @@ func saveOfflineBoundaryFixture(t *testing.T, root, name string, metrics []strin
 	if err != nil {
 		t.Fatal(err)
 	}
-	saved := resultfile.NewMeasurement(archive, built)
+	saved := resultfile.NewMeasurement(archive, analysis.NewSettings(budget), built)
 	if err := measurement.Write(t.Context(), filepath.Join(root, name+".measurement.json"), archive); err != nil {
 		t.Fatal(err)
 	}
@@ -90,6 +90,12 @@ func TestOfflineAnalysisLimitInheritanceAndOverrides(t *testing.T) {
 			t.Run(command+"/"+test.name, func(t *testing.T) {
 				root := t.TempDir()
 				first := saveOfflineBoundaryFixture(t, root, "first", []string{"mcdc-masking"}, stored)
+				// Report metadata has no authority over inherited analysis settings.
+				modified := readSaved(t, first)
+				modified.Report.MaskingAnalysisLimits.MaxSolverBytes = 1
+				if err := resultfile.Write(first, modified); err != nil {
+					t.Fatal(err)
+				}
 				want := stored
 				args := []string{command, "--output=derived.json"}
 				if test.flag != "" {
@@ -111,6 +117,9 @@ func TestOfflineAnalysisLimitInheritanceAndOverrides(t *testing.T) {
 					t.Fatalf("exit %d: %s", code, diagnostics.String())
 				}
 				got := readSaved(t, filepath.Join(root, "derived.json"))
+				if got.AnalysisSettings.MaskingBudget() != want {
+					t.Fatalf("analysis settings = %+v, want %+v", got.AnalysisSettings, want)
+				}
 				expected := &analysis.MaskingAnalysisLimits{MaxEvaluationPairs: want.MaxEvaluationPairs, MaxSearchStates: want.MaxSearchStates, MaxSolverBytes: want.MaxSolverBytes}
 				if !reflect.DeepEqual(got.Report.MaskingAnalysisLimits, expected) {
 					t.Fatalf("limits = %+v, want %+v", got.Report.MaskingAnalysisLimits, expected)
@@ -119,7 +128,7 @@ func TestOfflineAnalysisLimitInheritanceAndOverrides(t *testing.T) {
 					t.Fatalf("complete fixture lost its witness: %+v", got.Report.Summary.MCDCMasking)
 				}
 				original := readSaved(t, filepath.Join(root, "first.json"))
-				if *original.Report.MaskingAnalysisLimits != (analysis.MaskingAnalysisLimits{MaxEvaluationPairs: 11, MaxSearchStates: 23, MaxSolverBytes: 4096}) {
+				if original.AnalysisSettings.MaskingBudget() != stored || original.Report.MaskingAnalysisLimits.MaxSolverBytes != 1 {
 					t.Fatal("original limits changed")
 				}
 			})

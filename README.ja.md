@@ -138,5 +138,5 @@ go vet ./...
 
 - [規範仕様](docs/specification.ja.md) · [English reference](docs/specification.md)
 - [Report schema](schema/report-v2.0.schema.json) · [複数実行・再解析のschema](schema/report-v2.1.schema.json)
-- [計測archive schema](schema/measurement-v1.0.schema.json) · [保存結果schema](schema/saved-result-v2.0.schema.json)
+- [計測archive schema](schema/measurement-v1.0.schema.json) · [保存結果schema](schema/saved-result-v2.1.schema.json)
 - [リリース手順](docs/releasing.md) · [MIT License](LICENSE)

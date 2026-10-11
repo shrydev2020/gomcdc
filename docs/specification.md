@@ -345,7 +345,9 @@ Temporary directories and event files use owner-only permissions. Source copies 
 
 ### D33. Saved results and reports
 
-`gomcdc test --save FILE` writes a [saved result 2.0](../schema/saved-result-v2.0.schema.json). Its payload contains the `measurement` archive and derived `report`. The archive holds original sources and measurement settings. Failed and interrupted tests retain recovered evidence and outcomes.
+`gomcdc test --save FILE` writes a [saved result 2.1](../schema/saved-result-v2.1.schema.json). Its payload contains the `measurement` archive, `analysisSettings`, and derived `report`. The archive holds original sources and measurement settings. `analysisSettings.maskingAnalysisLimits` records the three effective D19 limits as positive integers and supplies the inputs to require and reanalyze. Limits in the report are descriptive and do not determine analysis settings. Failed and interrupted tests retain recovered evidence and outcomes.
+
+Readers also accept existing [saved results 2.0](../schema/saved-result-v2.0.schema.json). Only the 2.0 reader imports report limits into independent analysisSettings, retaining the previous defaults for omitted or zero values. Subsequent saves use 2.1. Version 2.1 rejects missing analysisSettings or zero limits and never fills them from the report. These settings are artifact inputs, not independently enforced CI resource constraints.
 
 Saved files contain `format`, `version`, `sha256`, and a payload. The checksum is SHA-256 over compact JSON with sorted object keys and exact integer precision. Readers validate required fields, versions, checksums, source hashes, and source ownership. Publication renames a temporary file with permission 0600.
 
@@ -353,7 +355,7 @@ Saved files contain `format`, `version`, `sha256`, and a payload. The checksum i
 
 ### D34. MC/DC reanalysis
 
-`gomcdc reanalyze --output FILE [analysis limits] INPUT` recomputes coverage from the saved measurement archive. The three D19 limits may be overridden; omitted limits retain their recorded values.
+`gomcdc reanalyze --output FILE [analysis limits] INPUT` recomputes coverage from the saved measurement archive. The three D19 limits may be overridden; omitted limits retain their effective values from analysisSettings. The output analysisSettings records the effective limits after overrides.
 
 Multi-run analysis and reanalysis use [Report 2.1](../schema/report-v2.1.schema.json). `contributingRuns` retains each execution's outcomes, policy decisions, producer outcomes, and diagnostics. Multiple executions use `measurementMode=merged` and list each measurement in `measurements`. Aggregate test, measurement, and integrity outcomes retain original failures; `complete` is true when every execution is complete. The analysis operation's strict and threshold outcomes are `not-requested`.
 
@@ -375,7 +377,7 @@ Each CI job records the same sources, package set, metrics, and Go/build conditi
 
 Analyze uses the Plan's Boolean structure and accepted evaluations to find MC/DC witnesses across executions. Each C0 Run holds inventories for all Plan sources; merging uses original-source statement units. Counter overflow is an error. Original failures and evidence provenance remain attached to each execution.
 
-Require's `--complete` demands complete execution, evidence, instrumentation, and analysis. A metric minimum is satisfied when at least one measured, feasible obligation exists, unknown/unsupported/analysis-incomplete counts are zero, and the unrounded percentage meets the requested minimum. Minimums are finite values from 0 to 100.
+Require recomputes coverage and completeness from the measurement archive and analysisSettings and evaluates requirements against that result. It does not use saved report summaries or limits for the decision or modify the input file. Minimum-only requests analyze just the requested metrics; `--complete` analyzes every recorded metric and demands complete execution, evidence, instrumentation, and analysis. Both validate the entire archive and reject unmeasured metrics as invalid arguments. A metric minimum is satisfied when at least one measured, feasible obligation exists, unknown/unsupported/analysis-incomplete counts are zero, and the unrounded percentage meets the requested minimum. Minimums are finite values from 0 to 100.
 
 Record returns 1 for test failure and 2 for measurement failure. Merge, analyze, reanalyze, and report return 0 on successful processing; require returns 0 for satisfied requirements and 3 otherwise. Invalid arguments return 4; read, analysis, or output errors return 2; interruption returns 130. Atomic publication preserves existing output on failure before publication. Record and test need a checkout and Go; subsequent operations use saved files.
 

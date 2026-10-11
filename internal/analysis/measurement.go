@@ -19,12 +19,30 @@ import (
 // FromMeasurement analyzes original typed evidence. Even after merging, the
 // Boolean tree comes from the plan, never from a formatted report expression.
 func FromMeasurement(ctx context.Context, archive measurement.Archive, budget mcdc.AnalysisBudget) (Result, error) {
+	return FromMeasurementMetrics(ctx, archive, budget, nil)
+}
+
+// FromMeasurementMetrics analyzes only the selected measured metrics. A nil
+// selection means all recorded metrics. It validates the entire archive and
+// never rewrites the measurement Plan to change the analysis selection.
+func FromMeasurementMetrics(ctx context.Context, archive measurement.Archive, budget mcdc.AnalysisBudget, selected config.CoverageSet) (Result, error) {
 	if err := measurement.Validate(ctx, archive); err != nil {
 		return Result{}, fmt.Errorf("validate measurement for analysis: %w", err)
 	}
 	metrics, err := config.ParseCoverage(strings.Join(archive.Plan.Settings.Coverage, ","))
 	if err != nil {
 		return Result{}, fmt.Errorf("parse analysis metrics: %w", err)
+	}
+	if selected != nil {
+		if len(selected.Names()) == 0 {
+			return Result{}, fmt.Errorf("no analysis metrics selected")
+		}
+		for metric, enabled := range selected {
+			if enabled && !metrics.Enabled(metric) {
+				return Result{}, fmt.Errorf("%s was not measured", metric)
+			}
+		}
+		metrics = selected
 	}
 	snapshots := make([]runProjection, 0, len(archive.Runs))
 	for _, run := range archive.Runs {
@@ -107,7 +125,7 @@ func measurementInput(ctx context.Context, plan measurement.Plan, run measuremen
 	for _, d := range run.Diagnostics {
 		input.Errors = append(input.Errors, ReportError{Phase: d.Phase, Code: d.Code, Message: d.Message, Package: d.Package, Path: d.Path})
 	}
-	if run.Cover != nil {
+	if run.Cover != nil && (metrics.Enabled(config.MetricStatement) || metrics.Enabled(config.MetricFunction)) {
 		projected, err := c0.ProjectAcceptedEvidence(ctx, plan.Module, *run.Cover, c0.Options{SeparateStatements: separateStatements})
 		if err != nil {
 			return Input{}, fmt.Errorf("project execution %q counters: %w", run.ID, err)
