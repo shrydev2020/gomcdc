@@ -1,4 +1,4 @@
-package report
+package analysis
 
 import (
 	"context"
@@ -10,17 +10,18 @@ import (
 	"github.com/shrydev2020/gomcdc/v2/internal/mcdc"
 )
 
-// buildContext is the normalized input side of report assembly. Build consumes
+// buildContext is the normalized input side of report assembly. Analyze consumes
 // these indexes to construct the package/file/function tree; evidence grouping
 // and deterministic ordering are kept out of that phase.
 type buildContext struct {
-	report                 Report
+	report                 Result
 	maskingAnalysisBudget  mcdc.AnalysisBudget
 	context                context.Context
 	maskingDecisionWorkers int
 
-	decisions []cover.DecisionMetadata
-	clauses   []cover.ClauseMetadata
+	decisionByID map[cover.DecisionID]cover.DecisionMetadata
+	decisions    []cover.DecisionMetadata
+	clauses      []cover.ClauseMetadata
 
 	evaluationsByDecision   map[cover.DecisionID][]cover.DecisionEvaluation
 	notEvaluatedByDecision  map[cover.DecisionID]int
@@ -56,7 +57,7 @@ func newBuildContext(input Input) *buildContext {
 	if input.Coverage.Enabled(config.MetricMCDCMasking) {
 		maskingDecisionWorkers = effectiveMaskingDecisionWorkers(input.MaxMaskingDecisionWorkers, len(input.Decisions))
 	}
-	report := Report{
+	report := Result{
 		SchemaVersion:    SchemaVersion,
 		ToolVersion:      normalizedToolVersion(input.ToolVersion),
 		Module:           input.ModulePath,
@@ -205,7 +206,7 @@ func newBuildContext(input Input) *buildContext {
 	return &buildContext{
 		report: report, maskingAnalysisBudget: maskingAnalysisBudget,
 		context: ctx, maskingDecisionWorkers: maskingDecisionWorkers,
-		decisions: decisions, clauses: clauses,
+		decisions: decisions, clauses: clauses, decisionByID: decisionByID,
 		evaluationsByDecision: evaluationsByDecision, notEvaluatedByDecision: notEvaluatedByDecision,
 		observationCounts: observationCounts, selectedAlternatives: selectedAlternatives, noMatchObservations: noMatchObservations,
 		packageEvidence: packageEvidence, astPackageEvidence: astPackageEvidence,

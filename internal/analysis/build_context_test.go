@@ -1,4 +1,4 @@
-package report
+package analysis
 
 import (
 	"testing"
@@ -24,5 +24,19 @@ func TestBuildContextIndexesEvidenceDeterministically(t *testing.T) {
 	}
 	if !ctx.astPackageEvidence["example.test/p"] {
 		t.Fatal("completed evaluation did not mark package evidence")
+	}
+}
+
+func TestMissingGeneratedProbeIsUnknownDespiteDeclaredCapability(t *testing.T) {
+	input := parallelDecisionTestInput(1)
+	input.Probes = cover.Probes{}
+	built := Analyze(input)
+	if built.Instrumentation.Total.Unknown == 0 || built.Summary.Decision.Unknown == 0 || built.Summary.MCDCMasking.Covered != 0 {
+		t.Fatalf("missing probe treated as measured: %+v", built.Summary)
+	}
+	input.Probes.Decisions = []cover.DecisionID{input.Decisions[0].ID}
+	measured := Analyze(input)
+	if measured.Summary.Decision.Unknown != 0 || measured.Summary.Decision.Covered != 2 {
+		t.Fatalf("generated probe not used: %+v", measured.Summary.Decision)
 	}
 }

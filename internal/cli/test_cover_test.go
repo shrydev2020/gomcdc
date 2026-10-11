@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/shrydev2020/gomcdc/v2/internal/report"
+	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
 )
 
 func TestIncludeTestsMeasuresStatementsAndFunctionsInOneRun(t *testing.T) {
@@ -168,8 +168,8 @@ func TestCounterFailure(t *testing.T) {
 	if built.Summary.Statement.Unknown == 0 || built.Summary.Statement.Covered != 0 {
 		t.Fatalf("counter failure accepted: %+v", built.Summary.Statement)
 	}
-	ast := findProducerOutcome(t, built, report.ProducerASTRuntime)
-	if ast.Usability != report.ProducerUsabilityAccepted {
+	ast := findProducerOutcome(t, built, analysis.ProducerASTRuntime)
+	if ast.Usability != analysis.ProducerUsabilityAccepted {
 		t.Fatalf("unrelated AST rejected: %+v", ast)
 	}
 }

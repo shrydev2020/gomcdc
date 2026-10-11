@@ -1,4 +1,4 @@
-package report
+package analysis
 
 import (
 	"bytes"
@@ -10,55 +10,54 @@ import (
 	"reflect"
 	"slices"
 	"sort"
-	"strconv"
 
-	"github.com/shrydev2020/gomcdc/v2/internal/analyzer"
 	"github.com/shrydev2020/gomcdc/v2/internal/config"
 	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
 	"github.com/shrydev2020/gomcdc/v2/internal/mcdc"
 )
 
-// AnalysisSnapshot is an original, unmodified measurement report. ID is the
-// saved snapshot identity, not a physical test-run ID.
-type AnalysisSnapshot struct {
-	ID     string
-	Report Report
+// runProjection pairs an execution's typed input with its coverage hierarchy.
+type runProjection struct {
+	input   *Input
+	context *buildContext
+	ID      string
+	Report  Result
 }
 
-// AnalyzeSnapshots unions accepted observations against an identical static
+// analyzeRuns unions accepted observations against an identical static
 // inventory and reruns both MC/DC strategies. Callers enforce source/build
 // compatibility and supply unique snapshots in deterministic identity order.
 // Original policy results remain in ContributingRuns; this operation makes no
 // new strict/threshold policy decision.
-func AnalyzeSnapshots(ctx context.Context, snapshots []AnalysisSnapshot, metrics config.CoverageSet, budget mcdc.AnalysisBudget) (Report, error) {
+func analyzeRuns(ctx context.Context, snapshots []runProjection, metrics config.CoverageSet, budget mcdc.AnalysisBudget) (Result, error) {
 	if err := ctx.Err(); err != nil {
-		return Report{}, err
+		return Result{}, fmt.Errorf("combine executions: %w", err)
 	}
 	if len(snapshots) == 0 {
-		return Report{}, errors.New("no measurement snapshots")
+		return Result{}, errors.New("no measurement snapshots")
 	}
 	first := snapshots[0].Report
 	inventory, err := staticInventory(first)
 	if err != nil {
-		return Report{}, err
+		return Result{}, fmt.Errorf("read inventory for execution %q: %w", snapshots[0].ID, err)
 	}
 	for _, snapshot := range snapshots[1:] {
 		other, err := staticInventory(snapshot.Report)
 		if err != nil {
-			return Report{}, err
+			return Result{}, fmt.Errorf("read inventory for execution %q: %w", snapshot.ID, err)
 		}
-		if !bytes.Equal(inventory, other) || !reflect.DeepEqual(first.Capabilities, snapshot.Report.Capabilities) || !reflect.DeepEqual(first.Backends, snapshot.Report.Backends) || !reflect.DeepEqual(first.Instrumentation, snapshot.Report.Instrumentation) {
-			return Report{}, errors.New("measurement inventories or instrumentation capabilities differ")
+		if !bytes.Equal(inventory, other) || !reflect.DeepEqual(first.Capabilities, snapshot.Report.Capabilities) || !reflect.DeepEqual(first.Backends, snapshot.Report.Backends) {
+			return Result{}, errors.New("measurement inventories or instrumentation capabilities differ")
 		}
 	}
 	// Own every mutable hierarchy slice; input snapshots remain authoritative.
 	encoded, err := json.Marshal(first)
 	if err != nil {
-		return Report{}, err
+		return Result{}, fmt.Errorf("copy combined coverage hierarchy: %w", err)
 	}
-	var result Report
+	var result Result
 	if err := json.Unmarshal(encoded, &result); err != nil {
-		return Report{}, err
+		return Result{}, fmt.Errorf("decode combined coverage hierarchy: %w", err)
 	}
 	result.SchemaVersion = OfflineSchemaVersion
 	if len(snapshots) > 1 {
@@ -106,7 +105,7 @@ func AnalyzeSnapshots(ctx context.Context, snapshots []AnalysisSnapshot, metrics
 		for fi := range pkg.Files {
 			for ni := range pkg.Files[fi].Functions {
 				if err := ctx.Err(); err != nil {
-					return Report{}, err
+					return Result{}, fmt.Errorf("combine coverage for %s/%s: %w", pkg.Path, pkg.Files[fi].Path, err)
 				}
 				function := &pkg.Files[fi].Functions[ni]
 				inputs := make([]FunctionReport, len(snapshots))
@@ -114,7 +113,7 @@ func AnalyzeSnapshots(ctx context.Context, snapshots []AnalysisSnapshot, metrics
 					inputs[i] = snapshot.Report.Packages[pi].Files[fi].Functions[ni]
 				}
 				if err := mergeFunction(ctx, function, inputs, snapshots, metrics, budget); err != nil {
-					return Report{}, fmt.Errorf("%s/%s: %w", pkg.Path, pkg.Files[fi].Path, err)
+					return Result{}, fmt.Errorf("combine coverage for %s/%s function %s: %w", pkg.Path, pkg.Files[fi].Path, function.Name, err)
 				}
 			}
 		}
@@ -123,7 +122,7 @@ func AnalyzeSnapshots(ctx context.Context, snapshots []AnalysisSnapshot, metrics
 	return result, nil
 }
 
-func mergeFunction(ctx context.Context, output *FunctionReport, inputs []FunctionReport, snapshots []AnalysisSnapshot, metrics config.CoverageSet, budget mcdc.AnalysisBudget) error {
+func mergeFunction(ctx context.Context, output *FunctionReport, inputs []FunctionReport, snapshots []runProjection, metrics config.CoverageSet, budget mcdc.AnalysisBudget) error {
 	for _, input := range inputs[1:] {
 		output.Summary.Function = unionObligation(output.Summary.Function, input.Summary.Function)
 		for i := range output.Statements {
@@ -154,7 +153,7 @@ func mergeFunction(ctx context.Context, output *FunctionReport, inputs []Functio
 	}
 	tasks := make([]decisionBuildTask, len(output.Decisions))
 	for di, decision := range output.Decisions {
-		metadata, err := restoreMetadata(decision)
+		metadata, err := sourceDecision(snapshots[0], decision)
 		if err != nil {
 			return err
 		}
@@ -162,7 +161,7 @@ func mergeFunction(ctx context.Context, output *FunctionReport, inputs []Functio
 		seen := make(map[cover.EvaluationIdentity]cover.DecisionEvaluation)
 		for i, input := range inputs {
 			d := input.Decisions[di]
-			state := archivedDecisionState(d, snapshots[i].Report.ProducerOutcomes)
+			state := sourceDecisionState(snapshots[i], metadata)
 			if state != entityNormal {
 				if task.state != entityNormal && state == entityUnsupported {
 					task.state = state
@@ -174,11 +173,8 @@ func mergeFunction(ctx context.Context, output *FunctionReport, inputs []Functio
 				return errors.New("decision counter overflow")
 			}
 			task.notEvaluated += d.NotEvaluated
-			for _, saved := range d.Evaluations {
-				evaluation, err := restoreEvaluation(metadata, saved)
-				if err != nil {
-					return fmt.Errorf("decision %s: %w", d.DecisionID, err)
-				}
+			evaluations := snapshots[i].context.evaluationsByDecision[metadata.ID]
+			for _, evaluation := range evaluations {
 				if previous, exists := seen[evaluation.Identity()]; exists {
 					if !reflect.DeepEqual(previous, evaluation) {
 						return errors.New("conflicting evaluation identity")
@@ -209,76 +205,7 @@ func unionObligation(a, b MetricSummary) MetricSummary {
 	return a
 }
 
-func archivedDecisionState(d DecisionReport, outcomes []ProducerOutcome) entityState {
-	if producerRejectsEvidence(outcomes, ProducerASTRuntime) {
-		return entityUnknown
-	}
-	for _, metric := range []MetricSummary{d.DecisionCoverage.Metric, d.Summary.Condition, d.MCDCUnique.Metric, d.MCDCMasking.Metric} {
-		if metric.Enabled && metric.Unknown > 0 {
-			return entityUnknown
-		}
-		if metric.Enabled && metric.Unsupported > 0 {
-			return entityUnsupported
-		}
-	}
-	return entityNormal
-}
-
-func restoreMetadata(d DecisionReport) (cover.DecisionMetadata, error) {
-	id, err := strconv.ParseUint(d.DecisionID, 0, 64)
-	if err != nil {
-		return cover.DecisionMetadata{}, err
-	}
-	metadata := cover.DecisionMetadata{ID: cover.DecisionID(id), Kind: d.Kind, Location: d.Location, Expression: d.Expression}
-	atoms := make([]string, len(d.Conditions))
-	for i, c := range d.Conditions {
-		if int(c.Index) != i {
-			return metadata, errors.New("saved condition indexes are not contiguous")
-		}
-		cid, err := strconv.ParseUint(c.ConditionID, 0, 64)
-		if err != nil {
-			return metadata, err
-		}
-		metadata.Conditions = append(metadata.Conditions, cover.ConditionMetadata{ID: cover.ConditionID(cid), Index: c.Index, Expression: c.Expression, Location: c.Location})
-		atoms[i] = c.Expression
-	}
-	metadata.ExpressionTree, err = analyzer.RestoreExpression(d.Expression, atoms)
-	return metadata, err
-}
-
-func restoreEvaluation(metadata cover.DecisionMetadata, saved EvaluationReport) (cover.DecisionEvaluation, error) {
-	id, err := strconv.ParseUint(saved.EvaluationID, 0, 64)
-	if err != nil {
-		return cover.DecisionEvaluation{}, err
-	}
-	if saved.DecisionID != formatID(uint64(metadata.ID)) {
-		return cover.DecisionEvaluation{}, errors.New("evaluation has a different decision ID")
-	}
-	e := cover.DecisionEvaluation{DecisionID: metadata.ID, EvaluationID: cover.EvaluationID(id), RunID: saved.RunID, PackagePath: saved.PackagePath, ProcessID: saved.ProcessID, TestID: saved.TestID, Result: saved.Result}
-	switch saved.Status {
-	case "completed":
-		e.Status = cover.EvaluationCompleted
-	case "aborted":
-		e.Status = cover.EvaluationAborted
-	default:
-		return e, errors.New("unknown evaluation status")
-	}
-	for _, state := range saved.Conditions {
-		switch state {
-		case "true":
-			e.Conditions = append(e.Conditions, cover.ConditionTrue)
-		case "false":
-			e.Conditions = append(e.Conditions, cover.ConditionFalse)
-		case "not-evaluated":
-			e.Conditions = append(e.Conditions, cover.ConditionNotEvaluated)
-		default:
-			return e, errors.New("unknown condition state")
-		}
-	}
-	return e, mcdc.ValidateCompletedEvaluation(metadata, e)
-}
-
-func rebuildSummaries(r *Report, metrics config.CoverageSet) {
+func rebuildSummaries(r *Result, metrics config.CoverageSet) {
 	r.Summary = newSummary(metrics)
 	for pi := range r.Packages {
 		p := &r.Packages[pi]
@@ -313,7 +240,7 @@ func rebuildSummaries(r *Report, metrics config.CoverageSet) {
 
 // staticInventory strips only observations and derived fields. Comparing the
 // remaining hierarchy detects missing entities as well as changed IDs/layouts.
-func staticInventory(r Report) ([]byte, error) {
+func staticInventory(r Result) ([]byte, error) {
 	data, err := json.Marshal(r.Packages)
 	if err != nil {
 		return nil, err

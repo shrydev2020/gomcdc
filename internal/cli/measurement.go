@@ -11,16 +11,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
 	"github.com/shrydev2020/gomcdc/v2/internal/c0"
 	"github.com/shrydev2020/gomcdc/v2/internal/c0map"
 	"github.com/shrydev2020/gomcdc/v2/internal/compileraware"
 	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
+	"github.com/shrydev2020/gomcdc/v2/internal/evidence"
 	"github.com/shrydev2020/gomcdc/v2/internal/goflags"
 	"github.com/shrydev2020/gomcdc/v2/internal/gotest"
 	"github.com/shrydev2020/gomcdc/v2/internal/gotestargs"
 	"github.com/shrydev2020/gomcdc/v2/internal/instrument"
 	"github.com/shrydev2020/gomcdc/v2/internal/loader"
-	"github.com/shrydev2020/gomcdc/v2/internal/report"
+	measurementdata "github.com/shrydev2020/gomcdc/v2/internal/measurement"
 	"github.com/shrydev2020/gomcdc/v2/internal/runtimecov"
 	"github.com/shrydev2020/gomcdc/v2/internal/testcover"
 	"github.com/shrydev2020/gomcdc/v2/internal/workspace"
@@ -44,11 +46,15 @@ type measurementRequest struct {
 }
 
 type measurementOutcome struct {
+	recorded         runtimecov.RecordedEvidence
+	runtimeID        string
+	coverEvidence    *c0.AcceptedCoverEvidence
+	probes           measurementdata.Probes
 	testResult       *gotest.Result
 	measurementName  string
-	evidence         acceptedRuntimeEvidence
+	evidence         evidence.Runtime
 	c0               *c0.Report
-	producerOutcomes []report.ProducerOutcome
+	producerOutcomes []analysis.ProducerOutcome
 	integrityFailure bool
 	integrityChecked bool
 	interrupted      bool
@@ -89,18 +95,18 @@ func (item *measurementWorkspace) finalize(stderr io.Writer) error {
 
 // results derives the three execution-owned D28 axes from recorded facts.
 // Policy axes are filled after the coverage hierarchy is built.
-func (outcome measurementOutcome) results(analysisIncomplete bool, finalizationErr error) report.RunResults {
+func (outcome measurementOutcome) results(analysisIncomplete bool, finalizationErr error) analysis.RunResults {
 	measurementPassed := !analysisIncomplete && !outcome.interrupted && finalizationErr == nil
-	integrity := report.ResultNotRun
+	integrity := analysis.ResultNotRun
 	if outcome.integrityChecked {
 		integrity = passFailResult(!outcome.integrityFailure)
 	}
-	return report.RunResults{
+	return analysis.RunResults{
 		Test:        testResultStatus(outcome.testResult),
 		Measurement: passFailResult(measurementPassed),
 		Integrity:   integrity,
-		Strict:      report.ResultNotRequested,
-		Threshold:   report.ResultNotRequested,
+		Strict:      analysis.ResultNotRequested,
+		Threshold:   analysis.ResultNotRequested,
 	}
 }
 
@@ -127,7 +133,7 @@ func measure(request measurementRequest, work *workspace.Workspace, stderr io.Wr
 
 	var instrumentationResults []instrument.PackageResult
 	generatedProfilePaths := generatedPaths(request.generated)
-	if !outcome.interrupted && request.needsAST && (len(request.decisions) > 0 || len(request.clauses) > 0) {
+	if !outcome.interrupted && request.needsAST && (len(request.decisions) > 0 || len(request.clauses) > 0 || (request.compilerClauseSelection && len(request.noMatches) > 0)) {
 		injected, injectErr := runtimecov.Inject(request.context, work.ModuleDir, request.loaded.ModulePath)
 		if injectErr != nil {
 			if request.context.Err() != nil {
@@ -157,6 +163,11 @@ func measure(request measurementRequest, work *workspace.Workspace, stderr io.Wr
 				}
 			}
 			for _, result := range instrumentationResults {
+				outcome.probes.Decisions = append(outcome.probes.Decisions, result.Probes.Decisions...)
+				outcome.probes.ClauseBodies = append(outcome.probes.ClauseBodies, result.Probes.ClauseBodies...)
+				outcome.probes.ClauseSelections = append(outcome.probes.ClauseSelections, result.Probes.ClauseSelections...)
+				outcome.probes.NoMatches = append(outcome.probes.NoMatches, result.Probes.NoMatches...)
+
 				for _, generatedFile := range result.GeneratedFiles {
 					relative, relErr := filepath.Rel(work.ModuleDir, generatedFile)
 					if relErr != nil {
@@ -281,6 +292,8 @@ func measure(request measurementRequest, work *workspace.Workspace, stderr io.Wr
 	if request.needsAST {
 		outcome.integrityChecked = true
 		recorded, collectionErr = runtimecov.CollectDetailed(recoveryContext, work.EventDir)
+		outcome.recorded = recorded
+		outcome.runtimeID = runID
 	}
 	if collectionErr != nil {
 		fmt.Fprintf(stderr, "gomcdc: runtime coverage collection failed: %v\n", collectionErr)
@@ -289,12 +302,12 @@ func measure(request measurementRequest, work *workspace.Workspace, stderr io.Wr
 		})
 		outcome.integrityFailure = true
 	}
-	var runtimeValidationIssues runtimeAcceptanceIssues
+	var runtimeValidationIssues evidence.Rejections
 	var runtimeDiagnosticsErr error
 	if request.needsAST {
-		acceptedRuntime, validationIssues := acceptRuntimeEvidenceByProducer(recoveryContext, request.decisions, request.clauses, recorded, runID, request.noMatches)
+		acceptedRuntime, validationIssues := evidence.AcceptRuntimeByProducer(recoveryContext, request.decisions, request.clauses, recorded, runID, request.noMatches)
 		runtimeValidationIssues = validationIssues
-		validationErr := validationIssues.err()
+		validationErr := validationIssues.Err()
 		if validationErr != nil {
 			fmt.Fprintf(stderr, "gomcdc: runtime coverage acceptance failed: %v\n", validationErr)
 			outcome.diagnostics = append(outcome.diagnostics, measurementDiagnostic{
@@ -320,19 +333,19 @@ func measure(request measurementRequest, work *workspace.Workspace, stderr io.Wr
 		}
 		outcome.evidence = acceptedRuntime
 		outcome.producerOutcomes = append(outcome.producerOutcomes, runtimeProducerOutcome(
-			report.ProducerASTRuntime,
+			analysis.ProducerASTRuntime,
 			outcome.testResult,
 			collectionErr,
-			runtimeValidationIssues.astErr(),
+			runtimeValidationIssues.ASTError(),
 			runtimeDiagnosticsErr,
 			acceptedRuntime.Diagnostics,
 		))
 		if request.compilerClauseSelection {
 			outcome.producerOutcomes = append(outcome.producerOutcomes, runtimeProducerOutcome(
-				report.ProducerCompilerSelection,
+				analysis.ProducerCompilerSelection,
 				outcome.testResult,
 				collectionErr,
-				runtimeValidationIssues.compilerErr(),
+				runtimeValidationIssues.CompilerError(),
 				runtimeDiagnosticsErr,
 				acceptedRuntime.Diagnostics,
 			))
@@ -368,6 +381,7 @@ func measure(request measurementRequest, work *workspace.Workspace, stderr io.Wr
 				projected, projectErr := c0.ProjectAcceptedEvidence(recoveryContext, request.loaded.ModulePath, acceptedCover, c0.Options{})
 				if projectErr == nil {
 					outcome.c0 = &projected
+					outcome.coverEvidence = &acceptedCover
 				} else {
 					acceptErr = projectErr
 				}
@@ -394,6 +408,7 @@ func measure(request measurementRequest, work *workspace.Workspace, stderr io.Wr
 				projected, projectErr := c0.ProjectAcceptedEvidence(recoveryContext, request.loaded.ModulePath, emptyAccepted, c0.Options{})
 				if projectErr == nil {
 					outcome.c0 = &projected
+					outcome.coverEvidence = &emptyAccepted
 				}
 			}
 		}
@@ -423,93 +438,93 @@ func withRelocatedBuildModFile(flags []string, path string) []string {
 }
 
 func runtimeProducerOutcome(
-	producer report.ProducerName,
+	producer analysis.ProducerName,
 	run *gotest.Result,
 	collectionErr error,
 	mappingErr error,
 	diagnosticErr error,
 	diagnostics []runtimecov.Diagnostic,
-) report.ProducerOutcome {
-	outcome := report.ProducerOutcome{
-		Producer: producer, Integrity: report.ProducerIntegrityValid,
-		Completeness: report.ProducerCompletenessPartial,
-		Mapping:      report.ProducerMappingComplete,
-		Usability:    report.ProducerUsabilityAcceptedPartial,
+) analysis.ProducerOutcome {
+	outcome := analysis.ProducerOutcome{
+		Producer: producer, Integrity: analysis.ProducerIntegrityValid,
+		Completeness: analysis.ProducerCompletenessPartial,
+		Mapping:      analysis.ProducerMappingComplete,
+		Usability:    analysis.ProducerUsabilityAcceptedPartial,
 	}
 	if run == nil {
-		outcome.Integrity = report.ProducerIntegrityUnavailable
-		outcome.Completeness = report.ProducerCompletenessUnavailable
-		outcome.Mapping = report.ProducerMappingUnavailable
-		outcome.Usability = report.ProducerUsabilityRejected
+		outcome.Integrity = analysis.ProducerIntegrityUnavailable
+		outcome.Completeness = analysis.ProducerCompletenessUnavailable
+		outcome.Mapping = analysis.ProducerMappingUnavailable
+		outcome.Usability = analysis.ProducerUsabilityRejected
 		return outcome
 	}
 	if run.Status == cover.RunPassed {
-		outcome.Completeness = report.ProducerCompletenessComplete
-		outcome.Usability = report.ProducerUsabilityAccepted
+		outcome.Completeness = analysis.ProducerCompletenessComplete
+		outcome.Usability = analysis.ProducerUsabilityAccepted
 	}
 	if collectionErr != nil || diagnosticErr != nil {
-		outcome.Integrity = report.ProducerIntegrityUnavailable
-		outcome.Completeness = report.ProducerCompletenessUnavailable
-		outcome.Mapping = report.ProducerMappingUnavailable
-		outcome.Usability = report.ProducerUsabilityRejected
+		outcome.Integrity = analysis.ProducerIntegrityUnavailable
+		outcome.Completeness = analysis.ProducerCompletenessUnavailable
+		outcome.Mapping = analysis.ProducerMappingUnavailable
+		outcome.Usability = analysis.ProducerUsabilityRejected
 		return outcome
 	}
 	for _, diagnostic := range diagnostics {
 		switch diagnostic.Severity {
 		case runtimecov.DiagnosticIntegrity:
-			outcome.Integrity = report.ProducerIntegrityInvalid
-			outcome.Completeness = report.ProducerCompletenessPartial
-			outcome.Usability = report.ProducerUsabilityRejected
+			outcome.Integrity = analysis.ProducerIntegrityInvalid
+			outcome.Completeness = analysis.ProducerCompletenessPartial
+			outcome.Usability = analysis.ProducerUsabilityRejected
 		case runtimecov.DiagnosticRecoverable:
-			if outcome.Integrity == report.ProducerIntegrityValid {
-				outcome.Integrity = report.ProducerIntegrityValidPrefix
+			if outcome.Integrity == analysis.ProducerIntegrityValid {
+				outcome.Integrity = analysis.ProducerIntegrityValidPrefix
 			}
-			outcome.Completeness = report.ProducerCompletenessPartial
+			outcome.Completeness = analysis.ProducerCompletenessPartial
 			if run.Status == cover.RunPassed {
-				outcome.Usability = report.ProducerUsabilityRejected
+				outcome.Usability = analysis.ProducerUsabilityRejected
 			}
 		default:
-			outcome.Integrity = report.ProducerIntegrityInvalid
-			outcome.Usability = report.ProducerUsabilityRejected
+			outcome.Integrity = analysis.ProducerIntegrityInvalid
+			outcome.Usability = analysis.ProducerUsabilityRejected
 		}
 	}
 	if mappingErr != nil {
-		outcome.Mapping = report.ProducerMappingInvalid
-		outcome.Usability = report.ProducerUsabilityRejected
+		outcome.Mapping = analysis.ProducerMappingInvalid
+		outcome.Usability = analysis.ProducerUsabilityRejected
 	}
 	return outcome
 }
 
-func goCoverProducerOutcome(run *gotest.Result, readErr, mappingErr error) report.ProducerOutcome {
-	outcome := report.ProducerOutcome{
-		Producer: report.ProducerGoCover, Integrity: report.ProducerIntegrityValid,
-		Completeness: report.ProducerCompletenessPartial,
-		Mapping:      report.ProducerMappingComplete,
-		Usability:    report.ProducerUsabilityAcceptedPartial,
+func goCoverProducerOutcome(run *gotest.Result, readErr, mappingErr error) analysis.ProducerOutcome {
+	outcome := analysis.ProducerOutcome{
+		Producer: analysis.ProducerGoCover, Integrity: analysis.ProducerIntegrityValid,
+		Completeness: analysis.ProducerCompletenessPartial,
+		Mapping:      analysis.ProducerMappingComplete,
+		Usability:    analysis.ProducerUsabilityAcceptedPartial,
 	}
 	if run == nil {
-		outcome.Integrity = report.ProducerIntegrityUnavailable
-		outcome.Completeness = report.ProducerCompletenessUnavailable
-		outcome.Mapping = report.ProducerMappingUnavailable
-		outcome.Usability = report.ProducerUsabilityRejected
+		outcome.Integrity = analysis.ProducerIntegrityUnavailable
+		outcome.Completeness = analysis.ProducerCompletenessUnavailable
+		outcome.Mapping = analysis.ProducerMappingUnavailable
+		outcome.Usability = analysis.ProducerUsabilityRejected
 		return outcome
 	}
 	if run.Status == cover.RunPassed {
-		outcome.Completeness = report.ProducerCompletenessComplete
-		outcome.Usability = report.ProducerUsabilityAccepted
+		outcome.Completeness = analysis.ProducerCompletenessComplete
+		outcome.Usability = analysis.ProducerUsabilityAccepted
 	}
 	if readErr != nil {
-		outcome.Integrity = report.ProducerIntegrityInvalid
+		outcome.Integrity = analysis.ProducerIntegrityInvalid
 		if errors.Is(readErr, os.ErrNotExist) {
-			outcome.Integrity = report.ProducerIntegrityUnavailable
+			outcome.Integrity = analysis.ProducerIntegrityUnavailable
 		}
-		outcome.Mapping = report.ProducerMappingUnavailable
-		outcome.Usability = report.ProducerUsabilityRejected
+		outcome.Mapping = analysis.ProducerMappingUnavailable
+		outcome.Usability = analysis.ProducerUsabilityRejected
 		return outcome
 	}
 	if mappingErr != nil {
-		outcome.Mapping = report.ProducerMappingInvalid
-		outcome.Usability = report.ProducerUsabilityRejected
+		outcome.Mapping = analysis.ProducerMappingInvalid
+		outcome.Usability = analysis.ProducerUsabilityRejected
 	}
 	return outcome
 }

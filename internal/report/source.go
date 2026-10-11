@@ -5,43 +5,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
 	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
 )
-
-// SourceFileInput is immutable original source supplied by the analyzer.
-type SourceFileInput struct {
-	PackagePath string
-	Path        string
-	Source      []byte
-}
-
-// SourceFileView is the source-centered representation used by HTML reports.
-type SourceFileView struct {
-	Path        string             `json:"path"`
-	Source      string             `json:"source"`
-	Annotations []SourceAnnotation `json:"annotations"`
-	Diagnostics []SourceDiagnostic `json:"diagnostics,omitempty"`
-}
-
-// SourceAnnotation identifies one metric over an original source byte range.
-type SourceAnnotation struct {
-	StartOffset   int    `json:"startOffset"`
-	EndOffset     int    `json:"endOffset"`
-	Metric        string `json:"metric"`
-	EntityID      string `json:"entityId"`
-	State         string `json:"state"`
-	Tooltip       string `json:"tooltip"`
-	MappingStatus string `json:"mappingStatus,omitempty"`
-	MappingReason string `json:"mappingReason,omitempty"`
-}
-
-// SourceDiagnostic explains why a coverage entity could not be projected onto
-// the original source. Mapping failure is separate from coverage state.
-type SourceDiagnostic struct {
-	Metric   string `json:"metric"`
-	EntityID string `json:"entityId"`
-	Reason   string `json:"reason"`
-}
 
 type sourceMapping struct {
 	start, end int
@@ -61,46 +27,45 @@ type sourceBoundaryEvent struct {
 	ends   []int
 }
 
-// WithSourceViews returns the same report model with an HTML-only projection
-// of immutable original sources attached. It does not rebuild coverage data.
-func WithSourceViews(report Report, sourceFiles []SourceFileInput) Report {
-	report.Packages = append([]PackageReport(nil), report.Packages...)
-	for packageIndex := range report.Packages {
-		report.Packages[packageIndex].Files = append(
-			[]FileReport(nil),
-			report.Packages[packageIndex].Files...,
-		)
-		for fileIndex := range report.Packages[packageIndex].Files {
-			report.Packages[packageIndex].Files[fileIndex].Source = nil
-		}
-	}
-	attachSourceViews(&report, sourceFiles)
-	return report
+// HTML views belong to rendering and cannot be persisted as analysis evidence.
+type htmlReport struct {
+	analysis.Result
+
+	Packages []htmlPackage
+}
+type htmlPackage struct {
+	analysis.PackageReport
+
+	Files []htmlFile
+}
+type htmlFile struct {
+	analysis.FileReport
+
+	Source *SourceFileView
 }
 
-func attachSourceViews(report *Report, sourceFiles []SourceFileInput) {
-	sources := make(map[string]SourceFileInput, len(sourceFiles))
+func sourceView(value analysis.Result, sourceFiles []analysis.SourceFileInput) htmlReport {
+	sources := make(map[string]analysis.SourceFileInput, len(sourceFiles))
 	for _, source := range sourceFiles {
 		sources[source.PackagePath+"\x00"+source.Path] = source
 	}
-	for packageIndex := range report.Packages {
-		pkg := &report.Packages[packageIndex]
-		for fileIndex := range pkg.Files {
-			file := &pkg.Files[fileIndex]
-			source, ok := sources[pkg.Path+"\x00"+file.Path]
-			if !ok {
-				continue
+	view := htmlReport{Result: value, Packages: make([]htmlPackage, len(value.Packages))}
+	for pi, pkg := range value.Packages {
+		p := htmlPackage{PackageReport: pkg, Files: make([]htmlFile, len(pkg.Files))}
+		for fi, file := range pkg.Files {
+			f := htmlFile{FileReport: file}
+			if source, ok := sources[pkg.Path+"\x00"+file.Path]; ok {
+				annotations := sourceAnnotations(file, source.Source)
+				f.Source = &SourceFileView{Path: file.Path, Source: string(source.Source), Annotations: normalizeAnnotations(annotations, len(source.Source)), Diagnostics: sourceMappingDiagnostics(annotations)}
 			}
-			allAnnotations := sourceAnnotations(*file, source.Source)
-			view := SourceFileView{Path: file.Path, Source: string(source.Source)}
-			view.Annotations = normalizeAnnotations(allAnnotations, len(source.Source))
-			view.Diagnostics = sourceMappingDiagnostics(allAnnotations)
-			file.Source = &view
+			p.Files[fi] = f
 		}
+		view.Packages[pi] = p
 	}
+	return view
 }
 
-func sourceAnnotations(file FileReport, source []byte) []SourceAnnotation {
+func sourceAnnotations(file analysis.FileReport, source []byte) []SourceAnnotation {
 	var annotations []SourceAnnotation
 	for _, function := range file.Functions {
 		for _, statement := range function.Statements {
@@ -212,13 +177,13 @@ func sourceMappingDiagnostics(annotations []SourceAnnotation) []SourceDiagnostic
 	return diagnostics
 }
 
-func decisionTooltip(decision DecisionReport) string {
+func decisionTooltip(decision analysis.DecisionReport) string {
 	return fmt.Sprintf("Decision %s: %s\ntrue: %s\nfalse: %s\nnot evaluated: %d",
 		decision.DecisionID, decision.Expression, outcomeLabel(decision.DecisionCoverage.True),
 		outcomeLabel(decision.DecisionCoverage.False), decision.NotEvaluated)
 }
 
-func conditionTooltip(condition ConditionReport) string {
+func conditionTooltip(condition analysis.ConditionReport) string {
 	return fmt.Sprintf("Condition #%d: %s\ntrue: %s\nfalse: %s\nnot evaluated: %d\nUnique-Cause MC/DC: %s\nMasking MC/DC: %s",
 		condition.Index, condition.Expression, outcomeLabel(condition.True), outcomeLabel(condition.False),
 		condition.NotEvaluated, condition.MCDCUnique.Status, condition.MCDCMasking.Status)
@@ -331,7 +296,7 @@ func sourceIntervals(view SourceFileView) []sourceInterval {
 	return intervals
 }
 
-func metricState(metric MetricSummary) string {
+func metricState(metric analysis.MetricSummary) string {
 	switch {
 	case metric.AnalysisIncomplete > 0:
 		return "analysis-incomplete"
@@ -350,7 +315,7 @@ func metricState(metric MetricSummary) string {
 	}
 }
 
-func decisionState(decision DecisionReport) string {
+func decisionState(decision analysis.DecisionReport) string {
 	if decision.Summary.Decision.Unknown > 0 {
 		return "unknown"
 	}
@@ -372,7 +337,7 @@ func decisionState(decision DecisionReport) string {
 	return "not-covered"
 }
 
-func conditionCoverageState(condition ConditionReport) string {
+func conditionCoverageState(condition analysis.ConditionReport) string {
 	switch {
 	case condition.Metric.Unknown > 0:
 		return "unknown"

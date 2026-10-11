@@ -73,6 +73,7 @@ type PackageOptions struct {
 // PackageResult identifies the generated bridge and helper used by rewritten
 // files.
 type PackageResult struct {
+	Probes          cover.Probes
 	HelperName      string
 	BridgePath      string
 	GeneratedFiles  []string
@@ -178,7 +179,7 @@ func InstrumentPackage(options PackageOptions) (PackageResult, error) {
 				}
 			}
 		}
-		if len(mapping.Analysis.Decisions) == 0 && len(mapping.Analysis.Clauses) == 0 && mapping.Analysis.TestContexts.Empty() {
+		if len(mapping.Analysis.Decisions) == 0 && len(mapping.Analysis.Clauses) == 0 && (!options.CompilerClauseSelection || len(mapping.Analysis.NoMatches) == 0) && mapping.Analysis.TestContexts.Empty() {
 			contents, err := os.ReadFile(mapping.CopyPath)
 			if err != nil {
 				return PackageResult{}, fmt.Errorf("inspect unchanged copied file %q: read: %w", mapping.CopyPath, err)
@@ -254,8 +255,29 @@ func InstrumentPackage(options PackageOptions) (PackageResult, error) {
 	if err != nil {
 		return PackageResult{}, err
 	}
+	var probes cover.Probes
+	for _, file := range options.Files {
+		// Unchanged files did not generate runtime probes.
+		if len(file.Analysis.Decisions) == 0 && len(file.Analysis.Clauses) == 0 && (!options.CompilerClauseSelection || len(file.Analysis.NoMatches) == 0) && file.Analysis.TestContexts.Empty() {
+			continue
+		}
+		for _, decision := range file.Analysis.Decisions {
+			probes.Decisions = append(probes.Decisions, decision.Metadata.ID)
+		}
+		for _, clause := range file.Analysis.Clauses {
+			probes.ClauseBodies = append(probes.ClauseBodies, clause.Metadata.ID)
+			if options.CompilerClauseSelection && (clause.Metadata.Kind == cover.ClauseExpressionSwitch || clause.Metadata.Kind == cover.ClauseTypeSwitch) {
+				probes.ClauseSelections = append(probes.ClauseSelections, clause.Metadata.ID)
+			}
+		}
+		if options.CompilerClauseSelection {
+			for _, item := range file.Analysis.NoMatches {
+				probes.NoMatches = append(probes.NoMatches, item.SwitchID)
+			}
+		}
+	}
 	return PackageResult{
-		HelperName: helperName, BridgePath: bridgePath, GeneratedFiles: []string{bridgePath},
+		Probes: probes, HelperName: helperName, BridgePath: bridgePath, GeneratedFiles: []string{bridgePath},
 		Transformations: transformations, CoveragePlans: coveragePlans,
 	}, nil
 }

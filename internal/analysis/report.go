@@ -1,10 +1,12 @@
-// Package report builds deterministic integrated coverage reports.
-package report
+// Package analysis derives coverage outcomes from accepted measurement evidence.
+// It owns deterministic analysis and aggregation, never execution or rendering.
+package analysis
 
 import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 
 	"github.com/shrydev2020/gomcdc/v2/internal/backend"
@@ -12,6 +14,7 @@ import (
 	"github.com/shrydev2020/gomcdc/v2/internal/config"
 	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
 	"github.com/shrydev2020/gomcdc/v2/internal/mcdc"
+	"github.com/shrydev2020/gomcdc/v2/internal/measurement"
 )
 
 // SchemaVersion identifies the current stable JSON and text report schema.
@@ -34,6 +37,8 @@ const (
 // Input contains all static metadata, runtime evidence, and run state needed
 // to build an integrated report.
 type Input struct {
+	Probes    measurement.Probes
+	deferMCDC bool
 	// Context cancels decision scheduling. A nil Context uses Background.
 	// Masking analysis already running for one decision remains bounded by its
 	// per-obligation budget and is allowed to finish.
@@ -71,8 +76,8 @@ type Input struct {
 	ASTPackageStatuses     map[string]string
 }
 
-// Report is the deterministic module report.
-type Report struct {
+// Result is the deterministic module report.
+type Result struct {
 	SchemaVersion         string                         `json:"schemaVersion"`
 	ToolVersion           string                         `json:"toolVersion"`
 	Module                string                         `json:"module"`
@@ -121,51 +126,19 @@ type ReportError struct {
 	Path    string `json:"path,omitempty"`
 }
 
-// MeasurementRun records the physical test execution independently from the
-// evidence producers which observed it.
-type MeasurementRun struct {
-	Name     string            `json:"name"`
-	Run      TestRun           `json:"run"`
-	Packages map[string]string `json:"packages"`
-}
-
-// ResultStatus is one independent D28 outcome axis. Not-requested is distinct
-// from not-run so callers never have to infer whether a policy was enabled.
-type ResultStatus string
+type MeasurementRun = measurement.MeasurementRun
+type ResultStatus = measurement.ResultStatus
+type RunResults = measurement.RunResults
+type TestRun = measurement.TestRun
+type Run = measurement.ExecutionSummary
 
 const (
-	ResultPassed       ResultStatus = "passed"
-	ResultFailed       ResultStatus = "failed"
-	ResultTimeout      ResultStatus = "timeout"
-	ResultNotRun       ResultStatus = "not-run"
-	ResultNotRequested ResultStatus = "not-requested"
+	ResultPassed       = measurement.ResultPassed
+	ResultFailed       = measurement.ResultFailed
+	ResultTimeout      = measurement.ResultTimeout
+	ResultNotRun       = measurement.ResultNotRun
+	ResultNotRequested = measurement.ResultNotRequested
 )
-
-// RunResults preserves the five independent outcomes required by D28 even
-// when the process exit code collapses them according to precedence.
-type RunResults struct {
-	Test        ResultStatus `json:"test"`
-	Measurement ResultStatus `json:"measurement"`
-	Integrity   ResultStatus `json:"integrity"`
-	Strict      ResultStatus `json:"strict"`
-	Threshold   ResultStatus `json:"threshold"`
-}
-
-// TestRun describes one go test execution independently from coverage and
-// from the overall policy results.
-type TestRun struct {
-	Status      cover.RunStatus      `json:"status"`
-	FailureKind cover.RunFailureKind `json:"failureKind"`
-	Complete    bool                 `json:"complete"`
-}
-
-// Run describes the aggregate test execution and independent D28 outcomes.
-type Run struct {
-	Status      cover.RunStatus      `json:"status"`
-	FailureKind cover.RunFailureKind `json:"failureKind"`
-	Complete    bool                 `json:"complete"`
-	Results     RunResults           `json:"results"`
-}
 
 // Summary always exposes every supported metric.
 type Summary struct {
@@ -210,7 +183,6 @@ type FileReport struct {
 	Path      string           `json:"path"`
 	Summary   Summary          `json:"summary"`
 	Functions []FunctionReport `json:"functions"`
-	Source    *SourceFileView  `json:"-"`
 }
 
 // FunctionReport contains statements, decisions, and selectable clauses.
@@ -370,8 +342,8 @@ const (
 	entityUnsupported
 )
 
-// Build creates the deterministic integrated hierarchy.
-func Build(input Input) Report {
+// Analyze computes coverage and its deterministic source hierarchy.
+func Analyze(input Input) Result {
 	context := newBuildContext(input)
 	buildHierarchy(context, input)
 	finalizeReport(context, input)
@@ -382,7 +354,7 @@ func Build(input Input) Report {
 // only the CLI-owned policy results and report errors replaced. It preserves
 // coverage summaries and witnesses and copies errors so callers retain no
 // mutation authority over the report.
-func WithRunResultsAndErrors(value Report, results RunResults, errors []ReportError) Report {
+func WithRunResultsAndErrors(value Result, results RunResults, errors []ReportError) Result {
 	value.Run.Results = normalizeRunResults(results)
 	value.Errors = cloneReportErrors(errors)
 	return value
@@ -409,7 +381,7 @@ func buildHierarchy(context *buildContext, input Input) {
 		builder := ensurePackageBuilder(builders, decision.Package, input)
 		state := stateForEvaluations(
 			evaluationsByDecision[decision.ID],
-			astEvidenceUnusable || packageUnknown(astPackageStatus(input, decision.Package, builder.status), astPackageEvidence[decision.Package]),
+			astEvidenceUnusable || (!slices.Contains(input.Probes.Decisions, decision.ID)) || packageUnknown(astPackageStatus(input, decision.Package, builder.status), astPackageEvidence[decision.Package]),
 		)
 		if state == entityNormal && !supportedDecision(decision.Kind) {
 			state = entityUnsupported
@@ -419,10 +391,19 @@ func buildHierarchy(context *buildContext, input Input) {
 			notEvaluated: notEvaluatedByDecision[decision.ID], state: state,
 		})
 	}
+	decisionCoverage := input.Coverage
+	if input.deferMCDC {
+		decisionCoverage = make(config.CoverageSet, len(input.Coverage))
+		for k, v := range input.Coverage {
+			decisionCoverage[k] = v
+		}
+		delete(decisionCoverage, config.MetricMCDCUnique)
+		delete(decisionCoverage, config.MetricMCDCMasking)
+	}
 	decisionReports := buildDecisionReports(
 		context.context,
 		decisionTasks,
-		input.Coverage,
+		decisionCoverage,
 		context.maskingAnalysisBudget,
 		context.maskingDecisionWorkers,
 	)
@@ -443,8 +424,8 @@ func buildHierarchy(context *buildContext, input Input) {
 			clause,
 			observationCounts[clause.ID],
 			context.selectedAlternatives[clause.ID],
-			astEvidenceUnusable || bodyPackageUnknown,
-			compilerEvidenceUnusable || selectionPackageUnknown,
+			astEvidenceUnusable || bodyPackageUnknown || (!slices.Contains(input.Probes.ClauseBodies, clause.ID)),
+			compilerEvidenceUnusable || selectionPackageUnknown || (!slices.Contains(input.Probes.ClauseSelections, clause.ID)),
 			context.report.Capabilities,
 			input.Coverage,
 		)
@@ -454,7 +435,7 @@ func buildHierarchy(context *buildContext, input Input) {
 	for _, noMatch := range input.NoMatches {
 		builder := ensurePackageBuilder(builders, noMatch.Package, input)
 		function := ensureFunctionBuilder(builder, noMatch.Location.File, displayFunctionName(noMatch.Function), optionalLocation(noMatch.FunctionLocation), input.Coverage)
-		unknown := compilerEvidenceUnusable || packageUnknown(astPackageStatus(input, noMatch.Package, builder.status), compilerPackageEvidence[noMatch.Package])
+		unknown := compilerEvidenceUnusable || (!slices.Contains(input.Probes.NoMatches, noMatch.SwitchID)) || packageUnknown(astPackageStatus(input, noMatch.Package, builder.status), compilerPackageEvidence[noMatch.Package])
 		noMatchReport := buildNoMatchReport(noMatch, noMatchObservations[noMatch.SwitchID] > 0, unknown, context.report.Capabilities, input.Coverage)
 		function.report.NoMatches = append(function.report.NoMatches, noMatchReport)
 		addNoMatchMetric(&function.report.Summary, noMatch.Kind, noMatchReport.SelectionCoverage)
@@ -537,16 +518,17 @@ func buildInstrumentationReport(input Input, capabilities backend.CapabilitySet)
 
 	for _, decision := range input.Decisions {
 		decisionStatus := decisionInstrumentationStatus(capabilities, decision.Kind)
+		generated := slices.Contains(input.Probes.Decisions, decision.ID)
 		if input.Coverage.Enabled(config.MetricDecision) {
-			add(string(config.MetricDecision), decisionStatus, 1, decisionStatus == backend.CapabilitySupported)
+			add(string(config.MetricDecision), decisionStatus, 1, generated && decisionStatus == backend.CapabilitySupported)
 		}
 		if input.Coverage.Enabled(config.MetricCondition) {
 			status := combineCapabilityStatus(decisionStatus, capabilities.Status(backend.CapabilityConditionCoverage))
-			add(string(config.MetricCondition), status, len(decision.Conditions), status == backend.CapabilitySupported)
+			add(string(config.MetricCondition), status, len(decision.Conditions), generated && status == backend.CapabilitySupported)
 		}
 		if input.Coverage.Enabled(config.MetricMCDCUnique) {
 			status := combineCapabilityStatus(decisionStatus, capabilities.Status(backend.CapabilityMCDCUnique))
-			add(string(config.MetricMCDCUnique), status, len(decision.Conditions), status == backend.CapabilitySupported)
+			add(string(config.MetricMCDCUnique), status, len(decision.Conditions), generated && status == backend.CapabilitySupported)
 		}
 		if input.Coverage.Enabled(config.MetricMCDCMasking) {
 			status := combineCapabilityStatus(
@@ -554,7 +536,7 @@ func buildInstrumentationReport(input Input, capabilities backend.CapabilitySet)
 				capabilities.Status(backend.CapabilityMCDCMasking),
 				booleanExpressionCapability(decision.ExpressionTree),
 			)
-			add(string(config.MetricMCDCMasking), status, len(decision.Conditions), status == backend.CapabilitySupported)
+			add(string(config.MetricMCDCMasking), status, len(decision.Conditions), generated && status == backend.CapabilitySupported)
 		}
 	}
 
@@ -562,19 +544,19 @@ func buildInstrumentationReport(input Input, capabilities backend.CapabilitySet)
 		bodyMetric, bodyEnabled := clauseBodyMetric(clause.Kind, input.Coverage)
 		if bodyEnabled {
 			status := clauseBodyInstrumentationStatus(capabilities, clause)
-			add(string(bodyMetric), status, 1, status == backend.CapabilitySupported)
+			add(string(bodyMetric), status, 1, status == backend.CapabilitySupported && (slices.Contains(input.Probes.ClauseBodies, clause.ID)))
 		}
 		selectionMetric, selectionEnabled := clauseSelectionMetric(clause.Kind, input.Coverage)
 		if selectionEnabled {
 			status := clauseSelectionInstrumentationStatus(capabilities, clause)
-			add(string(selectionMetric), status, 1, status == backend.CapabilitySupported)
+			add(string(selectionMetric), status, 1, status == backend.CapabilitySupported && (slices.Contains(input.Probes.ClauseSelections, clause.ID)))
 		}
 	}
 	for _, noMatch := range input.NoMatches {
 		selectionMetric, selectionEnabled := clauseSelectionMetric(noMatch.Kind, input.Coverage)
 		if selectionEnabled {
 			status := clauseSelectionInstrumentationStatus(capabilities, cover.ClauseMetadata{Kind: noMatch.Kind})
-			add(string(selectionMetric), status, 1, status == backend.CapabilitySupported)
+			add(string(selectionMetric), status, 1, status == backend.CapabilitySupported && (slices.Contains(input.Probes.NoMatches, noMatch.SwitchID)))
 		}
 	}
 	add("sourceAnalysis", backend.CapabilityUnknown, input.InstrumentationUnknown, false)

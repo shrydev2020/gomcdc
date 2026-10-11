@@ -3,7 +3,7 @@ package cli
 import (
 	"testing"
 
-	"github.com/shrydev2020/gomcdc/v2/internal/report"
+	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
 )
 
 func TestClassifyExitFollowsD28Precedence(t *testing.T) {
@@ -31,10 +31,10 @@ func TestClassifyExitFollowsD28Precedence(t *testing.T) {
 
 func TestSummaryAnalysisIncompleteCountsEnabledMetricsOnly(t *testing.T) {
 	t.Parallel()
-	summary := report.Summary{
-		Decision:    report.MetricSummary{Enabled: true, AnalysisIncomplete: 2},
-		MCDCUnique:  report.MetricSummary{Enabled: true, AnalysisIncomplete: 3},
-		MCDCMasking: report.MetricSummary{Enabled: false, AnalysisIncomplete: 100},
+	summary := analysis.Summary{
+		Decision:    analysis.MetricSummary{Enabled: true, AnalysisIncomplete: 2},
+		MCDCUnique:  analysis.MetricSummary{Enabled: true, AnalysisIncomplete: 3},
+		MCDCMasking: analysis.MetricSummary{Enabled: false, AnalysisIncomplete: 100},
 	}
 	if got := summaryAnalysisIncomplete(summary); got != 5 {
 		t.Fatalf("summaryAnalysisIncomplete() = %d, want 5", got)
@@ -43,10 +43,10 @@ func TestSummaryAnalysisIncompleteCountsEnabledMetricsOnly(t *testing.T) {
 
 func TestSummaryUnknownCountsEnabledMetricsOnly(t *testing.T) {
 	t.Parallel()
-	summary := report.Summary{
-		Statement: report.MetricSummary{Enabled: true, Unknown: 2},
-		Decision:  report.MetricSummary{Enabled: true, Unknown: 3},
-		Condition: report.MetricSummary{Enabled: false, Unknown: 100},
+	summary := analysis.Summary{
+		Statement: analysis.MetricSummary{Enabled: true, Unknown: 2},
+		Decision:  analysis.MetricSummary{Enabled: true, Unknown: 3},
+		Condition: analysis.MetricSummary{Enabled: false, Unknown: 100},
 	}
 	if got := summaryUnknown(summary); got != 5 {
 		t.Fatalf("summaryUnknown() = %d, want 5", got)

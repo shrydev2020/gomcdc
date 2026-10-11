@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/shrydev2020/gomcdc/schema/saved-result-v2.0.schema.json",
+  "title": "gomcdc saved analysis with original measurement 2.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "version",
+    "sha256",
+    "result"
+  ],
+  "properties": {
+    "format": {
+      "const": "gomcdc-saved-result"
+    },
+    "version": {
+      "const": "2.0"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "result": {
+      "$ref": "#/$defs/result"
+    }
+  },
+  "$defs": {
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "measurement",
+        "report"
+      ],
+      "properties": {
+        "report": {
+          "oneOf": [
+            {
+              "$ref": "report-v2.0.schema.json"
+            },
+            {
+              "$ref": "report-v2.1.schema.json"
+            }
+          ]
+        },
+        "measurement": {
+          "$ref": "measurement-v1.0.schema.json#/$defs/measurement.Archive"
+        }
+      }
+    }
+  }
+}

@@ -7,44 +7,28 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
 	"github.com/shrydev2020/gomcdc/v2/internal/backend"
 	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
 )
 
-// RenderText builds input and returns a deterministic current-schema text report
-// ending in a newline.
-func RenderText(input Input) string {
-	return RenderTextReport(Build(input))
-}
-
 // RenderTextReport renders an already-built report without rebuilding it.
-func RenderTextReport(report Report) string { return renderText(report) }
-
-// WriteText builds input and writes a deterministic current-schema text report.
-func WriteText(writer io.Writer, input Input) error {
-	_, err := io.WriteString(writer, RenderText(input))
-	return err
-}
+func RenderTextReport(report analysis.Result) string { return renderText(report) }
 
 // WriteTextReport writes an already-built report without rebuilding it.
-func WriteTextReport(writer io.Writer, report Report) error {
+func WriteTextReport(writer io.Writer, report analysis.Result) error {
 	_, err := io.WriteString(writer, RenderTextReport(report))
 	return err
 }
 
-func renderText(report Report) string {
+func renderText(report analysis.Result) string {
 	var output strings.Builder
 	fmt.Fprintf(&output, "gomcdc %s report schema %s\n", report.ToolVersion, report.SchemaVersion)
 	fmt.Fprintf(&output, "Module: %s\n", report.Module)
 	fmt.Fprintf(&output, "Run: %s failure-kind=%s (%s)\n", report.Run.Status, report.Run.FailureKind, completeness(report.Run.Complete))
 	fmt.Fprintf(
 		&output,
-		"Results: test=%s measurement=%s integrity=%s strict=%s threshold=%s\n",
-		report.Run.Results.Test,
-		report.Run.Results.Measurement,
-		report.Run.Results.Integrity,
-		report.Run.Results.Strict,
-		report.Run.Results.Threshold,
+		"Results: test=%s measurement=%s integrity=%s strict=%s threshold=%s\n", report.Run.Results.Test, report.Run.Results.Measurement, report.Run.Results.Integrity, report.Run.Results.Strict, report.Run.Results.Threshold,
 	)
 	fmt.Fprintf(&output, "Measurement mode: %s\n", report.MeasurementMode)
 	for _, origin := range report.ContributingRuns {
@@ -207,7 +191,7 @@ func writeInstrumentationCoverage(output *strings.Builder, label string, coverag
 	)
 }
 
-func writeDecision(output *strings.Builder, decision DecisionReport) {
+func writeDecision(output *strings.Builder, decision analysis.DecisionReport) {
 	fmt.Fprintf(
 		output,
 		"      Decision %s (%s) at %s\n",
@@ -259,7 +243,7 @@ func writeDecision(output *strings.Builder, decision DecisionReport) {
 	}
 }
 
-func writeMCDCAnalysis(output *strings.Builder, label string, analysis MCDCAnalysisReport) {
+func writeMCDCAnalysis(output *strings.Builder, label string, analysis analysis.MCDCAnalysisReport) {
 	fmt.Fprintf(
 		output,
 		"%s: enabled=%t status=%s analyzed=%d aborted=%d invalid=%d ",
@@ -280,7 +264,7 @@ func writeMCDCAnalysis(output *strings.Builder, label string, analysis MCDCAnaly
 	}
 }
 
-func writeMCDCCondition(output *strings.Builder, label string, condition MCDCConditionReport) {
+func writeMCDCCondition(output *strings.Builder, label string, condition analysis.MCDCConditionReport) {
 	fmt.Fprintf(output, "%s: %s", label, condition.Status)
 	if condition.Reason != "" {
 		fmt.Fprintf(output, " reason=%q", condition.Reason)
@@ -308,10 +292,10 @@ func writeMCDCCondition(output *strings.Builder, label string, condition MCDCCon
 	output.WriteByte('\n')
 }
 
-func writeSummary(output *strings.Builder, indent string, summary Summary) {
+func writeSummary(output *strings.Builder, indent string, summary analysis.Summary) {
 	metrics := []struct {
 		name   string
-		metric MetricSummary
+		metric analysis.MetricSummary
 	}{
 		{"Statement Coverage", summary.Statement},
 		{"Function Coverage", summary.Function},
@@ -332,7 +316,7 @@ func writeSummary(output *strings.Builder, indent string, summary Summary) {
 	}
 }
 
-func writeMetricInline(output *strings.Builder, metric MetricSummary) {
+func writeMetricInline(output *strings.Builder, metric analysis.MetricSummary) {
 	coverage := "n/a"
 	if metric.Percentage != nil {
 		coverage = fmt.Sprintf(

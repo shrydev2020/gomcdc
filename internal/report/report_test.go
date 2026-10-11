@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
 	"github.com/shrydev2020/gomcdc/v2/internal/backend"
 	"github.com/shrydev2020/gomcdc/v2/internal/c0"
 	"github.com/shrydev2020/gomcdc/v2/internal/config"
@@ -18,8 +19,8 @@ import (
 
 func TestSchemaVersionIsCurrent(t *testing.T) {
 	t.Parallel()
-	if report.SchemaVersion != "2.0" {
-		t.Fatalf("SchemaVersion = %q, want schema 2.0", report.SchemaVersion)
+	if analysis.SchemaVersion != "2.0" {
+		t.Fatalf("SchemaVersion = %q, want schema 2.0", analysis.SchemaVersion)
 	}
 }
 
@@ -27,7 +28,7 @@ func TestBuildWeightedAggregationAndMergesC0Function(t *testing.T) {
 	t.Parallel()
 
 	input := weightedInput()
-	built := report.Build(input)
+	built := analysis.Analyze(withGeneratedProbes(input))
 	assertMetric(t, "module statement", built.Summary.Statement, true, 3, 4, 75, 0, 0, 0, 0)
 	assertMetric(t, "module function", built.Summary.Function, true, 2, 2, 100, 0, 0, 0, 0)
 	assertMetric(t, "module decision", built.Summary.Decision, true, 4, 6, 66.67, 0, 0, 0, 0)
@@ -47,30 +48,19 @@ func TestBuildWeightedAggregationAndMergesC0Function(t *testing.T) {
 
 func TestBuildLeavesHTMLSourceProjectionToWriteHTML(t *testing.T) {
 	t.Parallel()
-	input := report.Input{
+	input := analysis.Input{
 		ModulePath: "example.com/m",
-		SourceFiles: []report.SourceFileInput{{
+		SourceFiles: []analysis.SourceFileInput{{
 			PackagePath: "example.com/m/p",
 			Path:        "p.go",
 			Source:      []byte("package p\n"),
 		}},
 		PackageStatuses: map[string]string{"example.com/m/p": "passed"},
 	}
-	built := report.Build(input)
-	if source := built.Packages[0].Files[0].Source; source != nil {
-		t.Fatal("Build attached an HTML-only source projection")
-	}
+	built := analysis.Analyze(withGeneratedProbes(input))
 	var html bytes.Buffer
-	projected := report.WithSourceViews(built, input.SourceFiles)
-	if source := built.Packages[0].Files[0].Source; source != nil {
-		t.Fatal("WithSourceViews mutated its input report")
-	}
-	cleared := report.WithSourceViews(projected, nil)
-	if source := cleared.Packages[0].Files[0].Source; source != nil {
-		t.Fatal("WithSourceViews retained a stale source projection")
-	}
-	if err := report.WriteHTMLReport(&html, projected); err != nil {
-		t.Fatalf("WriteHTMLReport: %v", err)
+	if err := report.WriteHTMLWithSources(&html, built, input.SourceFiles); err != nil {
+		t.Fatal(err)
 	}
 	if !strings.Contains(html.String(), "package p") {
 		t.Fatal("WriteHTML omitted the source projection")
@@ -89,23 +79,23 @@ func TestWithRunResultsAndErrorsMatchesRebuildAndCopiesErrors(t *testing.T) {
 	t.Parallel()
 
 	input := weightedInput()
-	built := report.Build(input)
-	results := report.RunResults{
-		Test:        report.ResultPassed,
-		Measurement: report.ResultPassed,
-		Integrity:   report.ResultPassed,
-		Strict:      report.ResultFailed,
-		Threshold:   report.ResultPassed,
+	built := analysis.Analyze(withGeneratedProbes(input))
+	results := analysis.RunResults{
+		Test:        analysis.ResultPassed,
+		Measurement: analysis.ResultPassed,
+		Integrity:   analysis.ResultPassed,
+		Strict:      analysis.ResultFailed,
+		Threshold:   analysis.ResultPassed,
 	}
-	errors := []report.ReportError{{
+	errors := []analysis.ReportError{{
 		Phase: "validation", Code: "strict-coverage-gap", Message: "requested coverage contains a gap",
 	}}
 
-	updated := report.WithRunResultsAndErrors(built, results, errors)
+	updated := analysis.WithRunResultsAndErrors(built, results, errors)
 	wantInput := input
 	wantInput.Results = results
 	wantInput.Errors = errors
-	want := report.Build(wantInput)
+	want := analysis.Analyze(withGeneratedProbes(wantInput))
 	updatedJSON, err := report.RenderJSONReport(updated)
 	if err != nil {
 		t.Fatal(err)
@@ -129,17 +119,17 @@ func TestWithRunResultsAndErrorsMatchesRebuildAndCopiesErrors(t *testing.T) {
 
 func TestJSONAlwaysCarriesTypedErrorsWithoutSourceSnapshot(t *testing.T) {
 	t.Parallel()
-	input := report.Input{
+	input := analysis.Input{
 		ModulePath: "example.com/m",
-		SourceFiles: []report.SourceFileInput{{
+		SourceFiles: []analysis.SourceFileInput{{
 			PackagePath: "example.com/m/p", Path: "p.go", Source: []byte("private source sentinel"),
 		}},
-		Errors: []report.ReportError{{
+		Errors: []analysis.ReportError{{
 			Phase: "analysis", Code: "source-analysis-failed", Message: "source analysis did not complete",
 			Package: "example.com/m/p", Path: "p.go",
 		}},
 	}
-	encoded, err := report.RenderJSON(input)
+	encoded, err := report.RenderJSONReport(analysis.Analyze(withGeneratedProbes(input)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +142,7 @@ func TestJSONAlwaysCarriesTypedErrorsWithoutSourceSnapshot(t *testing.T) {
 	if strings.Contains(text, "private source sentinel") {
 		t.Fatal("JSON leaked the HTML source snapshot")
 	}
-	empty, err := report.RenderJSON(report.Input{})
+	empty, err := report.RenderJSONReport(analysis.Analyze(withGeneratedProbes(analysis.Input{})))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,12 +153,12 @@ func TestJSONAlwaysCarriesTypedErrorsWithoutSourceSnapshot(t *testing.T) {
 
 func TestJSONSchemaUsesExactSpecificationKeys(t *testing.T) {
 	t.Parallel()
-	encoded, err := report.RenderJSON(report.Input{
+	encoded, err := report.RenderJSONReport(analysis.Analyze(withGeneratedProbes(analysis.Input{
 		Coverage: config.AllCoverage(),
-		Errors: []report.ReportError{{
+		Errors: []analysis.ReportError{{
 			Phase: "test", Code: "fixture", Message: "fixture", Package: "example.com/m/p", Path: "p.go",
 		}},
-	})
+	})))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,11 +181,11 @@ func TestJSONSchemaUsesExactSpecificationKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertJSONKeys(t, "run.results", results, []string{"test", "measurement", "integrity", "strict", "threshold"})
-	var resultValues map[string]report.ResultStatus
+	var resultValues map[string]analysis.ResultStatus
 	if err := json.Unmarshal(run["results"], &resultValues); err != nil {
 		t.Fatal(err)
 	}
-	if resultValues["test"] != report.ResultNotRun || resultValues["strict"] != report.ResultNotRequested {
+	if resultValues["test"] != analysis.ResultNotRun || resultValues["strict"] != analysis.ResultNotRequested {
 		t.Fatalf("run.results defaults are outside the D28 enum: %#v", resultValues)
 	}
 	var summary map[string]json.RawMessage
@@ -254,14 +244,14 @@ func TestMCDCAnalysisIncompleteIsSeparateFromUnknownSupport(t *testing.T) {
 	t.Parallel()
 	decision := singleConditionDecision(99, "example.com/m/p", "p.go", "Malformed")
 	decision.ExpressionTree = nil
-	built := report.Build(report.Input{
+	built := analysis.Analyze(withGeneratedProbes(analysis.Input{
 		ModulePath: "example.com/m",
 		Coverage:   config.CoverageSet{config.MetricMCDCMasking: true},
 		Decisions:  []cover.DecisionMetadata{decision},
 		PackageStatuses: map[string]string{
 			"example.com/m/p": "passed",
 		},
-	})
+	}))
 	metric := built.Summary.MCDCMasking
 	if metric.AnalysisIncomplete != 1 || metric.Unknown != 0 || metric.Total != 0 {
 		t.Fatalf("MC/DC analysis-incomplete summary = %#v", metric)
@@ -271,7 +261,7 @@ func TestMCDCAnalysisIncompleteIsSeparateFromUnknownSupport(t *testing.T) {
 func TestMaskingAnalysisLimitsAreEffectiveAndReproducible(t *testing.T) {
 	t.Parallel()
 	decision := andDecision(10, "example.com/m/p", "p.go", "Allow")
-	input := report.Input{
+	input := analysis.Input{
 		ModulePath: "example.com/m",
 		Coverage:   config.CoverageSet{config.MetricMCDCMasking: true},
 		MaskingAnalysisBudget: mcdc.AnalysisBudget{
@@ -286,8 +276,8 @@ func TestMaskingAnalysisLimitsAreEffectiveAndReproducible(t *testing.T) {
 		},
 	}
 
-	built := report.Build(input)
-	if built.MaskingAnalysisLimits == nil || *built.MaskingAnalysisLimits != (report.MaskingAnalysisLimits{
+	built := analysis.Analyze(withGeneratedProbes(input))
+	if built.MaskingAnalysisLimits == nil || *built.MaskingAnalysisLimits != (analysis.MaskingAnalysisLimits{
 		MaxEvaluationPairs: 17, MaxSearchStates: 23, MaxSolverBytes: 1,
 	}) {
 		t.Fatalf("effective Masking limits = %#v", built.MaskingAnalysisLimits)
@@ -296,7 +286,7 @@ func TestMaskingAnalysisLimitsAreEffectiveAndReproducible(t *testing.T) {
 		t.Fatalf("custom solver limit did not reach analysis-incomplete: %#v", built.Summary.MCDCMasking)
 	}
 
-	encoded, err := report.RenderJSON(input)
+	encoded, err := report.RenderJSONReport(analysis.Analyze(withGeneratedProbes(input)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,11 +300,11 @@ func TestMaskingAnalysisLimitsAreEffectiveAndReproducible(t *testing.T) {
 			t.Fatalf("JSON report omits effective limit %s:\n%s", required, encoded)
 		}
 	}
-	if text := report.RenderText(input); !strings.Contains(text, "evaluation-pairs=17 search-states=23 solver-bytes=1") {
+	if text := report.RenderTextReport(analysis.Analyze(withGeneratedProbes(input))); !strings.Contains(text, "evaluation-pairs=17 search-states=23 solver-bytes=1") {
 		t.Fatalf("text report omits effective Masking limits:\n%s", text)
 	}
 	var html bytes.Buffer
-	if err := report.WriteHTML(&html, input); err != nil {
+	if err := report.WriteHTMLWithSources(&html, analysis.Analyze(withGeneratedProbes(input)), input.SourceFiles); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(html.String(), "17 evaluation pairs · 23 search states · 1 solver bytes") {
@@ -325,15 +315,15 @@ func TestMaskingAnalysisLimitsAreEffectiveAndReproducible(t *testing.T) {
 func TestMaskingAnalysisLimitsUseDefaultsAndStayAbsentWhenDisabled(t *testing.T) {
 	t.Parallel()
 	defaults := mcdc.DefaultMaskingAnalysisBudget()
-	enabled := report.Build(report.Input{Coverage: config.CoverageSet{config.MetricMCDCMasking: true}})
-	if enabled.MaskingAnalysisLimits == nil || *enabled.MaskingAnalysisLimits != (report.MaskingAnalysisLimits{
+	enabled := analysis.Analyze(withGeneratedProbes(analysis.Input{Coverage: config.CoverageSet{config.MetricMCDCMasking: true}}))
+	if enabled.MaskingAnalysisLimits == nil || *enabled.MaskingAnalysisLimits != (analysis.MaskingAnalysisLimits{
 		MaxEvaluationPairs: defaults.MaxEvaluationPairs,
 		MaxSearchStates:    defaults.MaxSearchStates,
 		MaxSolverBytes:     defaults.MaxSolverBytes,
 	}) {
 		t.Fatalf("default Masking limits = %#v", enabled.MaskingAnalysisLimits)
 	}
-	if disabled := report.Build(report.Input{}); disabled.MaskingAnalysisLimits != nil {
+	if disabled := analysis.Analyze(withGeneratedProbes(analysis.Input{})); disabled.MaskingAnalysisLimits != nil {
 		t.Fatalf("disabled Masking limits = %#v, want nil", disabled.MaskingAnalysisLimits)
 	}
 }
@@ -341,16 +331,16 @@ func TestMaskingAnalysisLimitsUseDefaultsAndStayAbsentWhenDisabled(t *testing.T)
 func TestWriteHTMLReportsSourceMappingDiagnostics(t *testing.T) {
 	t.Parallel()
 	location := cover.SourceLocation{File: "p.go", Start: cover.Position{Line: 9, Column: 1}, End: cover.Position{Line: 9, Column: 2}}
-	input := report.Input{
+	input := analysis.Input{
 		ModulePath: "example.com/m",
-		SourceFiles: []report.SourceFileInput{{
+		SourceFiles: []analysis.SourceFileInput{{
 			PackagePath: "example.com/m/p", Path: "p.go", Source: []byte("package p\n"),
 		}},
 		Decisions:       []cover.DecisionMetadata{{ID: 1, Package: "example.com/m/p", Function: "Check", Location: location, Expression: "a"}},
 		PackageStatuses: map[string]string{"example.com/m/p": "passed"},
 	}
 	var html bytes.Buffer
-	if err := report.WriteHTML(&html, input); err != nil {
+	if err := report.WriteHTMLWithSources(&html, analysis.Analyze(withGeneratedProbes(input)), input.SourceFiles); err != nil {
 		t.Fatalf("WriteHTML: %v", err)
 	}
 	for _, required := range []string{"Source mapping diagnostics", "decision 0x0000000000000001", "cannot be mapped"} {
@@ -364,7 +354,7 @@ func TestANDShortCircuitDistinguishesUniqueAndMasking(t *testing.T) {
 	t.Parallel()
 
 	decision := andDecision(10, "example.com/m/p", "p.go", "Allow")
-	input := report.Input{
+	input := analysis.Input{
 		ModulePath: "example.com/m",
 		Coverage:   config.AllCoverage(),
 		RunStatus:  cover.RunPassed,
@@ -376,7 +366,7 @@ func TestANDShortCircuitDistinguishesUniqueAndMasking(t *testing.T) {
 			completedEvaluation(10, 3, false, cover.ConditionTrue, cover.ConditionFalse),
 		},
 	}
-	built := report.Build(input)
+	built := analysis.Analyze(withGeneratedProbes(input))
 	got := built.Packages[0].Files[0].Functions[0].Decisions[0]
 	assertMetric(t, "unique", got.MCDCUnique.Metric, true, 1, 1, 100, 0, 0, 0, 1)
 	assertMetric(t, "masking", got.MCDCMasking.Metric, true, 2, 2, 100, 0, 0, 0, 0)
@@ -401,7 +391,7 @@ func TestANDShortCircuitDistinguishesUniqueAndMasking(t *testing.T) {
 		t.Fatalf("evaluation provenance/ID = %#v", got.Evaluations[0])
 	}
 
-	text := report.RenderText(input)
+	text := report.RenderTextReport(analysis.Analyze(withGeneratedProbes(input)))
 	if !strings.HasPrefix(text, "gomcdc unknown report schema 2.0\n") {
 		t.Fatalf("text report does not distinguish tool and schema identities:\n%s", text)
 	}
@@ -425,7 +415,7 @@ func TestConditionlessSwitchReportsSkippedDecisionAsNotEvaluated(t *testing.T) {
 	second.Conditions[0].Expression = "b"
 	second.Conditions[0].Location = location("p.go", 11)
 
-	input := report.Input{
+	input := analysis.Input{
 		ModulePath: "example.com/m",
 		Coverage:   config.AllCoverage(),
 		RunStatus:  cover.RunPassed,
@@ -439,7 +429,7 @@ func TestConditionlessSwitchReportsSkippedDecisionAsNotEvaluated(t *testing.T) {
 			RunID: "run", PackagePath: "example.com/m/p", ProcessID: 42,
 		}},
 	}
-	built := report.Build(input)
+	built := analysis.Analyze(withGeneratedProbes(input))
 	decisions := built.Packages[0].Files[0].Functions[0].Decisions
 	if len(decisions) != 2 {
 		t.Fatalf("decisions = %#v", decisions)
@@ -451,7 +441,7 @@ func TestConditionlessSwitchReportsSkippedDecisionAsNotEvaluated(t *testing.T) {
 	if got := target.Conditions[0].NotEvaluated; got != 1 {
 		t.Fatalf("skipped condition not-evaluated = %d, want 1", got)
 	}
-	if text := report.RenderText(input); !strings.Contains(text, "Decision Coverage: true=false false=false not-evaluated=1") {
+	if text := report.RenderTextReport(analysis.Analyze(withGeneratedProbes(input))); !strings.Contains(text, "Decision Coverage: true=false false=false not-evaluated=1") {
 		t.Fatalf("text report omitted skipped decision evidence:\n%s", text)
 	}
 }
@@ -460,7 +450,7 @@ func TestAbortedEvaluationsAreDiagnosticAndDoNotRemoveObligations(t *testing.T) 
 	t.Parallel()
 
 	decision := singleConditionDecision(20, "example.com/m/p", "p.go", "Check")
-	input := report.Input{
+	input := analysis.Input{
 		ModulePath: "example.com/m", Coverage: config.AllCoverage(), RunStatus: cover.RunFailed,
 		Decisions: []cover.DecisionMetadata{decision},
 		Evaluations: []cover.DecisionEvaluation{{
@@ -469,7 +459,7 @@ func TestAbortedEvaluationsAreDiagnosticAndDoNotRemoveObligations(t *testing.T) 
 			Status: cover.EvaluationAborted,
 		}},
 	}
-	built := report.Build(input)
+	built := analysis.Analyze(withGeneratedProbes(input))
 	decisionReport := built.Packages[0].Files[0].Functions[0].Decisions[0]
 	assertMetric(t, "decision", decisionReport.Summary.Decision, true, 0, 2, 0, 0, 0, 0, 0)
 	assertMetric(t, "condition", decisionReport.Summary.Condition, true, 0, 2, 0, 0, 0, 0, 0)
@@ -489,7 +479,7 @@ func TestUnknownAndUnsupportedAreNotInDenominator(t *testing.T) {
 	failedDecision := singleConditionDecision(30, "example.com/m/failed", "failed.go", "Failed")
 	unsupportedDecision := singleConditionDecision(31, "example.com/m/passed", "passed.go", "Unsupported")
 	unsupportedDecision.ExpressionTree = &cover.BooleanExpression{Kind: "xor"}
-	input := report.Input{
+	input := analysis.Input{
 		ModulePath: "example.com/m", Coverage: config.AllCoverage(), RunStatus: cover.RunFailed,
 		Decisions: []cover.DecisionMetadata{failedDecision, unsupportedDecision},
 		Clauses: []cover.ClauseMetadata{
@@ -501,7 +491,7 @@ func TestUnknownAndUnsupportedAreNotInDenominator(t *testing.T) {
 			"example.com/m/passed": "passed",
 		},
 	}
-	built := report.Build(input)
+	built := analysis.Analyze(withGeneratedProbes(input))
 	failed := built.Packages[0]
 	if failed.Path != "example.com/m/failed" || failed.Evidence {
 		t.Fatalf("failed package = %#v", failed)
@@ -521,7 +511,7 @@ func TestStandardCoverEvidenceDoesNotMakeFailedASTMeasurementKnown(t *testing.T)
 	t.Parallel()
 
 	decision := singleConditionDecision(35, "example.com/m/p", "p.go", "Check")
-	input := report.Input{
+	input := analysis.Input{
 		ModulePath: "example.com/m", Coverage: config.AllCoverage(), RunStatus: cover.RunFailed,
 		Decisions:       []cover.DecisionMetadata{decision},
 		PackageStatuses: map[string]string{"example.com/m/p": "build-failed"},
@@ -540,7 +530,7 @@ func TestStandardCoverEvidenceDoesNotMakeFailedASTMeasurementKnown(t *testing.T)
 			}},
 		},
 	}
-	built := report.Build(input)
+	built := analysis.Analyze(withGeneratedProbes(input))
 	if !built.Packages[0].Evidence {
 		t.Fatal("combined package evidence should retain the standard-cover run")
 	}
@@ -549,7 +539,7 @@ func TestStandardCoverEvidenceDoesNotMakeFailedASTMeasurementKnown(t *testing.T)
 	assertMetric(t, "AST condition with only C0 evidence", decisionReport.Summary.Condition, true, 0, 0, 0, 0, 2, 0, 0)
 
 	input.ASTPackageStatuses = map[string]string{"example.com/m/p": "passed"}
-	built = report.Build(input)
+	built = analysis.Analyze(withGeneratedProbes(input))
 	decisionReport = built.Packages[0].Files[0].Functions[0].Decisions[0]
 	assertMetric(t, "AST pass remains distinct from standard build failure", decisionReport.Summary.Decision, true, 0, 2, 0, 0, 0, 0, 0)
 }
@@ -570,7 +560,7 @@ func TestC0InventoryWithoutProfileEvidenceIsUnknown(t *testing.T) {
 			},
 		}},
 	}
-	input := report.Input{
+	input := analysis.Input{
 		ModulePath: "example.com/m",
 		Coverage:   config.AllCoverage(),
 		RunStatus:  cover.RunFailed,
@@ -584,7 +574,7 @@ func TestC0InventoryWithoutProfileEvidenceIsUnknown(t *testing.T) {
 		}}},
 	}
 
-	built := report.Build(input)
+	built := analysis.Analyze(withGeneratedProbes(input))
 	if built.Packages[0].Evidence {
 		t.Fatalf("inventory-only package Evidence = true")
 	}
@@ -605,7 +595,7 @@ func TestC0InventoryWithoutProfileEvidenceIsUnknown(t *testing.T) {
 	input.C0.Packages[0].Evidence = true
 	input.C0.Packages[0].Files[0].Evidence = true
 	input.C0.Packages[0].Files[0].Functions[0] = profileBacked
-	built = report.Build(input)
+	built = analysis.Analyze(withGeneratedProbes(input))
 	assertMetric(t, "profile-backed zero-count statement", built.Summary.Statement, true, 0, 2, 0, 0, 0, 0, 0)
 	assertMetric(t, "profile-backed zero-count function", built.Summary.Function, true, 0, 1, 0, 0, 0, 0, 0)
 }
@@ -614,16 +604,16 @@ func TestProducerIntegrityFailureForcesSurvivingEvidenceToUnknown(t *testing.T) 
 	t.Parallel()
 
 	decision := andDecision(101, "example.com/m/p", "p.go", "Allow")
-	input := report.Input{
+	input := analysis.Input{
 		ModulePath:  "example.com/m",
 		Coverage:    config.AllCoverage(),
 		RunStatus:   cover.RunPassed,
 		Complete:    false,
 		Decisions:   []cover.DecisionMetadata{decision},
 		Evaluations: []cover.DecisionEvaluation{completedEvaluation(101, 1, true, cover.ConditionTrue, cover.ConditionTrue)},
-		ProducerOutcomes: []report.ProducerOutcome{
-			{Producer: report.ProducerASTRuntime, Usability: report.ProducerUsabilityRejected},
-			{Producer: report.ProducerGoCover, Usability: report.ProducerUsabilityRejected},
+		ProducerOutcomes: []analysis.ProducerOutcome{
+			{Producer: analysis.ProducerASTRuntime, Usability: analysis.ProducerUsabilityRejected},
+			{Producer: analysis.ProducerGoCover, Usability: analysis.ProducerUsabilityRejected},
 		},
 		PackageStatuses:    map[string]string{"example.com/m/p": "passed"},
 		ASTPackageStatuses: map[string]string{"example.com/m/p": "passed"},
@@ -637,7 +627,7 @@ func TestProducerIntegrityFailureForcesSurvivingEvidenceToUnknown(t *testing.T) 
 		}}},
 	}
 
-	built := report.Build(input)
+	built := analysis.Analyze(withGeneratedProbes(input))
 	assertMetric(t, "corrupt C0 statement", built.Summary.Statement, true, 0, 0, 0, 0, 1, 0, 0)
 	assertMetric(t, "corrupt C0 function", built.Summary.Function, true, 0, 0, 0, 0, 1, 0, 0)
 	assertMetric(t, "corrupt AST decision", built.Summary.Decision, true, 0, 0, 0, 0, 2, 0, 0)
@@ -657,7 +647,7 @@ func TestProducerUsabilityGatesBodyAndSelectionIndependently(t *testing.T) {
 		Kind: cover.ClauseExpressionSwitch, Role: cover.ClauseCase,
 		Expressions: []string{"1"}, Location: location("p.go", 4),
 	}
-	base := report.Input{
+	base := analysis.Input{
 		Coverage: config.AllCoverage(), Clauses: []cover.ClauseMetadata{clause},
 		ClauseObservations: []cover.ClauseObservation{
 			{ClauseID: 1, Event: cover.ClauseBodyExecution},
@@ -668,21 +658,21 @@ func TestProducerUsabilityGatesBodyAndSelectionIndependently(t *testing.T) {
 	}
 
 	bodyRejected := base
-	bodyRejected.ProducerOutcomes = []report.ProducerOutcome{
-		{Producer: report.ProducerASTRuntime, Usability: report.ProducerUsabilityRejected},
-		{Producer: report.ProducerCompilerSelection, Usability: report.ProducerUsabilityAccepted},
+	bodyRejected.ProducerOutcomes = []analysis.ProducerOutcome{
+		{Producer: analysis.ProducerASTRuntime, Usability: analysis.ProducerUsabilityRejected},
+		{Producer: analysis.ProducerCompilerSelection, Usability: analysis.ProducerUsabilityAccepted},
 	}
-	got := report.Build(bodyRejected).Packages[0].Files[0].Functions[0].Clauses[0]
+	got := analysis.Analyze(withGeneratedProbes(bodyRejected)).Packages[0].Files[0].Functions[0].Clauses[0]
 	if got.BodyCoverage.Unknown != 1 || got.SelectionCoverage.Covered != 1 || got.SelectionCoverage.Total != 1 {
 		t.Fatalf("body rejection leaked into compiler evidence: %#v", got)
 	}
 
 	selectionRejected := base
-	selectionRejected.ProducerOutcomes = []report.ProducerOutcome{
-		{Producer: report.ProducerASTRuntime, Usability: report.ProducerUsabilityAccepted},
-		{Producer: report.ProducerCompilerSelection, Usability: report.ProducerUsabilityRejected},
+	selectionRejected.ProducerOutcomes = []analysis.ProducerOutcome{
+		{Producer: analysis.ProducerASTRuntime, Usability: analysis.ProducerUsabilityAccepted},
+		{Producer: analysis.ProducerCompilerSelection, Usability: analysis.ProducerUsabilityRejected},
 	}
-	got = report.Build(selectionRejected).Packages[0].Files[0].Functions[0].Clauses[0]
+	got = analysis.Analyze(withGeneratedProbes(selectionRejected)).Packages[0].Files[0].Functions[0].Clauses[0]
 	if got.BodyCoverage.Covered != 1 || got.BodyCoverage.Total != 1 || got.SelectionCoverage.Unknown != 1 {
 		t.Fatalf("compiler rejection leaked into AST body evidence: %#v", got)
 	}
@@ -695,7 +685,7 @@ func TestClauseCoverageKeepsBodyAndSelectionEvidenceDistinct(t *testing.T) {
 		{ID: 1, Package: "p", Function: "Switch", Kind: cover.ClauseExpressionSwitch, Role: cover.ClauseCase, Index: 0, Location: location("p.go", 10)},
 		{ID: 2, Package: "p", Function: "Switch", Kind: cover.ClauseSelect, Role: cover.ClauseDefault, Index: 1, Location: location("p.go", 20)},
 	}
-	input := report.Input{
+	input := analysis.Input{
 		ModulePath: "m", Coverage: config.AllCoverage(), RunStatus: cover.RunPassed, Complete: true,
 		Clauses:   clauses,
 		NoMatches: []cover.NoMatchMetadata{{SwitchID: 3, Package: "p", Function: "Switch", Kind: cover.ClauseExpressionSwitch, Location: location("p.go", 30)}},
@@ -705,7 +695,7 @@ func TestClauseCoverageKeepsBodyAndSelectionEvidenceDistinct(t *testing.T) {
 			{ClauseID: 2, Event: cover.ClauseBodyExecution},
 		},
 	}
-	built := report.Build(input)
+	built := analysis.Analyze(withGeneratedProbes(input))
 	got := built.Packages[0].Files[0].Functions[0].Clauses
 	assertMetric(t, "switch clause body", built.Summary.SwitchClauseBody, true, 1, 1, 100, 0, 0, 0, 0)
 	assertMetric(t, "select clause body", built.Summary.SelectClauseBody, true, 1, 1, 100, 0, 0, 0, 0)
@@ -716,7 +706,7 @@ func TestClauseCoverageKeepsBodyAndSelectionEvidenceDistinct(t *testing.T) {
 	if got[1].Role != cover.ClauseDefault {
 		t.Fatalf("clause roles/order = %#v", got)
 	}
-	if text := report.RenderText(input); !strings.Contains(text, "Select Clause Body Coverage") ||
+	if text := report.RenderTextReport(analysis.Analyze(withGeneratedProbes(input))); !strings.Contains(text, "Select Clause Body Coverage") ||
 		!strings.Contains(text, "direct-selections=0 selected-alternatives=[]") {
 		t.Fatalf("text does not label select coverage:\n%s", text)
 	}
@@ -724,13 +714,13 @@ func TestClauseCoverageKeepsBodyAndSelectionEvidenceDistinct(t *testing.T) {
 
 func TestBuildDoesNotInventMissingRunProvenance(t *testing.T) {
 	t.Parallel()
-	built := report.Build(report.Input{})
+	built := analysis.Analyze(withGeneratedProbes(analysis.Input{}))
 	if built.MeasurementMode != "" || built.Run.FailureKind != "" {
 		t.Fatalf("missing provenance was inferred: mode=%q failureKind=%q", built.MeasurementMode, built.Run.FailureKind)
 	}
-	if built.Run.Results != (report.RunResults{
-		Test: report.ResultNotRun, Measurement: report.ResultNotRun, Integrity: report.ResultNotRun,
-		Strict: report.ResultNotRequested, Threshold: report.ResultNotRequested,
+	if built.Run.Results != (analysis.RunResults{
+		Test: analysis.ResultNotRun, Measurement: analysis.ResultNotRun, Integrity: analysis.ResultNotRun,
+		Strict: analysis.ResultNotRequested, Threshold: analysis.ResultNotRequested,
 	}) {
 		t.Fatalf("missing result axes were not normalized: %#v", built.Run.Results)
 	}
@@ -739,12 +729,12 @@ func TestBuildDoesNotInventMissingRunProvenance(t *testing.T) {
 func TestZeroMetricsAndDisabledMetricsStayPresent(t *testing.T) {
 	t.Parallel()
 
-	input := report.Input{ModulePath: "example.com/empty", Coverage: config.CoverageSet{}, RunStatus: cover.RunPassed, Complete: true}
-	built := report.Build(input)
+	input := analysis.Input{ModulePath: "example.com/empty", Coverage: config.CoverageSet{}, RunStatus: cover.RunPassed, Complete: true}
+	built := analysis.Analyze(withGeneratedProbes(input))
 	for name, metric := range metrics(built.Summary) {
 		assertMetric(t, name, metric, false, 0, 0, 0, 0, 0, 0, 0)
 	}
-	jsonValue, err := report.RenderJSON(input)
+	jsonValue, err := report.RenderJSONReport(analysis.Analyze(withGeneratedProbes(input)))
 	if err != nil {
 		t.Fatalf("RenderJSON: %v", err)
 	}
@@ -756,7 +746,7 @@ func TestZeroMetricsAndDisabledMetricsStayPresent(t *testing.T) {
 		jsonValue[len(jsonValue)-1] != '\n' {
 		t.Fatalf("zero JSON schema/newline mismatch:\n%s", jsonValue)
 	}
-	text := report.RenderText(input)
+	text := report.RenderTextReport(analysis.Analyze(withGeneratedProbes(input)))
 	for _, metric := range []string{
 		"Statement Coverage", "Function Coverage", "Decision Coverage",
 		"Switch Clause Body Coverage", "Type Switch Clause Body Coverage", "Select Clause Body Coverage",
@@ -773,7 +763,7 @@ func TestDisabledMCDCReportsStayPresentWithoutAnalysis(t *testing.T) {
 	t.Parallel()
 
 	decision := andDecision(10, "example.com/m/p", "p.go", "Allow")
-	built := report.Build(report.Input{
+	built := analysis.Analyze(withGeneratedProbes(analysis.Input{
 		ModulePath: "example.com/m",
 		Coverage: config.CoverageSet{
 			config.MetricDecision:  true,
@@ -787,9 +777,9 @@ func TestDisabledMCDCReportsStayPresentWithoutAnalysis(t *testing.T) {
 			completedEvaluation(10, 2, true, cover.ConditionTrue, cover.ConditionTrue),
 			completedEvaluation(10, 3, false, cover.ConditionTrue, cover.ConditionFalse),
 		},
-	})
+	}))
 	got := built.Packages[0].Files[0].Functions[0].Decisions[0]
-	for name, analysis := range map[string]report.MCDCAnalysisReport{
+	for name, analysis := range map[string]analysis.MCDCAnalysisReport{
 		"unique":  got.MCDCUnique,
 		"masking": got.MCDCMasking,
 	} {
@@ -814,9 +804,9 @@ func TestTextMetricUsesSpecificationCoverageForm(t *testing.T) {
 	t.Parallel()
 
 	percentage := 75.0
-	text := report.RenderTextReport(report.Report{
-		Summary: report.Summary{
-			Statement: report.MetricSummary{
+	text := report.RenderTextReport(analysis.Result{
+		Summary: analysis.Summary{
+			Statement: analysis.MetricSummary{
 				Enabled: true, Covered: 3, Total: 4, Percentage: &percentage,
 			},
 		},
@@ -829,7 +819,7 @@ func TestTextMetricUsesSpecificationCoverageForm(t *testing.T) {
 func TestJSONReportNormalizesNilErrorsToArray(t *testing.T) {
 	t.Parallel()
 
-	encoded, err := report.RenderJSONReport(report.Report{})
+	encoded, err := report.RenderJSONReport(analysis.Result{})
 	if err != nil {
 		t.Fatalf("RenderJSONReport: %v", err)
 	}
@@ -844,7 +834,7 @@ func TestInstrumentationCoverageAccountsForUnsupportedAndUnknownEntities(t *test
 	supportedDecision := singleConditionDecision(201, "p", "p.go", "Supported")
 	unknownDecision := singleConditionDecision(202, "p", "p.go", "Future")
 	unknownDecision.Kind = "future-decision"
-	built := report.Build(report.Input{
+	built := analysis.Analyze(withGeneratedProbes(analysis.Input{
 		ModulePath: "m",
 		Coverage: config.CoverageSet{
 			config.MetricDecision:              true,
@@ -858,7 +848,7 @@ func TestInstrumentationCoverageAccountsForUnsupportedAndUnknownEntities(t *test
 		},
 		NoMatches:              []cover.NoMatchMetadata{{SwitchID: 2, Kind: cover.ClauseExpressionSwitch}},
 		InstrumentationUnknown: 1,
-	})
+	}))
 
 	if got := built.Capabilities.Status(backend.CapabilityDirectCaseSelection); got != backend.CapabilitySupported {
 		t.Fatalf("direct selection capability = %q", got)
@@ -872,11 +862,11 @@ func TestInstrumentationCoverageAccountsForUnsupportedAndUnknownEntities(t *test
 	if !built.Instrumentation.HasGaps() {
 		t.Fatal("strict instrumentation gaps were not detected")
 	}
-	text := report.RenderText(report.Input{
+	text := report.RenderTextReport(analysis.Analyze(withGeneratedProbes(analysis.Input{
 		Coverage: config.CoverageSet{config.MetricSelectClauseBody: true,
 			config.MetricSwitchClauseSelection: true},
 		NoMatches: []cover.NoMatchMetadata{{SwitchID: 2, Kind: cover.ClauseExpressionSwitch}},
-	})
+	})))
 	for _, required := range []string{
 		"Backend capabilities:",
 		"directCaseSelection: supported",
@@ -893,7 +883,7 @@ func TestRepeatedConditionOccurrencesRemainSupportedAcrossInstrumentationAndSumm
 	decision := andDecision(301, "example.com/m/p", "p.go", "Repeated")
 	decision.Expression = "a && a"
 	decision.Conditions[1].Expression = "a"
-	built := report.Build(report.Input{
+	built := analysis.Analyze(withGeneratedProbes(analysis.Input{
 		ModulePath: "example.com/m",
 		Coverage:   config.CoverageSet{config.MetricMCDCMasking: true},
 		Decisions:  []cover.DecisionMetadata{decision},
@@ -903,7 +893,7 @@ func TestRepeatedConditionOccurrencesRemainSupportedAcrossInstrumentationAndSumm
 		},
 		PackageStatuses:    map[string]string{"example.com/m/p": "passed"},
 		ASTPackageStatuses: map[string]string{"example.com/m/p": "passed"},
-	})
+	}))
 	var instrumentation backend.InstrumentationCoverage
 	for _, metric := range built.Instrumentation.Metrics {
 		if metric.Metric == string(config.MetricMCDCMasking) {
@@ -931,29 +921,29 @@ func TestJSONAndTextAreDeterministicAcrossInputOrder(t *testing.T) {
 	slices.Reverse(backward.Evaluations)
 	backward.C0 = cloneReversedC0(forward.C0)
 
-	forwardJSON, err := report.RenderJSON(forward)
+	forwardJSON, err := report.RenderJSONReport(analysis.Analyze(withGeneratedProbes(forward)))
 	if err != nil {
 		t.Fatalf("forward RenderJSON: %v", err)
 	}
-	backwardJSON, err := report.RenderJSON(backward)
+	backwardJSON, err := report.RenderJSONReport(analysis.Analyze(withGeneratedProbes(backward)))
 	if err != nil {
 		t.Fatalf("backward RenderJSON: %v", err)
 	}
 	if !bytes.Equal(forwardJSON, backwardJSON) {
 		t.Fatalf("JSON depends on input order:\nforward:\n%s\nbackward:\n%s", forwardJSON, backwardJSON)
 	}
-	if got, want := report.RenderText(forward), report.RenderText(backward); got != want {
+	if got, want := report.RenderTextReport(analysis.Analyze(withGeneratedProbes(forward))), report.RenderTextReport(analysis.Analyze(withGeneratedProbes(backward))); got != want {
 		t.Fatalf("text depends on input order:\nforward:\n%s\nbackward:\n%s", got, want)
 	}
 }
 
-func weightedInput() report.Input {
+func weightedInput() analysis.Input {
 	decisions := []cover.DecisionMetadata{
 		{ID: 3, Package: "example.com/m/b", Function: "Loop", Kind: cover.DecisionFor, Location: cover.SourceLocation{File: "b.go", Start: cover.Position{Line: 8, Column: 2}, End: cover.Position{Line: 8, Column: 7}}, Expression: "i < 2"},
 		{ID: 2, Package: "example.com/m/a", Function: "Check", Kind: cover.DecisionIf, Location: cover.SourceLocation{File: "a.go", Start: cover.Position{Line: 20, Column: 2}, End: cover.Position{Line: 20, Column: 8}}, Expression: "second"},
 		{ID: 1, Package: "example.com/m/a", Function: "Check", Kind: cover.DecisionIf, Location: cover.SourceLocation{File: "a.go", Start: cover.Position{Line: 10, Column: 2}, End: cover.Position{Line: 10, Column: 7}}, Expression: "first"},
 	}
-	return report.Input{
+	return analysis.Input{
 		ModulePath: "example.com/m", Coverage: config.AllCoverage(), RunStatus: cover.RunPassed, Complete: true,
 		Decisions: decisions,
 		Evaluations: []cover.DecisionEvaluation{
@@ -1057,7 +1047,7 @@ func location(file string, line int) cover.SourceLocation {
 	return cover.SourceLocation{File: file, Start: cover.Position{Line: line, Column: 2}, End: cover.Position{Line: line, Column: 8}}
 }
 
-func packagePaths(value report.Report) []string {
+func packagePaths(value analysis.Result) []string {
 	result := make([]string, 0, len(value.Packages))
 	for _, packageReport := range value.Packages {
 		result = append(result, packageReport.Path)
@@ -1065,8 +1055,8 @@ func packagePaths(value report.Report) []string {
 	return result
 }
 
-func metrics(summary report.Summary) map[string]report.MetricSummary {
-	return map[string]report.MetricSummary{
+func metrics(summary analysis.Summary) map[string]analysis.MetricSummary {
+	return map[string]analysis.MetricSummary{
 		"statement": summary.Statement, "function": summary.Function, "decision": summary.Decision,
 		"switchClauseBody":     summary.SwitchClauseBody,
 		"typeSwitchClauseBody": summary.TypeSwitchClauseBody, "selectClauseBody": summary.SelectClauseBody,
@@ -1079,14 +1069,14 @@ func metrics(summary report.Summary) map[string]report.MetricSummary {
 func assertMetric(
 	t *testing.T,
 	name string,
-	got report.MetricSummary,
+	got analysis.MetricSummary,
 	enabled bool,
 	covered, total int,
 	percentage float64,
 	unsupported, unknown, analysisIncomplete int, infeasible int,
 ) {
 	t.Helper()
-	want := report.MetricSummary{
+	want := analysis.MetricSummary{
 		Enabled: enabled, Covered: covered, Total: total,
 		Unsupported: unsupported, Unknown: unknown, Infeasible: infeasible,
 		AnalysisIncomplete: analysisIncomplete,
@@ -1097,4 +1087,19 @@ func assertMetric(
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("%s = %#v, want %#v", name, got, want)
 	}
+}
+
+// withGeneratedProbes describes the instrumentation assumed by these rendering fixtures.
+func withGeneratedProbes(input analysis.Input) analysis.Input {
+	for _, d := range input.Decisions {
+		input.Probes.Decisions = append(input.Probes.Decisions, d.ID)
+	}
+	for _, c := range input.Clauses {
+		input.Probes.ClauseBodies = append(input.Probes.ClauseBodies, c.ID)
+		input.Probes.ClauseSelections = append(input.Probes.ClauseSelections, c.ID)
+	}
+	for _, n := range input.NoMatches {
+		input.Probes.NoMatches = append(input.Probes.NoMatches, n.SwitchID)
+	}
+	return input
 }

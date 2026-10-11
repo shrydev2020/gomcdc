@@ -10,15 +10,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
 	"github.com/shrydev2020/gomcdc/v2/internal/analyzer"
 	"github.com/shrydev2020/gomcdc/v2/internal/c0"
 	"github.com/shrydev2020/gomcdc/v2/internal/c0map"
 	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
+	"github.com/shrydev2020/gomcdc/v2/internal/evidence"
 	"github.com/shrydev2020/gomcdc/v2/internal/gotest"
 	"github.com/shrydev2020/gomcdc/v2/internal/instrument"
 	"github.com/shrydev2020/gomcdc/v2/internal/loader"
 	"github.com/shrydev2020/gomcdc/v2/internal/modulecontext"
-	"github.com/shrydev2020/gomcdc/v2/internal/report"
 	"github.com/shrydev2020/gomcdc/v2/internal/runtimecov"
 	"github.com/shrydev2020/gomcdc/v2/internal/workspace"
 )
@@ -132,9 +133,9 @@ func TestRecoveryContextStartsWithDeadlineAfterInterruption(t *testing.T) {
 func TestMeasurementResultsPreserveIndependentExecutionFacts(t *testing.T) {
 	t.Parallel()
 	interrupted := measurementOutcome{interrupted: true}
-	if got := interrupted.results(false, nil); got != (report.RunResults{
-		Test: report.ResultNotRun, Measurement: report.ResultFailed, Integrity: report.ResultNotRun,
-		Strict: report.ResultNotRequested, Threshold: report.ResultNotRequested,
+	if got := interrupted.results(false, nil); got != (analysis.RunResults{
+		Test: analysis.ResultNotRun, Measurement: analysis.ResultFailed, Integrity: analysis.ResultNotRun,
+		Strict: analysis.ResultNotRequested, Threshold: analysis.ResultNotRequested,
 	}) {
 		t.Fatalf("pre-test interruption results = %#v", got)
 	}
@@ -143,9 +144,9 @@ func TestMeasurementResultsPreserveIndependentExecutionFacts(t *testing.T) {
 		testResult:       &gotest.Result{Status: cover.RunPassed},
 		integrityChecked: true,
 	}
-	if got := completed.results(false, errors.New("cleanup failed")); got != (report.RunResults{
-		Test: report.ResultPassed, Measurement: report.ResultFailed, Integrity: report.ResultPassed,
-		Strict: report.ResultNotRequested, Threshold: report.ResultNotRequested,
+	if got := completed.results(false, errors.New("cleanup failed")); got != (analysis.RunResults{
+		Test: analysis.ResultPassed, Measurement: analysis.ResultFailed, Integrity: analysis.ResultPassed,
+		Strict: analysis.ResultNotRequested, Threshold: analysis.ResultNotRequested,
 	}) {
 		t.Fatalf("cleanup failure results = %#v", got)
 	}
@@ -245,79 +246,77 @@ func TestRuntimeProducerOutcomeKeepsAxesIndependent(t *testing.T) {
 		mappingErr    error
 		diagnosticErr error
 		diagnostics   []runtimecov.Diagnostic
-		want          report.ProducerOutcome
+		want          analysis.ProducerOutcome
 	}{
 		{
 			name: "complete", run: passed,
-			want: report.ProducerOutcome{
-				Integrity: report.ProducerIntegrityValid, Completeness: report.ProducerCompletenessComplete,
-				Mapping: report.ProducerMappingComplete, Usability: report.ProducerUsabilityAccepted,
+			want: analysis.ProducerOutcome{
+				Integrity: analysis.ProducerIntegrityValid, Completeness: analysis.ProducerCompletenessComplete,
+				Mapping: analysis.ProducerMappingComplete, Usability: analysis.ProducerUsabilityAccepted,
 			},
 		},
 		{
 			name: "partial execution", run: failed,
-			want: report.ProducerOutcome{
-				Integrity: report.ProducerIntegrityValid, Completeness: report.ProducerCompletenessPartial,
-				Mapping: report.ProducerMappingComplete, Usability: report.ProducerUsabilityAcceptedPartial,
+			want: analysis.ProducerOutcome{
+				Integrity: analysis.ProducerIntegrityValid, Completeness: analysis.ProducerCompletenessPartial,
+				Mapping: analysis.ProducerMappingComplete, Usability: analysis.ProducerUsabilityAcceptedPartial,
 			},
 		},
 		{
 			name: "valid prefix after failed run", run: failed,
 			diagnostics: []runtimecov.Diagnostic{{Severity: runtimecov.DiagnosticRecoverable}},
-			want: report.ProducerOutcome{
-				Integrity: report.ProducerIntegrityValidPrefix, Completeness: report.ProducerCompletenessPartial,
-				Mapping: report.ProducerMappingComplete, Usability: report.ProducerUsabilityAcceptedPartial,
+			want: analysis.ProducerOutcome{
+				Integrity: analysis.ProducerIntegrityValidPrefix, Completeness: analysis.ProducerCompletenessPartial,
+				Mapping: analysis.ProducerMappingComplete, Usability: analysis.ProducerUsabilityAcceptedPartial,
 			},
 		},
 		{
 			name: "valid prefix contradicts complete run", run: passed,
 			diagnostics: []runtimecov.Diagnostic{{Severity: runtimecov.DiagnosticRecoverable}},
-			want: report.ProducerOutcome{
-				Integrity: report.ProducerIntegrityValidPrefix, Completeness: report.ProducerCompletenessPartial,
-				Mapping: report.ProducerMappingComplete, Usability: report.ProducerUsabilityRejected,
+			want: analysis.ProducerOutcome{
+				Integrity: analysis.ProducerIntegrityValidPrefix, Completeness: analysis.ProducerCompletenessPartial,
+				Mapping: analysis.ProducerMappingComplete, Usability: analysis.ProducerUsabilityRejected,
 			},
 		},
 		{
 			name: "mapping rejected independently", run: passed, mappingErr: errors.New("unknown ID"),
-			want: report.ProducerOutcome{
-				Integrity: report.ProducerIntegrityValid, Completeness: report.ProducerCompletenessComplete,
-				Mapping: report.ProducerMappingInvalid, Usability: report.ProducerUsabilityRejected,
+			want: analysis.ProducerOutcome{
+				Integrity: analysis.ProducerIntegrityValid, Completeness: analysis.ProducerCompletenessComplete,
+				Mapping: analysis.ProducerMappingInvalid, Usability: analysis.ProducerUsabilityRejected,
 			},
 		},
 		{
 			name: "corrupt transport", run: failed,
 			diagnostics: []runtimecov.Diagnostic{{Severity: runtimecov.DiagnosticIntegrity}},
-			want: report.ProducerOutcome{
-				Integrity: report.ProducerIntegrityInvalid, Completeness: report.ProducerCompletenessPartial,
-				Mapping: report.ProducerMappingComplete, Usability: report.ProducerUsabilityRejected,
+			want: analysis.ProducerOutcome{
+				Integrity: analysis.ProducerIntegrityInvalid, Completeness: analysis.ProducerCompletenessPartial,
+				Mapping: analysis.ProducerMappingComplete, Usability: analysis.ProducerUsabilityRejected,
 			},
 		},
 		{
 			name: "collection unavailable", run: passed, collectionErr: errors.New("read"),
-			want: report.ProducerOutcome{
-				Integrity: report.ProducerIntegrityUnavailable, Completeness: report.ProducerCompletenessUnavailable,
-				Mapping: report.ProducerMappingUnavailable, Usability: report.ProducerUsabilityRejected,
+			want: analysis.ProducerOutcome{
+				Integrity: analysis.ProducerIntegrityUnavailable, Completeness: analysis.ProducerCompletenessUnavailable,
+				Mapping: analysis.ProducerMappingUnavailable, Usability: analysis.ProducerUsabilityRejected,
 			},
 		},
 		{
 			name: "run unavailable",
-			want: report.ProducerOutcome{
-				Integrity: report.ProducerIntegrityUnavailable, Completeness: report.ProducerCompletenessUnavailable,
-				Mapping: report.ProducerMappingUnavailable, Usability: report.ProducerUsabilityRejected,
+			want: analysis.ProducerOutcome{
+				Integrity: analysis.ProducerIntegrityUnavailable, Completeness: analysis.ProducerCompletenessUnavailable,
+				Mapping: analysis.ProducerMappingUnavailable, Usability: analysis.ProducerUsabilityRejected,
 			},
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := runtimeProducerOutcome(
-				report.ProducerASTRuntime,
-				test.run,
+			got := runtimeProducerOutcome(analysis.ProducerASTRuntime, test.run,
 				test.collectionErr,
 				test.mappingErr,
 				test.diagnosticErr,
 				test.diagnostics,
 			)
-			test.want.Producer = report.ProducerASTRuntime
+			test.want.Producer = analysis.ProducerASTRuntime
 			if got != test.want {
 				t.Fatalf("outcome = %#v, want %#v", got, test.want)
 			}
@@ -364,14 +363,14 @@ func TestRuntimeAcceptancePreservesProducerOwnership(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, issues := acceptRuntimeEvidenceByProducer(
+			_, issues := evidence.AcceptRuntimeByProducer(
 				t.Context(), decisions, clauses, test.recorded, "run", nil,
 			)
-			if got := issues.astErr() != nil; got != test.wantAST {
-				t.Fatalf("AST mapping error = %t, want %t (%v)", got, test.wantAST, issues.astErr())
+			if got := issues.ASTError() != nil; got != test.wantAST {
+				t.Fatalf("AST mapping error = %t, want %t (%v)", got, test.wantAST, issues.ASTError())
 			}
-			if got := issues.compilerErr() != nil; got != test.wantCompiler {
-				t.Fatalf("compiler mapping error = %t, want %t (%v)", got, test.wantCompiler, issues.compilerErr())
+			if got := issues.CompilerError() != nil; got != test.wantCompiler {
+				t.Fatalf("compiler mapping error = %t, want %t (%v)", got, test.wantCompiler, issues.CompilerError())
 			}
 		})
 	}
@@ -381,15 +380,15 @@ func TestGoCoverProducerOutcomeSeparatesMappingFromIntegrity(t *testing.T) {
 	t.Parallel()
 
 	passed := &gotest.Result{Status: cover.RunPassed}
-	if got := goCoverProducerOutcome(passed, nil, errors.New("unknown region")); got != (report.ProducerOutcome{
-		Producer: report.ProducerGoCover, Integrity: report.ProducerIntegrityValid,
-		Completeness: report.ProducerCompletenessComplete, Mapping: report.ProducerMappingInvalid,
-		Usability: report.ProducerUsabilityRejected,
+	if got := goCoverProducerOutcome(passed, nil, errors.New("unknown region")); got != (analysis.ProducerOutcome{
+		Producer: analysis.ProducerGoCover, Integrity: analysis.ProducerIntegrityValid,
+		Completeness: analysis.ProducerCompletenessComplete, Mapping: analysis.ProducerMappingInvalid,
+		Usability: analysis.ProducerUsabilityRejected,
 	}) {
 		t.Fatalf("mapping failure outcome = %#v", got)
 	}
-	if got := goCoverProducerOutcome(passed, os.ErrNotExist, nil); got.Integrity != report.ProducerIntegrityUnavailable ||
-		got.Mapping != report.ProducerMappingUnavailable || got.Usability != report.ProducerUsabilityRejected {
+	if got := goCoverProducerOutcome(passed, os.ErrNotExist, nil); got.Integrity != analysis.ProducerIntegrityUnavailable ||
+		got.Mapping != analysis.ProducerMappingUnavailable || got.Usability != analysis.ProducerUsabilityRejected {
 		t.Fatalf("missing profile outcome = %#v", got)
 	}
 }

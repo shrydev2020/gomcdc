@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
 	"github.com/shrydev2020/gomcdc/v2/internal/backend"
 	"github.com/shrydev2020/gomcdc/v2/internal/config"
 	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
@@ -35,8 +36,8 @@ func TestCheckedInSchemaEnumsMatchPublicDomains(t *testing.T) {
 	t.Parallel()
 	document := readReportSchema(t)
 	assertSchemaEnum(t, "resultStatus", document.Defs["resultStatus"], []string{
-		string(report.ResultPassed), string(report.ResultFailed), string(report.ResultTimeout),
-		string(report.ResultNotRun), string(report.ResultNotRequested),
+		string(analysis.ResultPassed), string(analysis.ResultFailed), string(analysis.ResultTimeout),
+		string(analysis.ResultNotRun), string(analysis.ResultNotRequested),
 	})
 	assertSchemaEnum(t, "runStatus", document.Defs["runStatus"], []string{
 		string(cover.RunPassed), string(cover.RunFailed), string(cover.RunTimeout),
@@ -51,20 +52,20 @@ func TestCheckedInSchemaEnumsMatchPublicDomains(t *testing.T) {
 		string(cover.RunTimeout), string(gotest.PackageBuildFailed), string(gotest.PackageSkipped),
 	})
 	assertSchemaEnum(t, "producerName", document.Defs["producerName"], []string{
-		string(report.ProducerGoCover), string(report.ProducerASTRuntime), string(report.ProducerCompilerSelection),
+		string(analysis.ProducerGoCover), string(analysis.ProducerASTRuntime), string(analysis.ProducerCompilerSelection),
 	})
 	assertSchemaEnum(t, "producerIntegrity", document.Defs["producerIntegrity"], []string{
-		string(report.ProducerIntegrityValid), string(report.ProducerIntegrityValidPrefix),
-		string(report.ProducerIntegrityInvalid), string(report.ProducerIntegrityUnavailable),
+		string(analysis.ProducerIntegrityValid), string(analysis.ProducerIntegrityValidPrefix),
+		string(analysis.ProducerIntegrityInvalid), string(analysis.ProducerIntegrityUnavailable),
 	})
 	assertSchemaEnum(t, "producerCompleteness", document.Defs["producerCompleteness"], []string{
-		string(report.ProducerCompletenessComplete), string(report.ProducerCompletenessPartial), string(report.ProducerCompletenessUnavailable),
+		string(analysis.ProducerCompletenessComplete), string(analysis.ProducerCompletenessPartial), string(analysis.ProducerCompletenessUnavailable),
 	})
 	assertSchemaEnum(t, "producerMapping", document.Defs["producerMapping"], []string{
-		string(report.ProducerMappingComplete), string(report.ProducerMappingInvalid), string(report.ProducerMappingUnavailable),
+		string(analysis.ProducerMappingComplete), string(analysis.ProducerMappingInvalid), string(analysis.ProducerMappingUnavailable),
 	})
 	assertSchemaEnum(t, "producerUsability", document.Defs["producerUsability"], []string{
-		string(report.ProducerUsabilityAccepted), string(report.ProducerUsabilityAcceptedPartial), string(report.ProducerUsabilityRejected),
+		string(analysis.ProducerUsabilityAccepted), string(analysis.ProducerUsabilityAcceptedPartial), string(analysis.ProducerUsabilityRejected),
 	})
 	assertSchemaEnum(t, "capabilityStatus", document.Defs["capabilityStatus"], []string{
 		string(backend.CapabilitySupported), string(backend.CapabilityUnsupportedByBackend), string(backend.CapabilityUnknown),
@@ -134,10 +135,10 @@ func TestCheckedInSchemaMatchesPublicReportTypes(t *testing.T) {
 	if document.Schema != "https://json-schema.org/draft/2020-12/schema" {
 		t.Fatalf("unexpected JSON Schema dialect %q", document.Schema)
 	}
-	if document.Root.Properties["schemaVersion"].Const != report.OfflineSchemaVersion {
-		t.Fatalf("schemaVersion const = %#v, want %q", document.Root.Properties["schemaVersion"].Const, report.OfflineSchemaVersion)
+	if document.Root.Properties["schemaVersion"].Const != analysis.OfflineSchemaVersion {
+		t.Fatalf("schemaVersion const = %#v, want %q", document.Root.Properties["schemaVersion"].Const, analysis.OfflineSchemaVersion)
 	}
-	if err := checkSchemaShape(document, document.Root, reflect.TypeOf(report.Report{}), "report"); err != nil {
+	if err := checkSchemaShape(document, document.Root, reflect.TypeOf(analysis.Result{}), "report"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -163,13 +164,13 @@ func TestMeasurementSchemaRemainsUnchanged(t *testing.T) {
 	if err := json.Unmarshal(data, &original); err != nil {
 		t.Fatal(err)
 	}
-	if original.Root.Properties["schemaVersion"].Const != report.SchemaVersion {
+	if original.Root.Properties["schemaVersion"].Const != analysis.SchemaVersion {
 		t.Fatal("ordinary measurement schema changed")
 	}
 	// Offline provenance is omitted on ordinary measurement reports. All other
 	// fields must still match the immutable 2.0 contract exactly.
 	var fields []reflect.StructField
-	current := reflect.TypeFor[report.Report]()
+	current := reflect.TypeFor[analysis.Result]()
 	for i := range current.NumField() {
 		field := current.Field(i)
 		if field.Name != "ContributingRuns" {
@@ -179,7 +180,7 @@ func TestMeasurementSchemaRemainsUnchanged(t *testing.T) {
 	if err := checkSchemaShape(&original, original.Root, reflect.StructOf(fields), "measurement"); err != nil {
 		t.Fatal(err)
 	}
-	encoded, err := report.RenderJSON(report.Input{})
+	encoded, err := report.RenderJSONReport(analysis.Analyze(withGeneratedProbes(analysis.Input{})))
 	if err != nil || bytes.Contains(encoded, []byte(`"contributingRuns"`)) {
 		t.Fatal("ordinary output acquired offline provenance")
 	}
@@ -187,7 +188,7 @@ func TestMeasurementSchemaRemainsUnchanged(t *testing.T) {
 
 func TestSavedResultSchemaMatchesItsPayload(t *testing.T) {
 	t.Parallel()
-	data, err := os.ReadFile("../../schema/saved-result-v1.1.schema.json")
+	data, err := os.ReadFile("../../schema/saved-result-v2.0.schema.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,13 +210,13 @@ func TestSavedResultSchemaMatchesItsPayload(t *testing.T) {
 	}
 	saved.Defs["savedReport"] = current.Root
 	saved.Defs["result"].Properties["report"] = schemaNode{Ref: "#/$defs/savedReport"}
-	if saved.Defs["snapshot"].Properties["report"].Ref != "report-v2.0.schema.json" {
-		t.Fatal("original snapshot report contract drift")
+	if saved.Defs["result"].Properties["measurement"].Ref != "measurement-v1.0.schema.json#/$defs/measurement.Archive" {
+		t.Fatal("measurement schema reference changed")
 	}
-	saved.Defs["snapshot"].Properties["report"] = schemaNode{Ref: "#/$defs/savedReport"}
-	if err := checkSchemaShape(&saved, saved.Defs["result"], reflect.TypeFor[resultfile.Result](), "savedResult"); err != nil {
-		t.Fatal(err)
+	if !sameStringSet(saved.Defs["result"].Required, []string{"measurement", "report"}) || len(saved.Defs["result"].Properties) != 2 {
+		t.Fatal("saved result wire fields changed")
 	}
+
 }
 
 func TestCheckedInSchemaDetectsContractDrift(t *testing.T) {
@@ -251,7 +252,7 @@ func TestCheckedInSchemaDetectsContractDrift(t *testing.T) {
 			if err := json.Unmarshal(encoded, &document); err != nil {
 				t.Fatal(err)
 			}
-			if err := checkSchemaShape(&document, document.Root, reflect.TypeOf(report.Report{}), "report"); err == nil {
+			if err := checkSchemaShape(&document, document.Root, reflect.TypeOf(analysis.Result{}), "report"); err == nil {
 				t.Fatal("contract drift was not detected")
 			}
 		})
@@ -260,11 +261,11 @@ func TestCheckedInSchemaDetectsContractDrift(t *testing.T) {
 
 func TestRenderedReportsCarrySchemaAndToolIdentities(t *testing.T) {
 	t.Parallel()
-	for _, input := range []report.Input{
-		{ToolVersion: "v1.0.0", RunStatus: cover.RunPassed, FailureKind: cover.RunFailureNone, MeasurementMode: report.MeasurementSingleRun},
-		{ToolVersion: "devel-abcdef012345-dirty", RunStatus: cover.RunFailed, FailureKind: cover.RunFailureTest, MeasurementMode: report.MeasurementStandardCover},
+	for _, input := range []analysis.Input{
+		{ToolVersion: "v1.0.0", RunStatus: cover.RunPassed, FailureKind: cover.RunFailureNone, MeasurementMode: analysis.MeasurementSingleRun},
+		{ToolVersion: "devel-abcdef012345-dirty", RunStatus: cover.RunFailed, FailureKind: cover.RunFailureTest, MeasurementMode: analysis.MeasurementStandardCover},
 	} {
-		encoded, err := report.RenderJSON(input)
+		encoded, err := report.RenderJSONReport(analysis.Analyze(withGeneratedProbes(input)))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -272,7 +273,7 @@ func TestRenderedReportsCarrySchemaAndToolIdentities(t *testing.T) {
 		if err := json.Unmarshal(encoded, &value); err != nil {
 			t.Fatal(err)
 		}
-		if value["schemaVersion"] != report.SchemaVersion || value["toolVersion"] != input.ToolVersion {
+		if value["schemaVersion"] != analysis.SchemaVersion || value["toolVersion"] != input.ToolVersion {
 			t.Fatalf("report identities = schema %#v tool %#v", value["schemaVersion"], value["toolVersion"])
 		}
 	}

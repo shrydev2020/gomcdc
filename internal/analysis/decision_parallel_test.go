@@ -1,4 +1,4 @@
-package report
+package analysis
 
 import (
 	"context"
@@ -17,9 +17,9 @@ func TestParallelDecisionBuildMatchesSequentialReport(t *testing.T) {
 	t.Parallel()
 	input := parallelDecisionTestInput(12)
 	input.MaxMaskingDecisionWorkers = 1
-	sequential := Build(input)
+	sequential := Analyze(input)
 	input.MaxMaskingDecisionWorkers = 4
-	parallel := Build(input)
+	parallel := Analyze(input)
 	if !reflect.DeepEqual(parallel, sequential) {
 		t.Fatalf("parallel report differs from sequential report\nparallel: %#v\nsequential: %#v", parallel, sequential)
 	}
@@ -32,7 +32,7 @@ func TestCanceledDecisionSchedulingRetainsEvidenceAndMarksMaskingIncomplete(t *t
 	input := parallelDecisionTestInput(1)
 	input.Context = ctx
 	input.MaxMaskingDecisionWorkers = 4
-	built := Build(input)
+	built := Analyze(input)
 	decision := built.Packages[0].Files[0].Functions[0].Decisions[0]
 	if !decision.DecisionCoverage.True || !decision.DecisionCoverage.False || len(decision.Evaluations) != 3 {
 		t.Fatalf("canceled Masking scheduling discarded accepted evidence: %#v", decision)
@@ -195,7 +195,12 @@ func parallelDecisionTestInput(decisionCount int) Input {
 			})
 		}
 	}
+	probes := cover.Probes{}
+	for _, d := range decisions {
+		probes.Decisions = append(probes.Decisions, d.ID)
+	}
 	return Input{
+		Probes: probes,
 		Coverage: config.CoverageSet{
 			config.MetricDecision: true, config.MetricCondition: true,
 			config.MetricMCDCUnique: true, config.MetricMCDCMasking: true,

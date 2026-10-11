@@ -376,13 +376,19 @@ func ProjectAcceptedEvidence(ctx context.Context, modulePath string, accepted Ac
 				)
 			}
 			evidence := blockEvidence[blockIndex]
+			if options.SeparateStatements && len(evidence.Statements) == 0 {
+				evidence.Statements = make([]AcceptedStatementEvidence, inventoryBlock.Statements)
+				for i := range evidence.Statements {
+					evidence.Statements[i] = AcceptedStatementEvidence{Count: evidence.Count, Observed: evidence.Observed}
+				}
+			}
 			if len(evidence.Statements) > 0 {
 				if len(evidence.Statements) != inventoryBlock.Statements {
 					return Report{}, fmt.Errorf("project accepted cover evidence %q: block %d has inconsistent statement evidence", originalPath, blockIndex)
 				}
 				for first := 0; first < len(evidence.Statements); {
 					last := first + 1
-					for last < len(evidence.Statements) && evidence.Statements[last] == evidence.Statements[first] {
+					for !options.SeparateStatements && last < len(evidence.Statements) && evidence.Statements[last] == evidence.Statements[first] {
 						last++
 					}
 					span := inventoryBlock.PhysicalRange

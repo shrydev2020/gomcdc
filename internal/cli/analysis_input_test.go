@@ -3,43 +3,44 @@ package cli
 import (
 	"testing"
 
+	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
 	"github.com/shrydev2020/gomcdc/v2/internal/config"
 	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
+	"github.com/shrydev2020/gomcdc/v2/internal/evidence"
 	"github.com/shrydev2020/gomcdc/v2/internal/gotest"
 	"github.com/shrydev2020/gomcdc/v2/internal/loader"
 	"github.com/shrydev2020/gomcdc/v2/internal/mcdc"
-	"github.com/shrydev2020/gomcdc/v2/internal/report"
 )
 
 func TestAssembleReportInputUsesOneCombinedMeasurement(t *testing.T) {
-	input := assembleReportInput(reportAssembly{
+	input := assembleAnalysisInput(analysisAssembly{
 		loaded:                 loader.Result{ModulePath: "example.test/m", PackageImportSet: []string{"example.test/m/p"}},
 		coverage:               config.AllCoverage(),
 		testResult:             &gotest.Result{Status: cover.RunFailed, FailureKind: cover.RunFailureTest, Packages: map[string]gotest.PackageStatus{"example.test/m/p": gotest.PackageFailed}},
 		standardCoverRequested: true,
 		astRequested:           true,
-		producerOutcomes: []report.ProducerOutcome{{
-			Producer: report.ProducerASTRuntime, Integrity: report.ProducerIntegrityValid,
-			Completeness: report.ProducerCompletenessPartial, Mapping: report.ProducerMappingComplete,
-			Usability: report.ProducerUsabilityAcceptedPartial,
+		producerOutcomes: []analysis.ProducerOutcome{{
+			Producer: analysis.ProducerASTRuntime, Integrity: analysis.ProducerIntegrityValid,
+			Completeness: analysis.ProducerCompletenessPartial, Mapping: analysis.ProducerMappingComplete,
+			Usability: analysis.ProducerUsabilityAcceptedPartial,
 		}},
-		results: report.RunResults{
-			Test: report.ResultFailed, Measurement: report.ResultPassed, Integrity: report.ResultPassed,
-			Strict: report.ResultNotRequested, Threshold: report.ResultNotRequested,
+		results: analysis.RunResults{
+			Test: analysis.ResultFailed, Measurement: analysis.ResultPassed, Integrity: analysis.ResultPassed,
+			Strict: analysis.ResultNotRequested, Threshold: analysis.ResultNotRequested,
 		},
 		maskingAnalysisBudget: mcdc.AnalysisBudget{MaxSearchStates: 123},
-		evidence:              acceptedRuntimeEvidence{},
+		evidence:              evidence.Runtime{},
 	})
 
-	if input.MeasurementMode != report.MeasurementSingleRun {
+	if input.MeasurementMode != analysis.MeasurementSingleRun {
 		t.Fatalf("measurement mode = %q", input.MeasurementMode)
 	}
 	if input.RunStatus != cover.RunFailed || input.FailureKind != cover.RunFailureTest || input.Complete {
 		t.Fatalf("run state = %#v", input)
 	}
-	if input.Results != (report.RunResults{
-		Test: report.ResultFailed, Measurement: report.ResultPassed, Integrity: report.ResultPassed,
-		Strict: report.ResultNotRequested, Threshold: report.ResultNotRequested,
+	if input.Results != (analysis.RunResults{
+		Test: analysis.ResultFailed, Measurement: analysis.ResultPassed, Integrity: analysis.ResultPassed,
+		Strict: analysis.ResultNotRequested, Threshold: analysis.ResultNotRequested,
 	}) {
 		t.Fatalf("independent results = %#v", input.Results)
 	}
@@ -60,18 +61,18 @@ func TestAssembleReportInputUsesOneCombinedMeasurement(t *testing.T) {
 func TestAssembleReportInputClassifiesCallerInterruption(t *testing.T) {
 	t.Parallel()
 
-	input := assembleReportInput(reportAssembly{
+	input := assembleAnalysisInput(analysisAssembly{
 		loaded:      loader.Result{ModulePath: "example.test/m"},
 		interrupted: true,
-		results: report.RunResults{
-			Test: report.ResultNotRun, Measurement: report.ResultFailed, Integrity: report.ResultNotRun,
-			Strict: report.ResultNotRequested, Threshold: report.ResultNotRequested,
+		results: analysis.RunResults{
+			Test: analysis.ResultNotRun, Measurement: analysis.ResultFailed, Integrity: analysis.ResultNotRun,
+			Strict: analysis.ResultNotRequested, Threshold: analysis.ResultNotRequested,
 		},
 	})
 	if input.RunStatus != cover.RunFailed || input.FailureKind != cover.RunFailureInterrupted || input.Complete {
 		t.Fatalf("interrupted run state = %#v", input)
 	}
-	if input.Results.Test != report.ResultNotRun || input.Results.Measurement != report.ResultFailed || input.Results.Integrity != report.ResultNotRun {
+	if input.Results.Test != analysis.ResultNotRun || input.Results.Measurement != analysis.ResultFailed || input.Results.Integrity != analysis.ResultNotRun {
 		t.Fatalf("interrupted results = %#v", input.Results)
 	}
 	if len(input.PackageStatuses) != 0 || len(input.Measurements) != 0 {
@@ -81,23 +82,23 @@ func TestAssembleReportInputClassifiesCallerInterruption(t *testing.T) {
 
 func TestAssembleReportInputRecordsCleanupAsMeasurementFailure(t *testing.T) {
 	t.Parallel()
-	input := assembleReportInput(reportAssembly{
+	input := assembleAnalysisInput(analysisAssembly{
 		loaded:     loader.Result{ModulePath: "example.test/m"},
 		testResult: &gotest.Result{Status: cover.RunPassed},
-		results: report.RunResults{
-			Test: report.ResultPassed, Measurement: report.ResultFailed, Integrity: report.ResultPassed,
-			Strict: report.ResultNotRequested, Threshold: report.ResultNotRequested,
+		results: analysis.RunResults{
+			Test: analysis.ResultPassed, Measurement: analysis.ResultFailed, Integrity: analysis.ResultPassed,
+			Strict: analysis.ResultNotRequested, Threshold: analysis.ResultNotRequested,
 		},
-		producerOutcomes: []report.ProducerOutcome{{
-			Producer: report.ProducerGoCover, Integrity: report.ProducerIntegrityValid,
-			Completeness: report.ProducerCompletenessComplete, Mapping: report.ProducerMappingComplete,
-			Usability: report.ProducerUsabilityAccepted,
+		producerOutcomes: []analysis.ProducerOutcome{{
+			Producer: analysis.ProducerGoCover, Integrity: analysis.ProducerIntegrityValid,
+			Completeness: analysis.ProducerCompletenessComplete, Mapping: analysis.ProducerMappingComplete,
+			Usability: analysis.ProducerUsabilityAccepted,
 		}},
-		errors: []report.ReportError{{
+		errors: []analysis.ReportError{{
 			Phase: "cleanup", Code: "workspace-cleanup-failed", Message: "temporary workspace cleanup failed",
 		}},
 	})
-	if input.Results.Test != report.ResultPassed || input.Results.Measurement != report.ResultFailed || input.Results.Integrity != report.ResultPassed {
+	if input.Results.Test != analysis.ResultPassed || input.Results.Measurement != analysis.ResultFailed || input.Results.Integrity != analysis.ResultPassed {
 		t.Fatalf("cleanup results = %#v", input.Results)
 	}
 	if input.Complete || len(input.Errors) != 1 || input.Errors[0].Code != "workspace-cleanup-failed" {

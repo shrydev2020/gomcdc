@@ -4,20 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+
+	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
 )
 
-// RenderJSON builds input and returns indented current-schema JSON ending in a
-// newline.
-func RenderJSON(input Input) ([]byte, error) {
-	var buffer bytes.Buffer
-	if err := WriteJSON(&buffer, input); err != nil {
-		return nil, err
-	}
-	return buffer.Bytes(), nil
-}
-
 // RenderJSONReport renders an already-built report without rebuilding it.
-func RenderJSONReport(report Report) ([]byte, error) {
+func RenderJSONReport(report analysis.Result) ([]byte, error) {
 	var buffer bytes.Buffer
 	if err := WriteJSONReport(&buffer, report); err != nil {
 		return nil, err
@@ -25,15 +17,10 @@ func RenderJSONReport(report Report) ([]byte, error) {
 	return buffer.Bytes(), nil
 }
 
-// WriteJSON builds input and writes deterministic, indented current-schema JSON.
-func WriteJSON(writer io.Writer, input Input) error {
-	return WriteJSONReport(writer, Build(input))
-}
-
 // WriteJSONReport writes an already-built report without rebuilding it.
-func WriteJSONReport(writer io.Writer, report Report) error {
+func WriteJSONReport(writer io.Writer, report analysis.Result) error {
 	if report.Errors == nil {
-		report.Errors = []ReportError{}
+		report.Errors = []analysis.ReportError{}
 	}
 	encoder := json.NewEncoder(writer)
 	encoder.SetEscapeHTML(false)

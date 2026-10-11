@@ -1,6 +1,4 @@
-package report
-
-import "sort"
+package evidence
 
 // ProducerName identifies one independent source of measurement evidence.
 // A producer is not a test run: several producers may observe the same run.
@@ -69,21 +67,4 @@ type ProducerOutcome struct {
 // does not derive usability from the other fields.
 func (outcome ProducerOutcome) AllowsCoverage() bool {
 	return outcome.Usability == ProducerUsabilityAccepted || outcome.Usability == ProducerUsabilityAcceptedPartial
-}
-
-func cloneProducerOutcomes(values []ProducerOutcome) []ProducerOutcome {
-	cloned := append(make([]ProducerOutcome, 0, len(values)), values...)
-	sort.Slice(cloned, func(i, j int) bool { return cloned[i].Producer < cloned[j].Producer })
-	return cloned
-}
-
-func producerRejectsEvidence(values []ProducerOutcome, producer ProducerName) bool {
-	for _, outcome := range values {
-		if outcome.Producer == producer {
-			return !outcome.AllowsCoverage()
-		}
-	}
-	// Absence means the producer was not requested. The caller owns metric
-	// selection, so report construction does not invent a failure here.
-	return false
 }

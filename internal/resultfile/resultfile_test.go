@@ -10,17 +10,21 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
+	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
+	"github.com/shrydev2020/gomcdc/v2/internal/evidence"
+	"github.com/shrydev2020/gomcdc/v2/internal/measurement"
 	"github.com/shrydev2020/gomcdc/v2/internal/report"
 )
 
 func fixture() Result {
 	source := []byte("package p\n// original source: \xff\n")
-	built := report.Build(report.Input{ModulePath: "example.test/p", ToolVersion: "test-version"})
-	built.Packages = []report.PackageReport{{Path: "example.test/p", Files: []report.FileReport{{Path: "p.go", Functions: []report.FunctionReport{{Statements: []report.StatementReport{{Count: 1<<60 + 1}}}}}}}}
-	return New(Settings{
-		WorkingDirectory: ".", GoEnvironment: map[string]string{"GOVERSION": "go1.26.0", "GOOS": "linux", "GOARCH": "amd64"},
-		SourceDigests: map[string]string{"p.go": Digest(source)},
-	}, built, []report.SourceFileInput{{PackagePath: "example.test/p", Path: "p.go", Source: source}})
+	settings := measurement.Settings{InvocationID: strings.Repeat("a", 32), WorkingDirectory: ".", Packages: []string{"example.test/p"}, Coverage: []string{"decision"}, GoEnvironment: map[string]string{"GOVERSION": "go1.26.0", "GOOS": "linux", "GOARCH": "amd64"}, SourceDigests: map[string]string{"p.go": Digest(source)}}
+	planSettings, _ := measurement.BuildSettings(settings)
+	archive := measurement.Archive{Plan: measurement.Plan{Definition: measurement.Definition, ToolVersion: "test-version", Module: "example.test/p", Settings: planSettings, Sources: []measurement.Source{{PackagePath: "example.test/p", Path: "p.go", Content: source, SHA256: Digest(source)}}}, Runs: []measurement.Run{{ID: settings.InvocationID, Settings: settings, Status: cover.RunPassed, FailureKind: cover.RunFailureNone, Complete: true, Mode: "single-run", Results: measurement.RunResults{Test: measurement.ResultPassed, Measurement: measurement.ResultPassed, Integrity: measurement.ResultPassed, Strict: measurement.ResultNotRequested, Threshold: measurement.ResultNotRequested}, Producers: []evidence.ProducerOutcome{{Producer: evidence.ProducerASTRuntime, Integrity: evidence.ProducerIntegrityValid, Completeness: evidence.ProducerCompletenessComplete, Mapping: evidence.ProducerMappingComplete, Usability: evidence.ProducerUsabilityAccepted}}}}}
+	built := analysis.Analyze(analysis.Input{ModulePath: "example.test/p", ToolVersion: "test-version"})
+	built.Packages = []analysis.PackageReport{{Path: "example.test/p", Files: []analysis.FileReport{{Path: "p.go", Functions: []analysis.FunctionReport{{Statements: []analysis.StatementReport{{Count: 1<<60 + 1}}}}}}}}
+	return NewMeasurement(archive, built)
 }
 
 func TestSavedResultPreservesSourceBytesAndReport(t *testing.T) {
@@ -34,7 +38,7 @@ func TestSavedResultPreservesSourceBytesAndReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(got.Sources[0].Content, want.Sources[0].Content) {
+	if !bytes.Equal(got.Measurement.Plan.Sources[0].Content, want.Measurement.Plan.Sources[0].Content) {
 		t.Fatal("original source bytes changed")
 	}
 	wantJSON, _ := report.RenderJSONReport(want.Report)
@@ -42,7 +46,7 @@ func TestSavedResultPreservesSourceBytesAndReport(t *testing.T) {
 	if !bytes.Equal(wantJSON, gotJSON) {
 		t.Fatal("report changed during serialization")
 	}
-	if got.WithSources().Packages[0].Files[0].Source.Source != string(want.Sources[0].Content) {
+	if !bytes.Equal(got.SourceFiles()[0].Source, want.Measurement.Plan.Sources[0].Content) {
 		t.Fatal("source view did not use saved bytes")
 	}
 	var compact bytes.Buffer
@@ -61,11 +65,13 @@ func TestSavedResultRejectsCorruptionAndUnsupportedFormats(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, data := range map[string][]byte{
-		"truncated":      encoded[:len(encoded)/2],
-		"trailing":       append(bytes.Clone(encoded), []byte("{}")...),
-		"future format":  bytes.Replace(encoded, []byte(`"version": "1.0"`), []byte(`"version": "9.0"`), 1),
-		"changed report": bytes.Replace(encoded, []byte("test-version"), []byte("fake-version"), 1),
-		"plain report":   []byte(`{"schemaVersion":"2.0"}`),
+		"old version 1.0": bytes.Replace(encoded, []byte(`"version": "2.0"`), []byte(`"version": "1.0"`), 1),
+		"old version 1.1": bytes.Replace(encoded, []byte(`"version": "2.0"`), []byte(`"version": "1.1"`), 1),
+		"truncated":       encoded[:len(encoded)/2],
+		"trailing":        append(bytes.Clone(encoded), []byte("{}")...),
+		"future format":   bytes.Replace(encoded, []byte(`"version": "2.0"`), []byte(`"version": "9.0"`), 1),
+		"changed report":  bytes.Replace(encoded, []byte("test-version"), []byte("fake-version"), 1),
+		"plain report":    []byte(`{"schemaVersion":"2.0"}`),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Decode(bytes.NewReader(data)); err == nil {
@@ -80,11 +86,15 @@ func TestSavedResultRejectsCorruptionAndUnsupportedFormats(t *testing.T) {
 		{"missing count", "missing fields", func(v map[string]any) {
 			delete(v["report"].(map[string]any)["summary"].(map[string]any)["decision"].(map[string]any), "covered")
 		}},
-		{"missing settings", "missing fields", func(v map[string]any) { delete(v, "settings") }},
+		{"missing measurement", "missing fields", func(v map[string]any) { delete(v, "measurement") }},
 		{"unknown property", `unknown field "invented"`, func(v map[string]any) { v["invented"] = true }},
 		{"report version", "unsupported report schema", func(v map[string]any) { v["report"].(map[string]any)["schemaVersion"] = "9.0" }},
-		{"missing source", "missing original source", func(v map[string]any) { v["sources"] = []any{} }},
-		{"wrong source digest", "saved source digest mismatch", func(v map[string]any) { v["sources"].([]any)[0].(map[string]any)["sha256"] = strings.Repeat("0", 64) }},
+		{"missing source", "missing original source", func(v map[string]any) {
+			v["measurement"].(map[string]any)["plan"].(map[string]any)["sources"] = []any{}
+		}},
+		{"wrong source digest", "source digest", func(v map[string]any) {
+			v["measurement"].(map[string]any)["plan"].(map[string]any)["sources"].([]any)[0].(map[string]any)["sha256"] = strings.Repeat("0", 64)
+		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var saved envelope
@@ -130,7 +140,7 @@ func TestWriteDoesNotReplaceExistingResultOnValidationFailure(t *testing.T) {
 	}
 	before, _ := os.ReadFile(path)
 	invalid := fixture()
-	invalid.Sources[0].Path = "../outside.go"
+	invalid.Measurement.Plan.Sources[0].Path = "../outside.go"
 	if err := Write(path, invalid); err == nil {
 		t.Fatal("invalid source accepted")
 	}

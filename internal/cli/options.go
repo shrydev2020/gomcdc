@@ -16,6 +16,8 @@ import (
 )
 
 type options struct {
+	explicitFlags                      []string
+	recordOnly                         bool
 	coverage                           string
 	metrics                            config.CoverageSet
 	format                             string
@@ -128,6 +130,7 @@ func parseOptions(args []string, errOut io.Writer) (options, error) {
 	if err := fs.Parse(toolArgs); err != nil {
 		return options{}, err
 	}
+	fs.Visit(func(f *flag.Flag) { opts.explicitFlags = append(opts.explicitFlags, f.Name) })
 	opts.patterns = fs.Args()
 	if len(opts.patterns) == 0 {
 		return options{}, errors.New("at least one package pattern is required")
@@ -239,8 +242,11 @@ func writeTopUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "  gomcdc test [options] [package patterns] [-- go test arguments]")
 	fmt.Fprintln(w, "  gomcdc report [--format=text|json|html] [--output=path] <saved-result>")
-	fmt.Fprintln(w, "  gomcdc merge --output=merged.gomcdc.json [options] INPUT INPUT...")
+	fmt.Fprintln(w, "  gomcdc merge --output=measurement.json [--expect-runs=N] MEASUREMENT...")
 	fmt.Fprintln(w, "  gomcdc reanalyze --output=analyzed.gomcdc.json [options] INPUT")
+	fmt.Fprintln(w, "  gomcdc record --output=measurement.json [options] PACKAGE... [-- go test arguments]")
+	fmt.Fprintln(w, "  gomcdc analyze --output=analysis.json [--expect-runs=N] MEASUREMENT...")
+	fmt.Fprintln(w, "  gomcdc require [--complete] [--METRIC=PERCENT] ANALYSIS")
 	fmt.Fprintln(w, "  gomcdc version")
 	fmt.Fprintln(w, "\nBy default all canonical coverage metrics are measured.")
 }

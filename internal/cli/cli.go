@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
 	"github.com/shrydev2020/gomcdc/v2/internal/analyzer"
 	"github.com/shrydev2020/gomcdc/v2/internal/buildinfo"
 	"github.com/shrydev2020/gomcdc/v2/internal/c0"
@@ -24,7 +25,7 @@ import (
 	"github.com/shrydev2020/gomcdc/v2/internal/gotestargs"
 	"github.com/shrydev2020/gomcdc/v2/internal/instrument"
 	"github.com/shrydev2020/gomcdc/v2/internal/loader"
-	"github.com/shrydev2020/gomcdc/v2/internal/mcdc"
+	measurementdata "github.com/shrydev2020/gomcdc/v2/internal/measurement"
 	"github.com/shrydev2020/gomcdc/v2/internal/modulecontext"
 	"github.com/shrydev2020/gomcdc/v2/internal/report"
 	"github.com/shrydev2020/gomcdc/v2/internal/resultfile"
@@ -61,7 +62,7 @@ func classifyExit(invalidUsage, measurementFailure, testsFailed, thresholdFailur
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	// Measurement and report paths need a working directory. Informational and invalid
 	// top-level commands must remain usable even when no module is available.
-	if len(args) == 0 || (args[0] != "test" && args[0] != "report" && args[0] != "merge" && args[0] != "reanalyze") {
+	if len(args) == 0 || (args[0] != "test" && args[0] != "report" && args[0] != "merge" && args[0] != "reanalyze" && args[0] != "record" && args[0] != "analyze" && args[0] != "require") {
 		return runAt(ctx, "", args, stdout, stderr)
 	}
 	workingDir, err := os.Getwd()
@@ -99,8 +100,20 @@ func runAt(ctx context.Context, workingDir string, args []string, stdout, stderr
 	if args[0] == "report" {
 		return runReport(ctx, workingDir, args[1:], stdout, stderr)
 	}
-	if args[0] == "merge" || args[0] == "reanalyze" {
-		return runAnalysis(ctx, workingDir, args[0], args[1:], stdout, stderr)
+	if args[0] == "record" {
+		return runRecord(ctx, workingDir, args[1:], stdout, stderr)
+	}
+	if args[0] == "analyze" {
+		return runMeasurementStage(ctx, workingDir, "analyze", args[1:], stdout, stderr)
+	}
+	if args[0] == "require" {
+		return runRequire(ctx, workingDir, args[1:], stdout, stderr)
+	}
+	if args[0] == "merge" {
+		return runMeasurementStage(ctx, workingDir, "merge", args[1:], stdout, stderr)
+	}
+	if args[0] == "reanalyze" {
+		return runReanalysis(ctx, workingDir, args[1:], stdout, stderr)
 	}
 	if args[0] != "test" {
 		fmt.Fprintf(stderr, "gomcdc: unknown subcommand %q\n", args[0])
@@ -227,8 +240,8 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		fmt.Fprintf(stderr, "gomcdc: package load failed: %v\n", err)
 		return ExitMeasurementFailed
 	}
-	var savedSettings resultfile.Settings
-	if opts.save != "" {
+	var savedSettings measurementdata.Settings
+	{
 		savedSettings, err = captureResultSettings(ctx, opts, loaded, work, filteredGOFLAGS)
 		if err != nil {
 			fmt.Fprintf(stderr, "gomcdc: save settings: %v\n", err)
@@ -242,7 +255,7 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	var sources []sourceInstrumentation
 	var generatedFiles []c0map.GeneratedFile
 	var ignoredCoverageFiles []string
-	var reportErrors []report.ReportError
+	var reportErrors []analysis.ReportError
 	analysisIncomplete := false
 	analysisUnknown := 0
 	for _, file := range loaded.Files {
@@ -261,14 +274,14 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 			}
 			continue
 		}
-		analysis, analysisErr := analyzer.AnalyzeFile(analyzer.FileOptions{
+		fileAnalysis, analysisErr := analyzer.AnalyzeFile(analyzer.FileOptions{
 			Path:         file.Path,
 			OriginalPath: filepath.Join(sourceConfiguration.MainModuleDir(), relative),
 			ModuleDir:    loaded.ModuleRoot,
 			ModulePath:   loaded.ModulePath,
 			PackagePath:  file.PackagePath,
 		})
-		analysis.TestContexts = file.TestContexts
+		fileAnalysis.TestContexts = file.TestContexts
 		if err := ctx.Err(); err != nil {
 			fmt.Fprintf(stderr, "gomcdc: source analysis interrupted: %v\n", err)
 			return ExitInterrupted
@@ -280,26 +293,26 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 			fmt.Fprintf(stderr, "gomcdc: source analysis skipped %q: %v\n", relative, analysisErr)
 			analysisIncomplete = true
 			analysisUnknown++
-			reportErrors = append(reportErrors, report.ReportError{
+			reportErrors = append(reportErrors, analysis.ReportError{
 				Phase: "analysis", Code: "source-analysis-failed", Message: "source analysis did not complete",
 				Package: file.PackagePath, Path: filepath.ToSlash(relative),
 			})
 			continue
 		}
-		if analysis.Generated {
+		if fileAnalysis.Generated {
 			generatedFiles = append(generatedFiles, c0map.GeneratedFile{Path: filepath.ToSlash(relative)})
 			continue
 		}
 		var inventory *c0.FileInventory
 		if needsC0 {
-			builtInventory, inventoryErr := c0.BuildInventory(analysis.RelativePath, analysis.Source)
+			builtInventory, inventoryErr := c0.BuildInventory(fileAnalysis.RelativePath, fileAnalysis.Source)
 			if inventoryErr != nil {
 				fmt.Fprintf(stderr, "gomcdc: C0 inventory failed %q: %v\n", relative, inventoryErr)
 				return ExitMeasurementFailed
 			}
 			inventory = &builtInventory
 		}
-		sources = append(sources, sourceInstrumentation{loaded: file, analysis: analysis, inventory: inventory})
+		sources = append(sources, sourceInstrumentation{loaded: file, analysis: fileAnalysis, inventory: inventory})
 	}
 	if !opts.includeTests {
 		for _, file := range loaded.TestFiles {
@@ -365,12 +378,12 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	}
 	finalizationErr := measurementWork.finalize(stderr)
 	if finalizationErr != nil {
-		reportErrors = append(reportErrors, report.ReportError{
+		reportErrors = append(reportErrors, analysis.ReportError{
 			Phase: "cleanup", Code: "workspace-cleanup-failed", Message: "temporary workspace cleanup failed",
 		})
 	}
 
-	input := assembleReportInput(reportAssembly{
+	input := assembleAnalysisInput(analysisAssembly{
 		context:     ctx,
 		toolVersion: buildinfo.Version(),
 		loaded:      loaded, sources: sources, coverage: opts.metrics, decisions: decisions,
@@ -384,33 +397,61 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 		interrupted:            measurement.interrupted,
 		errors:                 reportErrors, measurementDiagnostics: measurement.diagnostics,
 	})
-	built := report.Build(input)
+	archive, archiveErr := archiveMeasurement(savedSettings, input, measurement)
+	if archiveErr != nil {
+		fmt.Fprintf(stderr, "gomcdc: measurement archive: %v\n", archiveErr)
+		return ExitMeasurementFailed
+	}
+	if opts.recordOnly {
+		if err := measurementdata.Write(context.Background(), resolveOutputPath(workingDir, opts.save), archive); err != nil {
+			fmt.Fprintf(stderr, "gomcdc: save measurement: %v\n", err)
+			return ExitMeasurementFailed
+		}
+		fmt.Fprintf(stdout, "Saved measurement %s (%s).\n", opts.save, savedSettings.InvocationID)
+		if measurement.interrupted {
+			return ExitInterrupted
+		}
+		return classifyExit(false, measurement.integrityFailure || finalizationErr != nil || analysisIncomplete, testRunFailed(measurement.testResult), false)
+	}
+	// On interruption, retain recovered evidence but let canceled analysis
+	// mark unfinished obligations rather than starting a fresh solver budget.
+	built, analyzeErr := analysis.FromMeasurement(ctx, archive, opts.maskingAnalysisBudget())
+	if ctx.Err() != nil {
+		input.Probes = measurement.probes
+		built, analyzeErr = analysis.Analyze(input), nil
+	}
+	if analyzeErr != nil {
+		fmt.Fprintf(stderr, "gomcdc: analyze measurement: %v\n", analyzeErr)
+		return ExitMeasurementFailed
+	}
 	strictFailure := opts.strict && (built.Instrumentation.HasGaps() || summaryUnknown(built.Summary) > 0 || summaryAnalysisIncomplete(built.Summary) > 0)
 	thresholds := thresholdFailures(opts, built.Summary)
 	input.Results.Strict = requestedResult(opts.strict, !strictFailure)
 	input.Results.Threshold = requestedResult(thresholdRequested(opts), len(thresholds) == 0)
 	if strictFailure {
-		input.Errors = append(input.Errors, report.ReportError{
+		input.Errors = append(input.Errors, analysis.ReportError{
 			Phase: "validation", Code: "strict-coverage-gap", Message: "requested coverage contains unsupported, unknown, analysis-incomplete, or uninstrumented entities",
 		})
 	}
 	for _, threshold := range thresholds {
-		input.Errors = append(input.Errors, report.ReportError{
+		input.Errors = append(input.Errors, analysis.ReportError{
 			Phase: "threshold", Code: "coverage-threshold-failed", Message: threshold,
 		})
 	}
-	built = report.WithRunResultsAndErrors(built, input.Results, input.Errors)
+	built = analysis.WithRunResultsAndErrors(built, input.Results, input.Errors)
 	if opts.save != "" {
-		saved := resultfile.New(savedSettings, built, input.SourceFiles)
+		archive.Runs[0].Results = built.Run.Results
+		archive.Runs[0].Diagnostics = nil
+		for _, d := range built.Errors {
+			archive.Runs[0].Diagnostics = append(archive.Runs[0].Diagnostics, measurementdata.Diagnostic{Phase: d.Phase, Code: d.Code, Message: d.Message, Package: d.Package, Path: d.Path})
+		}
+		saved := resultfile.NewMeasurement(archive, built)
 		if err := resultfile.Write(resolveOutputPath(workingDir, opts.save), saved); err != nil {
 			fmt.Fprintf(stderr, "gomcdc: save result: %v\n", err)
 			return ExitMeasurementFailed
 		}
 	}
-	if opts.format == "html" {
-		built = report.WithSourceViews(built, input.SourceFiles)
-	}
-	if err := writeReport(opts, built, workingDir, stdout); err != nil {
+	if err := writeReport(opts, built, workingDir, stdout, input.SourceFiles); err != nil {
 		fmt.Fprintf(stderr, "gomcdc: report generation failed: %v\n", err)
 		return ExitMeasurementFailed
 	}
@@ -454,9 +495,9 @@ func runCoverage(ctx context.Context, workingDir string, opts options, stdout, s
 	return classifyExit(false, false, false, false)
 }
 
-func requestedResult(requested, passed bool) report.ResultStatus {
+func requestedResult(requested, passed bool) analysis.ResultStatus {
 	if !requested {
-		return report.ResultNotRequested
+		return analysis.ResultNotRequested
 	}
 	return passFailResult(passed)
 }
@@ -470,16 +511,16 @@ func thresholdRequested(opts options) bool {
 	return false
 }
 
-func summaryAnalysisIncomplete(summary report.Summary) int {
-	return sumEnabledSummaryField(summary, func(metric report.MetricSummary) int { return metric.AnalysisIncomplete })
+func summaryAnalysisIncomplete(summary analysis.Summary) int {
+	return sumEnabledSummaryField(summary, func(metric analysis.MetricSummary) int { return metric.AnalysisIncomplete })
 }
 
-func summaryUnknown(summary report.Summary) int {
-	return sumEnabledSummaryField(summary, func(metric report.MetricSummary) int { return metric.Unknown })
+func summaryUnknown(summary analysis.Summary) int {
+	return sumEnabledSummaryField(summary, func(metric analysis.MetricSummary) int { return metric.Unknown })
 }
 
-func sumEnabledSummaryField(summary report.Summary, value func(report.MetricSummary) int) int {
-	metrics := []report.MetricSummary{
+func sumEnabledSummaryField(summary analysis.Summary, value func(analysis.MetricSummary) int) int {
+	metrics := []analysis.MetricSummary{
 		summary.Statement, summary.Function, summary.Decision,
 		summary.SwitchClauseBody, summary.TypeSwitchClauseBody, summary.SelectClauseBody,
 		summary.SwitchClauseSelection, summary.TypeSwitchClauseSelection,
@@ -494,13 +535,13 @@ func sumEnabledSummaryField(summary report.Summary, value func(report.MetricSumm
 	return total
 }
 
-func sourceFileInputs(sources []sourceInstrumentation) []report.SourceFileInput {
-	result := make([]report.SourceFileInput, 0, len(sources))
+func sourceFileInputs(sources []sourceInstrumentation) []analysis.SourceFileInput {
+	result := make([]analysis.SourceFileInput, 0, len(sources))
 	for _, source := range sources {
 		if source.analysis.TestContextOnly {
 			continue
 		}
-		result = append(result, report.SourceFileInput{
+		result = append(result, analysis.SourceFileInput{
 			PackagePath: source.loaded.PackagePath,
 			Path:        source.analysis.RelativePath,
 			Source:      append([]byte(nil), source.analysis.Source...),
@@ -533,7 +574,7 @@ func instrumentPackages(
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if len(item.analysis.Decisions) == 0 && len(item.analysis.Clauses) == 0 && item.analysis.TestContexts.Empty() {
+		if len(item.analysis.Decisions) == 0 && len(item.analysis.Clauses) == 0 && (!compilerClauseSelection || len(item.analysis.NoMatches) == 0) && item.analysis.TestContexts.Empty() {
 			continue
 		}
 		copyPath := filepath.Join(moduleDir, filepath.FromSlash(item.analysis.RelativePath))
@@ -637,7 +678,7 @@ func runGoTest(ctx context.Context, timeout time.Duration, options gotest.Option
 	return gotest.Run(testContext, options)
 }
 
-func measurementRuns(name string, result *gotest.Result) []report.MeasurementRun {
+func measurementRuns(name string, result *gotest.Result) []analysis.MeasurementRun {
 	if result == nil {
 		return nil
 	}
@@ -645,9 +686,9 @@ func measurementRuns(name string, result *gotest.Result) []report.MeasurementRun
 	for packagePath, status := range result.Packages {
 		packages[packagePath] = string(status)
 	}
-	return []report.MeasurementRun{{
+	return []analysis.MeasurementRun{{
 		Name: name,
-		Run: report.TestRun{
+		Run: analysis.TestRun{
 			Status:      result.Status,
 			FailureKind: result.FailureKind,
 			Complete:    result.Status == cover.RunPassed,
@@ -748,470 +789,6 @@ func buildC0Report(
 	return &analyzed, nil
 }
 
-// acceptedRuntimeEvidence is the only runtime evidence allowed to reach report
-// construction. Transport provenance has been accepted against the requested
-// run and source inventory, while ClauseObservations are the provenance-free,
-// idempotent domain projection used for coverage aggregation.
-type acceptedRuntimeEvidence struct {
-	Evaluations           []cover.DecisionEvaluation
-	NotEvaluatedDecisions []cover.DecisionNotEvaluatedObservation
-	ClauseObservations    []cover.ClauseObservation
-	Diagnostics           []runtimecov.Diagnostic
-	Files                 []runtimecov.ProcessFile
-}
-
-// runtimeAcceptanceIssues preserves producer ownership for rejected runtime
-// records. Shared transport failures invalidate both runtime producers, while
-// AST and compiler mapping failures invalidate only the projection that owns
-// the rejected record.
-type runtimeAcceptanceIssues struct {
-	shared   []error
-	ast      []error
-	compiler []error
-}
-
-func (issues *runtimeAcceptanceIssues) addShared(err error) {
-	if err != nil {
-		issues.shared = append(issues.shared, err)
-	}
-}
-
-func (issues *runtimeAcceptanceIssues) addAST(err error) {
-	if err != nil {
-		issues.ast = append(issues.ast, err)
-	}
-}
-
-func (issues *runtimeAcceptanceIssues) addCompiler(err error) {
-	if err != nil {
-		issues.compiler = append(issues.compiler, err)
-	}
-}
-
-func (issues runtimeAcceptanceIssues) err() error {
-	return errors.Join(errors.Join(issues.shared...), errors.Join(issues.ast...), errors.Join(issues.compiler...))
-}
-
-func (issues runtimeAcceptanceIssues) astErr() error {
-	return errors.Join(errors.Join(issues.shared...), errors.Join(issues.ast...))
-}
-
-func (issues runtimeAcceptanceIssues) compilerErr() error {
-	return errors.Join(errors.Join(issues.shared...), errors.Join(issues.compiler...))
-}
-
-func (issues *runtimeAcceptanceIssues) addClause(event cover.ClauseEventKind, err error) {
-	switch event {
-	case cover.ClauseBodyExecution:
-		issues.addAST(err)
-	case cover.ClauseDirectSelection, cover.ClauseNoMatchSelection:
-		issues.addCompiler(err)
-	default:
-		issues.addShared(err)
-	}
-}
-
-func acceptRuntimeEvidence(
-	ctx context.Context,
-	decisions []cover.DecisionMetadata,
-	clauses []cover.ClauseMetadata,
-	recorded runtimecov.RecordedEvidence,
-	runID string,
-	noMatches []cover.NoMatchMetadata,
-) (acceptedRuntimeEvidence, error) {
-	accepted, issues := acceptRuntimeEvidenceByProducer(ctx, decisions, clauses, recorded, runID, noMatches)
-	return accepted, issues.err()
-}
-
-func acceptRuntimeEvidenceByProducer(
-	ctx context.Context,
-	decisions []cover.DecisionMetadata,
-	clauses []cover.ClauseMetadata,
-	recorded runtimecov.RecordedEvidence,
-	runID string,
-	noMatches []cover.NoMatchMetadata,
-) (acceptedRuntimeEvidence, runtimeAcceptanceIssues) {
-	var issues runtimeAcceptanceIssues
-	if err := ctx.Err(); err != nil {
-		issues.addShared(err)
-		return acceptedRuntimeEvidence{}, issues
-	}
-	knownDecisions := make(map[cover.DecisionID]cover.DecisionMetadata, len(decisions))
-	knownPackages := make(map[string]struct{})
-	for _, decision := range decisions {
-		if err := ctx.Err(); err != nil {
-			issues.addShared(err)
-			return acceptedRuntimeEvidence{}, issues
-		}
-		knownDecisions[decision.ID] = decision
-		knownPackages[decision.Package] = struct{}{}
-	}
-	knownClauses := make(map[cover.ClauseID]cover.ClauseMetadata, len(clauses))
-	for _, clause := range clauses {
-		if err := ctx.Err(); err != nil {
-			issues.addShared(err)
-			return acceptedRuntimeEvidence{}, issues
-		}
-		knownClauses[clause.ID] = clause
-		knownPackages[clause.Package] = struct{}{}
-	}
-	knownNoMatches := make(map[cover.SwitchID]cover.NoMatchMetadata)
-	for _, noMatch := range noMatches {
-		if err := ctx.Err(); err != nil {
-			issues.addShared(err)
-			return acceptedRuntimeEvidence{}, issues
-		}
-		knownNoMatches[noMatch.SwitchID] = noMatch
-		knownPackages[noMatch.Package] = struct{}{}
-	}
-	switchDecisions, orderErr := conditionlessSwitchDecisionOrder(ctx, clauses)
-	if orderErr != nil {
-		issues.addShared(orderErr)
-		return acceptedRuntimeEvidence{}, issues
-	}
-	accepted := acceptedRuntimeEvidence{
-		Diagnostics: append([]runtimecov.Diagnostic(nil), recorded.Diagnostics...),
-		Files:       append([]runtimecov.ProcessFile(nil), recorded.Files...),
-	}
-	for _, file := range recorded.Files {
-		if err := ctx.Err(); err != nil {
-			issues.addShared(err)
-			return accepted, issues
-		}
-		if file.RunID == "" && file.PackagePath == "" && file.ProcessID == 0 {
-			continue
-		}
-		_, knownPackage := knownPackages[file.PackagePath]
-		if file.RunID != runID || !knownPackage || file.ProcessID <= 0 {
-			issues.addShared(fmt.Errorf(
-				"process event file %q has invalid provenance run=%q package=%q process=%d",
-				filepath.Base(file.Path), file.RunID, file.PackagePath, file.ProcessID,
-			))
-		}
-	}
-	validEvaluations := make(map[cover.EvaluationIdentity]cover.DecisionEvaluation)
-	validEvaluationCandidates := make([]cover.DecisionEvaluation, 0, len(recorded.Evaluations))
-	type skipCauseKey struct {
-		Identity   cover.EvaluationIdentity
-		DecisionID cover.DecisionID
-	}
-	observedSkips := make(map[skipCauseKey]map[cover.DecisionID]struct{})
-	candidateSkips := make(map[skipCauseKey][]cover.DecisionNotEvaluatedObservation)
-	for _, evaluation := range recorded.Evaluations {
-		if err := ctx.Err(); err != nil {
-			issues.addShared(err)
-			return accepted, issues
-		}
-		metadata, exists := knownDecisions[evaluation.DecisionID]
-		if !exists {
-			issues.addAST(fmt.Errorf("event contains unknown decision ID 0x%016x", uint64(evaluation.DecisionID)))
-			continue
-		}
-		if evaluation.EvaluationID == 0 {
-			issues.addAST(fmt.Errorf("decision 0x%016x has reserved evaluation ID zero", uint64(evaluation.DecisionID)))
-			continue
-		}
-		if evaluation.ProcessID <= 0 {
-			issues.addAST(fmt.Errorf("decision 0x%016x has invalid process provenance %d", uint64(evaluation.DecisionID), evaluation.ProcessID))
-			continue
-		}
-		if evaluation.RunID != runID {
-			issues.addAST(fmt.Errorf("decision 0x%016x belongs to unexpected run %q", uint64(evaluation.DecisionID), evaluation.RunID))
-			continue
-		}
-		if evaluation.PackagePath != metadata.Package {
-			issues.addAST(fmt.Errorf(
-				"decision 0x%016x belongs to package %q, want %q",
-				uint64(evaluation.DecisionID), evaluation.PackagePath, metadata.Package,
-			))
-			continue
-		}
-		if len(evaluation.Conditions) != len(metadata.Conditions) {
-			issues.addAST(fmt.Errorf(
-				"decision 0x%016x has %d condition states, want %d",
-				uint64(evaluation.DecisionID), len(evaluation.Conditions), len(metadata.Conditions),
-			))
-			continue
-		}
-		if semanticErr := mcdc.ValidateCompletedEvaluation(metadata, evaluation); semanticErr != nil {
-			issues.addAST(fmt.Errorf(
-				"decision 0x%016x contains impossible completed evidence: %w",
-				uint64(evaluation.DecisionID), semanticErr,
-			))
-			continue
-		}
-		validEvaluationCandidates = append(validEvaluationCandidates, evaluation)
-		validEvaluations[evaluation.Identity()] = evaluation
-	}
-	for _, observation := range recorded.NotEvaluatedDecisions {
-		if err := ctx.Err(); err != nil {
-			issues.addShared(err)
-			return accepted, issues
-		}
-		target, targetExists := knownDecisions[observation.DecisionID]
-		cause, causeExists := knownDecisions[observation.CauseDecisionID]
-		identity := cover.EvaluationIdentity{
-			RunID:        observation.RunID,
-			PackagePath:  observation.PackagePath,
-			ProcessID:    observation.ProcessID,
-			EvaluationID: observation.CauseEvaluationID,
-		}
-		causeEvaluation, evidenceExists := validEvaluations[identity]
-		switch {
-		case !targetExists:
-			issues.addAST(fmt.Errorf("event contains unknown skipped decision ID 0x%016x", uint64(observation.DecisionID)))
-			continue
-		case !causeExists:
-			issues.addAST(fmt.Errorf("event contains unknown skip-cause decision ID 0x%016x", uint64(observation.CauseDecisionID)))
-			continue
-		case observation.RunID != runID || observation.PackagePath != target.Package || cause.Package != target.Package || observation.ProcessID <= 0:
-			issues.addAST(fmt.Errorf("skipped decision 0x%016x has inconsistent run or package provenance", uint64(observation.DecisionID)))
-			continue
-		case target.Kind != cover.DecisionSwitchCase || cause.Kind != cover.DecisionSwitchCase:
-			issues.addAST(fmt.Errorf("skipped decision 0x%016x is not a conditionless-switch decision", uint64(observation.DecisionID)))
-			continue
-		case !evidenceExists || causeEvaluation.DecisionID != observation.CauseDecisionID || causeEvaluation.Status != cover.EvaluationCompleted || !causeEvaluation.Result:
-			issues.addAST(fmt.Errorf("skipped decision 0x%016x has no completed true cause evaluation", uint64(observation.DecisionID)))
-			continue
-		}
-		causeOrder, causeOrdered := switchDecisions[observation.CauseDecisionID]
-		targetOrder, targetOrdered := switchDecisions[observation.DecisionID]
-		if !causeOrdered || !targetOrdered || causeOrder.groupID != targetOrder.groupID || targetOrder.position <= causeOrder.position {
-			issues.addAST(fmt.Errorf("skipped decision 0x%016x is not later in the same conditionless switch", uint64(observation.DecisionID)))
-			continue
-		}
-		key := skipCauseKey{Identity: identity, DecisionID: observation.CauseDecisionID}
-		if observedSkips[key] == nil {
-			observedSkips[key] = make(map[cover.DecisionID]struct{})
-		}
-		observedSkips[key][observation.DecisionID] = struct{}{}
-		candidateSkips[key] = append(candidateSkips[key], observation)
-	}
-	for _, evaluation := range validEvaluationCandidates {
-		if err := ctx.Err(); err != nil {
-			issues.addShared(err)
-			return accepted, issues
-		}
-		identity := evaluation.Identity()
-		order, exists := switchDecisions[evaluation.DecisionID]
-		if !exists || evaluation.Status != cover.EvaluationCompleted || !evaluation.Result || len(order.suffix) == 0 {
-			continue
-		}
-		observed := observedSkips[skipCauseKey{Identity: identity, DecisionID: evaluation.DecisionID}]
-		key := skipCauseKey{Identity: identity, DecisionID: evaluation.DecisionID}
-		if len(candidateSkips[key]) != len(observed) {
-			issues.addAST(fmt.Errorf("conditionless-switch decision 0x%016x has duplicate skipped-decision evidence", uint64(evaluation.DecisionID)))
-			continue
-		}
-		if len(observed) != len(order.suffix) {
-			issues.addAST(fmt.Errorf(
-				"conditionless-switch decision 0x%016x skipped %d decisions, want complete suffix of %d",
-				uint64(evaluation.DecisionID), len(observed), len(order.suffix),
-			))
-			continue
-		}
-		complete := true
-		for _, expected := range order.suffix {
-			if err := ctx.Err(); err != nil {
-				issues.addShared(err)
-				return accepted, issues
-			}
-			if _, found := observed[expected]; !found {
-				complete = false
-				issues.addAST(fmt.Errorf(
-					"conditionless-switch decision 0x%016x omitted skipped decision 0x%016x",
-					uint64(evaluation.DecisionID), uint64(expected),
-				))
-			}
-		}
-		if complete {
-			accepted.NotEvaluatedDecisions = append(accepted.NotEvaluatedDecisions, candidateSkips[key]...)
-		}
-	}
-	var deduplicateErr error
-	accepted.Evaluations, deduplicateErr = deduplicateAcceptedEvaluations(ctx, validEvaluationCandidates)
-	if deduplicateErr != nil {
-		issues.addAST(deduplicateErr)
-		return accepted, issues
-	}
-	verifiedClauses := make(map[cover.ClauseObservation]struct{})
-	for _, event := range recorded.ClauseEvents {
-		if err := ctx.Err(); err != nil {
-			issues.addShared(err)
-			return accepted, issues
-		}
-		observation := cover.ClauseObservation{
-			SwitchID:         event.SwitchID,
-			ClauseID:         event.ClauseID,
-			Event:            event.Event,
-			AlternativeIndex: event.AlternativeIndex,
-			AlternativeKnown: event.AlternativeKnown,
-		}
-		if event.RunID != runID || event.PackagePath == "" || event.ProcessID <= 0 {
-			issues.addClause(observation.Event, fmt.Errorf(
-				"clause event 0x%016x has invalid provenance run=%q package=%q process=%d",
-				uint64(observation.ClauseID), event.RunID, event.PackagePath, event.ProcessID,
-			))
-			continue
-		}
-		if observation.Event == cover.ClauseNoMatchSelection {
-			metadata, exists := knownNoMatches[observation.SwitchID]
-			if !exists || observation.AlternativeKnown {
-				issues.addCompiler(fmt.Errorf("event contains unknown no-match switch ID 0x%016x", uint64(observation.SwitchID)))
-				continue
-			}
-			if event.PackagePath != metadata.Package {
-				issues.addCompiler(fmt.Errorf(
-					"no-match switch 0x%016x belongs to package %q, want %q",
-					uint64(observation.SwitchID), event.PackagePath, metadata.Package,
-				))
-				continue
-			}
-			if _, duplicate := verifiedClauses[observation]; !duplicate {
-				verifiedClauses[observation] = struct{}{}
-				accepted.ClauseObservations = append(accepted.ClauseObservations, observation)
-			}
-			continue
-		}
-		metadata, exists := knownClauses[observation.ClauseID]
-		if !exists {
-			issues.addClause(observation.Event, fmt.Errorf("event contains unknown clause ID 0x%016x", uint64(observation.ClauseID)))
-			continue
-		}
-		if event.PackagePath != metadata.Package {
-			issues.addClause(observation.Event, fmt.Errorf(
-				"clause 0x%016x belongs to package %q, want %q",
-				uint64(observation.ClauseID), event.PackagePath, metadata.Package,
-			))
-			continue
-		}
-		if observation.SwitchID != 0 && observation.SwitchID != metadata.SwitchID {
-			issues.addClause(observation.Event, fmt.Errorf("clause 0x%016x has inconsistent switch ID", uint64(observation.ClauseID)))
-			continue
-		}
-		switch observation.Event {
-		case cover.ClauseBodyExecution:
-			if observation.AlternativeKnown {
-				issues.addAST(fmt.Errorf("clause 0x%016x body event carries a case alternative", uint64(observation.ClauseID)))
-				continue
-			}
-		case cover.ClauseDirectSelection:
-			if metadata.Kind != cover.ClauseExpressionSwitch && metadata.Kind != cover.ClauseTypeSwitch {
-				issues.addCompiler(fmt.Errorf("clause 0x%016x kind %q cannot carry direct-selection evidence", uint64(observation.ClauseID), metadata.Kind))
-				continue
-			}
-			if observation.SwitchID == 0 || observation.SwitchID != metadata.SwitchID {
-				issues.addCompiler(fmt.Errorf("clause 0x%016x direct selection has inconsistent switch ID", uint64(observation.ClauseID)))
-				continue
-			}
-			alternatives := len(metadata.Expressions)
-			if metadata.Kind == cover.ClauseTypeSwitch {
-				alternatives = len(metadata.Types)
-			}
-			if metadata.Role == cover.ClauseDefault {
-				if observation.AlternativeKnown {
-					issues.addCompiler(fmt.Errorf("default clause 0x%016x carries a case alternative", uint64(observation.ClauseID)))
-					continue
-				}
-			} else if !observation.AlternativeKnown || int(observation.AlternativeIndex) >= alternatives {
-				issues.addCompiler(fmt.Errorf("clause 0x%016x carries an invalid case alternative", uint64(observation.ClauseID)))
-				continue
-			}
-		default:
-			issues.addShared(fmt.Errorf("clause 0x%016x has unsupported event %q", uint64(observation.ClauseID), observation.Event))
-			continue
-		}
-		if _, duplicate := verifiedClauses[observation]; !duplicate {
-			verifiedClauses[observation] = struct{}{}
-			accepted.ClauseObservations = append(accepted.ClauseObservations, observation)
-		}
-	}
-	return accepted, issues
-}
-
-type acceptedEvaluationKey struct {
-	RunID       string
-	PackagePath string
-	DecisionID  cover.DecisionID
-	Conditions  string
-	Result      bool
-	Status      cover.EvaluationStatus
-	TestID      string
-	ProcessID   int
-}
-
-func deduplicateAcceptedEvaluations(ctx context.Context, evaluations []cover.DecisionEvaluation) ([]cover.DecisionEvaluation, error) {
-	result := make([]cover.DecisionEvaluation, 0, len(evaluations))
-	seen := make(map[acceptedEvaluationKey]struct{}, len(evaluations))
-	for _, evaluation := range evaluations {
-		if err := ctx.Err(); err != nil {
-			return result, err
-		}
-		encodedConditions := make([]byte, len(evaluation.Conditions))
-		for index, condition := range evaluation.Conditions {
-			if err := ctx.Err(); err != nil {
-				return result, err
-			}
-			encodedConditions[index] = byte(condition)
-		}
-		key := acceptedEvaluationKey{
-			RunID: evaluation.RunID, PackagePath: evaluation.PackagePath,
-			DecisionID: evaluation.DecisionID, Conditions: string(encodedConditions),
-			Result: evaluation.Result, Status: evaluation.Status,
-			TestID: evaluation.TestID, ProcessID: evaluation.ProcessID,
-		}
-		if _, duplicate := seen[key]; duplicate {
-			continue
-		}
-		seen[key] = struct{}{}
-		result = append(result, evaluation)
-	}
-	return result, nil
-}
-
-type switchDecisionOrder struct {
-	groupID  cover.ClauseGroupID
-	position int
-	suffix   []cover.DecisionID
-}
-
-func conditionlessSwitchDecisionOrder(ctx context.Context, clauses []cover.ClauseMetadata) (map[cover.DecisionID]switchDecisionOrder, error) {
-	groups := make(map[cover.ClauseGroupID][]cover.ClauseMetadata)
-	for _, clause := range clauses {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if clause.Kind == cover.ClauseConditionlessSwitch && clause.GroupID != 0 {
-			groups[clause.GroupID] = append(groups[clause.GroupID], clause)
-		}
-	}
-	result := make(map[cover.DecisionID]switchDecisionOrder)
-	for groupID, members := range groups {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		sort.Slice(members, func(i, j int) bool { return members[i].Index < members[j].Index })
-		var sequence []cover.DecisionID
-		for _, clause := range members {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			sequence = append(sequence, clause.DecisionIDs...)
-		}
-		for position, decisionID := range sequence {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			result[decisionID] = switchDecisionOrder{
-				groupID:  groupID,
-				position: position,
-				suffix:   append([]cover.DecisionID(nil), sequence[position+1:]...),
-			}
-		}
-	}
-	return result, nil
-}
-
 func formatRuntimeDiagnostic(diagnostic runtimecov.Diagnostic) string {
 	location := filepath.Base(diagnostic.File)
 	if diagnostic.Line > 0 {
@@ -1253,11 +830,11 @@ func runtimeDiagnosticsInvalidate(ctx context.Context, diagnostics []runtimecov.
 	return len(diagnostics) > 0 && (testResult == nil || testResult.Status == cover.RunPassed), nil
 }
 
-func thresholdFailures(opts options, summary report.Summary) []string {
+func thresholdFailures(opts options, summary analysis.Summary) []string {
 	checks := []struct {
 		name      string
 		threshold optionalFloat
-		metric    report.MetricSummary
+		metric    analysis.MetricSummary
 	}{
 		{"statement", opts.failUnderStatement, summary.Statement},
 		{"function", opts.failUnderFunction, summary.Function},
@@ -1287,14 +864,14 @@ func thresholdFailures(opts options, summary report.Summary) []string {
 	return failures
 }
 
-func metricPercentage(metric report.MetricSummary) float64 {
+func metricPercentage(metric analysis.MetricSummary) float64 {
 	if metric.Percentage == nil {
 		return 0
 	}
 	return *metric.Percentage
 }
 
-func belowThreshold(metric report.MetricSummary, threshold float64) bool {
+func belowThreshold(metric analysis.MetricSummary, threshold float64) bool {
 	if metric.Total == 0 {
 		return true
 	}
@@ -1304,7 +881,7 @@ func belowThreshold(metric report.MetricSummary, threshold float64) bool {
 	return float64(metric.Covered)*100 < threshold*float64(metric.Total)
 }
 
-func writeReport(opts options, built report.Report, workingDir string, stdout io.Writer) error {
+func writeReport(opts options, built analysis.Result, workingDir string, stdout io.Writer, sources ...[]analysis.SourceFileInput) error {
 	if opts.format == "html" {
 		outputDir := opts.output
 		if !filepath.IsAbs(outputDir) {
@@ -1323,7 +900,11 @@ func writeReport(opts options, built report.Report, workingDir string, stdout io
 			_ = file.Close()
 			_ = os.Remove(tempPath)
 		}
-		if err := report.WriteHTMLReport(file, built); err != nil {
+		var originals []analysis.SourceFileInput
+		if len(sources) > 0 {
+			originals = sources[0]
+		}
+		if err := report.WriteHTMLWithSources(file, built, originals); err != nil {
 			cleanup()
 			return err
 		}

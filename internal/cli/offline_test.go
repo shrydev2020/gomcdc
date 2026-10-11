@@ -10,7 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/shrydev2020/gomcdc/v2/internal/report"
+	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
+	"github.com/shrydev2020/gomcdc/v2/internal/measurement"
 	"github.com/shrydev2020/gomcdc/v2/internal/resultfile"
 )
 
@@ -58,6 +59,12 @@ func TestFalseA(t *testing.T) { mark(t);Choose(false,false);t.Error("expected fa
 			t.Fatalf("%s exit %d want %d: %s", test, code, want, stderr.String())
 		}
 	}
+	for _, test := range []string{"TestTrue", "TestFalseB", "TestFalseA"} {
+		saved := readSaved(t, filepath.Join(outputs, test+".json"))
+		if err := measurement.Write(t.Context(), filepath.Join(outputs, test+".measurement.json"), saved.Measurement); err != nil {
+			t.Fatal(err)
+		}
+	}
 	baseline := readSaved(t, filepath.Join(outputs, "Test.json"))
 	if err := os.RemoveAll(root); err != nil {
 		t.Fatal(err)
@@ -70,7 +77,7 @@ func TestFalseA(t *testing.T) { mark(t);Choose(false,false);t.Error("expected fa
 			t.Fatalf("%v exit=%d: %s", args, code, stderr.String())
 		}
 	}
-	run("merge", "--output=limited.json", "--mcdc-masking-max-solver-bytes=1", "TestTrue.json", "TestFalseA.json", "TestFalseB.json")
+	run("analyze", "--output=limited.json", "--mcdc-masking-max-solver-bytes=1", "TestTrue.measurement.json", "TestFalseA.measurement.json", "TestFalseB.measurement.json")
 	limited := readSaved(t, filepath.Join(outputs, "limited.json"))
 	if limited.Report.Summary.MCDCMasking.AnalysisIncomplete == 0 {
 		t.Fatal("small solver budget did not preserve incomplete analysis")
@@ -83,11 +90,20 @@ func TestFalseA(t *testing.T) { mark(t);Choose(false,false);t.Error("expected fa
 	if complete.Report.Summary.MCDCMasking.Covered != 2 || complete.Report.Summary.MCDCMasking.AnalysisIncomplete != 0 {
 		t.Fatalf("cross-run witnesses missing: %+v", complete.Report.Summary.MCDCMasking)
 	}
-	if len(complete.Inputs) != 3 || complete.Report.MeasurementMode != report.MeasurementMerged || complete.Report.Run.Results.Test != report.ResultFailed || complete.Report.Run.Results.Strict != report.ResultNotRequested || complete.Report.Run.Results.Threshold != report.ResultNotRequested {
+	if len(complete.Measurement.Runs) != 3 || complete.Report.MeasurementMode != analysis.MeasurementMerged || complete.Report.Run.Results.Test != analysis.ResultFailed || complete.Report.Run.Results.Strict != analysis.ResultNotRequested || complete.Report.Run.Results.Threshold != analysis.ResultNotRequested {
 		t.Fatalf("wrong provenance/outcomes: %+v", complete.Report.Run)
 	}
 	for _, origin := range complete.Report.ContributingRuns {
-		if origin.Run.Results.Threshold != report.ResultFailed {
+		found := false
+		for _, diagnostic := range origin.Errors {
+			if diagnostic.Code == "coverage-threshold-failed" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatal("original threshold diagnostic lost")
+		}
+		if origin.Run.Results.Threshold != analysis.ResultFailed {
 			t.Fatal("original threshold failure lost")
 		}
 	}
@@ -99,8 +115,11 @@ func TestFalseA(t *testing.T) { mark(t);Choose(false,false);t.Error("expected fa
 			t.Fatal("MC/DC witness does not join independent runs")
 		}
 	}
-	run("merge", "--output=nested.json", "complete.json", "TestTrue.json", "TestFalseB.json")
-	run("merge", "--output=reversed.json", "TestFalseB.json", "TestFalseA.json", "TestTrue.json")
+	if err := measurement.Write(t.Context(), filepath.Join(outputs, "combined.measurement.json"), complete.Measurement); err != nil {
+		t.Fatal(err)
+	}
+	run("analyze", "--output=nested.json", "combined.measurement.json", "TestTrue.measurement.json", "TestFalseB.measurement.json")
+	run("analyze", "--output=reversed.json", "TestFalseB.measurement.json", "TestFalseA.measurement.json", "TestTrue.measurement.json")
 	want, _ := resultfile.Encode(complete)
 	for _, name := range []string{"nested.json", "reversed.json"} {
 		got, err := os.ReadFile(filepath.Join(outputs, name))
@@ -116,12 +135,13 @@ func TestFalseA(t *testing.T) { mark(t);Choose(false,false);t.Error("expected fa
 	}
 	// Mismatch must leave the destination intact.
 	incompatible := readSaved(t, filepath.Join(outputs, "TestTrue.json"))
-	incompatible.Settings.GOFLAGS = "-race"
-	if err := resultfile.Write(filepath.Join(outputs, "incompatible.json"), incompatible); err != nil {
+	incompatible.Measurement.Plan.Settings.GOFLAGS = "-race"
+	incompatible.Measurement.Runs[0].Settings.GOFLAGS = "-race"
+	if err := measurement.Write(t.Context(), filepath.Join(outputs, "incompatible.json"), incompatible.Measurement); err != nil {
 		t.Fatal(err)
 	}
 	var stderr bytes.Buffer
-	if code := runAt(t.Context(), outputs, []string{"merge", "--output=complete.json", "TestFalseA.json", "incompatible.json"}, io.Discard, &stderr); code != ExitMeasurementFailed || !strings.Contains(stderr.String(), "incompatible") {
+	if code := runAt(t.Context(), outputs, []string{"merge", "--output=complete.json", "TestFalseA.measurement.json", "incompatible.json"}, io.Discard, &stderr); code != ExitMeasurementFailed || !strings.Contains(stderr.String(), "incompatible") {
 		t.Fatalf("mismatch accepted: %d %s", code, stderr.String())
 	}
 	after, _ := os.ReadFile(filepath.Join(outputs, "complete.json"))
@@ -132,7 +152,7 @@ func TestFalseA(t *testing.T) { mark(t);Choose(false,false);t.Error("expected fa
 
 func TestOfflineAnalysisUsageAndCancellation(t *testing.T) {
 	for _, args := range [][]string{
-		{"merge"}, {"merge", "--output=x", "one"}, {"reanalyze", "--output=x", "one", "two"},
+		{"merge"}, {"reanalyze", "--output=x", "one", "two"},
 		{"merge", "--output=-", "one", "two"}, {"reanalyze", "--output=x", "--mcdc-masking-max-search-states=0", "one"},
 		{"reanalyze", "--output=one", "one"},
 	} {

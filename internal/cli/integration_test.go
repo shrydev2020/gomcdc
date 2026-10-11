@@ -18,10 +18,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
 	"github.com/shrydev2020/gomcdc/v2/internal/backend"
 	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
+	"github.com/shrydev2020/gomcdc/v2/internal/evidence"
 	"github.com/shrydev2020/gomcdc/v2/internal/gotest"
-	"github.com/shrydev2020/gomcdc/v2/internal/report"
 	"github.com/shrydev2020/gomcdc/v2/internal/runtimecov"
 )
 
@@ -33,14 +34,12 @@ func TestCancellationBoundariesStopHelperWork(t *testing.T) {
 	if _, err := goFilesInDirectory(ctx, t.TempDir()); !errors.Is(err, context.Canceled) {
 		t.Fatalf("goFilesInDirectory error = %v, want context.Canceled", err)
 	}
-	if _, err := acceptRuntimeEvidence(ctx, nil, nil, runtimecov.RecordedEvidence{}, "run", nil); !errors.Is(err, context.Canceled) {
-		t.Fatalf("acceptRuntimeEvidence error = %v, want context.Canceled", err)
+	if _, err := evidence.AcceptRuntime(ctx, nil, nil, runtimecov.RecordedEvidence{}, "run", nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("evidence.AcceptRuntime error = %v, want context.Canceled", err)
 	}
-	if _, err := conditionlessSwitchDecisionOrder(ctx, []cover.ClauseMetadata{{GroupID: 1}}); !errors.Is(err, context.Canceled) {
-		t.Fatalf("conditionlessSwitchDecisionOrder error = %v, want context.Canceled", err)
-	}
-	if _, err := deduplicateAcceptedEvaluations(ctx, []cover.DecisionEvaluation{{}}); !errors.Is(err, context.Canceled) {
-		t.Fatalf("deduplicateAcceptedEvaluations error = %v, want context.Canceled", err)
+
+	if _, err := evidence.DeduplicateEvaluations(ctx, []cover.DecisionEvaluation{{}}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("evidence.DeduplicateEvaluations error = %v, want context.Canceled", err)
 	}
 	if _, err := runtimeDiagnosticsInvalidate(ctx, []runtimecov.Diagnostic{{Severity: runtimecov.DiagnosticRecoverable}}, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("runtimeDiagnosticsInvalidate error = %v, want context.Canceled", err)
@@ -107,7 +106,7 @@ func TestSingleModuleGoWorkSettingsApplyToAnalysisAndTest(t *testing.T) {
 			if code != ExitSuccess {
 				t.Fatalf("single-module go.work exit=%d\nstderr:\n%s", code, stderr)
 			}
-			if built.Module != "example.test/workmodule" || built.Run.Results.Test != report.ResultPassed || built.Run.Results.Measurement != report.ResultPassed {
+			if built.Module != "example.test/workmodule" || built.Run.Results.Test != analysis.ResultPassed || built.Run.Results.Measurement != analysis.ResultPassed {
 				t.Fatalf("single-module go.work report = module %q run %#v", built.Module, built.Run)
 			}
 		})
@@ -159,7 +158,7 @@ func TestAlternateModFileModModeResolvesOnlyInsideRequestWorkspace(t *testing.T)
 	if code != ExitSuccess {
 		t.Fatalf("alternate modfile -mod=mod exit=%d\nstderr:\n%s", code, stderr)
 	}
-	if built.Run.Results.Test != report.ResultPassed || built.Run.Results.Measurement != report.ResultPassed {
+	if built.Run.Results.Test != analysis.ResultPassed || built.Run.Results.Measurement != analysis.ResultPassed {
 		t.Fatalf("alternate modfile -mod=mod run = %#v", built.Run)
 	}
 	requestWorkspace := keptWorkspacePath(t, stderr, "standard-cover")
@@ -216,7 +215,7 @@ func TestAlternateModFileAppliesSameSnapshotToAnalysisAndTest(t *testing.T) {
 			if code != ExitSuccess {
 				t.Fatalf("alternate modfile exit=%d\nstderr:\n%s", code, stderr)
 			}
-			if built.Module != "example.test/modfile" || built.Run.Results.Test != report.ResultPassed || built.Run.Results.Measurement != report.ResultPassed {
+			if built.Module != "example.test/modfile" || built.Run.Results.Test != analysis.ResultPassed || built.Run.Results.Measurement != analysis.ResultPassed {
 				t.Fatalf("alternate modfile report = module %q run %#v", built.Module, built.Run)
 			}
 		})
@@ -252,14 +251,14 @@ func TestValue(t *testing.T) {
 	if err := os.Chmod(workParent, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	var built report.Report
+	var built analysis.Result
 	if err := json.Unmarshal(stdout.Bytes(), &built); err != nil {
 		t.Fatalf("decode cleanup-failure report (exit %d): %v\nstdout:\n%s\nstderr:\n%s", code, err, stdout.String(), stderr.String())
 	}
 	if code != ExitMeasurementFailed {
 		t.Fatalf("cleanup failure exit=%d, want %d\nstderr:\n%s", code, ExitMeasurementFailed, stderr.String())
 	}
-	if built.Run.Results.Test != report.ResultPassed || built.Run.Results.Measurement != report.ResultFailed || built.Run.Complete {
+	if built.Run.Results.Test != analysis.ResultPassed || built.Run.Results.Measurement != analysis.ResultFailed || built.Run.Complete {
 		t.Fatalf("cleanup failure run = %#v", built.Run)
 	}
 	found := false
@@ -312,37 +311,33 @@ func TestIntegratedFixtureReportsAllMetricsAcrossPackages(t *testing.T) {
 	if code != ExitSuccess {
 		t.Fatalf("all-metric exit = %d\nstderr:\n%s", code, allStderr)
 	}
-	if all.SchemaVersion != report.SchemaVersion || all.ToolVersion == "" || all.Module != "example.test/gomcdc-fixture" {
+	if all.SchemaVersion != analysis.SchemaVersion || all.ToolVersion == "" || all.Module != "example.test/gomcdc-fixture" {
 		t.Fatalf("report identity = schema %q tool %q module %q", all.SchemaVersion, all.ToolVersion, all.Module)
 	}
 	if all.Run.Status != cover.RunPassed || !all.Run.Complete {
 		t.Fatalf("run = %#v", all.Run)
 	}
-	if all.Run.Results != (report.RunResults{
-		Test: report.ResultPassed, Measurement: report.ResultPassed, Integrity: report.ResultPassed,
-		Strict: report.ResultNotRequested, Threshold: report.ResultNotRequested,
+	if all.Run.Results != (analysis.RunResults{
+		Test: analysis.ResultPassed, Measurement: analysis.ResultPassed, Integrity: analysis.ResultPassed,
+		Strict: analysis.ResultNotRequested, Threshold: analysis.ResultNotRequested,
 	}) {
 		t.Fatalf("independent run results = %#v", all.Run.Results)
 	}
 	if len(all.Errors) != 0 {
 		t.Fatalf("successful report errors = %#v", all.Errors)
 	}
-	if all.MeasurementMode != report.MeasurementSingleRun || len(all.Measurements) != 1 || all.Measurements[0].Name != "combined" {
+	if all.MeasurementMode != analysis.MeasurementSingleRun || len(all.Measurements) != 1 || all.Measurements[0].Name != "combined" {
 		t.Fatalf("single measurement provenance = mode %q runs %#v", all.MeasurementMode, all.Measurements)
 	}
 	if len(all.ProducerOutcomes) != 3 {
 		t.Fatalf("producer outcomes = %#v, want three combined producers", all.ProducerOutcomes)
 	}
-	for _, producer := range []report.ProducerName{
-		report.ProducerGoCover,
-		report.ProducerASTRuntime,
-		report.ProducerCompilerSelection,
-	} {
+	for _, producer := range []analysis.ProducerName{analysis.ProducerGoCover, analysis.ProducerASTRuntime, analysis.ProducerCompilerSelection} {
 		outcome := findProducerOutcome(t, all, producer)
-		if outcome.Integrity != report.ProducerIntegrityValid ||
-			outcome.Completeness != report.ProducerCompletenessComplete ||
-			outcome.Mapping != report.ProducerMappingComplete ||
-			outcome.Usability != report.ProducerUsabilityAccepted {
+		if outcome.Integrity != analysis.ProducerIntegrityValid ||
+			outcome.Completeness != analysis.ProducerCompletenessComplete ||
+			outcome.Mapping != analysis.ProducerMappingComplete ||
+			outcome.Usability != analysis.ProducerUsabilityAccepted {
 			t.Fatalf("complete producer %q outcome = %#v", producer, outcome)
 		}
 	}
@@ -508,9 +503,9 @@ func TestThresholdFailureHasDistinctExitCode(t *testing.T) {
 	if len(built.Errors) != 1 || built.Errors[0].Phase != "threshold" || built.Errors[0].Code != "coverage-threshold-failed" {
 		t.Fatalf("threshold report errors = %#v", built.Errors)
 	}
-	if built.Run.Results.Test != report.ResultPassed || built.Run.Results.Measurement != report.ResultPassed ||
-		built.Run.Results.Integrity != report.ResultPassed || built.Run.Results.Strict != report.ResultPassed ||
-		built.Run.Results.Threshold != report.ResultFailed {
+	if built.Run.Results.Test != analysis.ResultPassed || built.Run.Results.Measurement != analysis.ResultPassed ||
+		built.Run.Results.Integrity != analysis.ResultPassed || built.Run.Results.Strict != analysis.ResultPassed ||
+		built.Run.Results.Threshold != analysis.ResultFailed {
 		t.Fatalf("threshold result axes = %#v", built.Run.Results)
 	}
 }
@@ -538,7 +533,7 @@ func TestCompilerAwareMeasurementSupportsWorkDirWithSpaces(t *testing.T) {
 	}
 }
 
-func hasTestSourceDecision(built report.Report) bool {
+func hasTestSourceDecision(built analysis.Result) bool {
 	for _, packageReport := range built.Packages {
 		for _, file := range packageReport.Files {
 			if strings.HasSuffix(file.Path, "_test.go") {
@@ -566,16 +561,12 @@ func TestBuildFailureStillProducesPartialMultiPackageReport(t *testing.T) {
 	if built.Run.Status != cover.RunFailed || built.Run.FailureKind != cover.RunFailureBuild || built.Run.Complete {
 		t.Fatalf("partial run = %#v", built.Run)
 	}
-	for _, producer := range []report.ProducerName{
-		report.ProducerGoCover,
-		report.ProducerASTRuntime,
-		report.ProducerCompilerSelection,
-	} {
+	for _, producer := range []analysis.ProducerName{analysis.ProducerGoCover, analysis.ProducerASTRuntime, analysis.ProducerCompilerSelection} {
 		outcome := findProducerOutcome(t, built, producer)
-		if outcome.Integrity != report.ProducerIntegrityValid ||
-			outcome.Completeness != report.ProducerCompletenessPartial ||
-			outcome.Mapping != report.ProducerMappingComplete ||
-			outcome.Usability != report.ProducerUsabilityAcceptedPartial {
+		if outcome.Integrity != analysis.ProducerIntegrityValid ||
+			outcome.Completeness != analysis.ProducerCompletenessPartial ||
+			outcome.Mapping != analysis.ProducerMappingComplete ||
+			outcome.Usability != analysis.ProducerUsabilityAcceptedPartial {
 			t.Fatalf("partial producer %q outcome = %#v", producer, outcome)
 		}
 	}
@@ -586,9 +577,9 @@ func TestBuildFailureStillProducesPartialMultiPackageReport(t *testing.T) {
 	if !hasAnalysisError {
 		t.Fatalf("partial report omitted its analysis error: %#v", built.Errors)
 	}
-	if built.Run.Results != (report.RunResults{
-		Test: report.ResultFailed, Measurement: report.ResultFailed, Integrity: report.ResultPassed,
-		Strict: report.ResultFailed, Threshold: report.ResultFailed,
+	if built.Run.Results != (analysis.RunResults{
+		Test: analysis.ResultFailed, Measurement: analysis.ResultFailed, Integrity: analysis.ResultPassed,
+		Strict: analysis.ResultFailed, Threshold: analysis.ResultFailed,
 	}) {
 		t.Fatalf("combined measurement/strict/threshold results = %#v", built.Run.Results)
 	}
@@ -626,14 +617,14 @@ func TestFailedAndInterruptedRunsRetainEvidenceAndIndependentResults(t *testing.
 		if code != ExitTestsFailed {
 			t.Fatalf("exit=%d, want %d\nstderr:\n%s", code, ExitTestsFailed, stderr)
 		}
-		wantResults := report.RunResults{
-			Test: report.ResultFailed, Measurement: report.ResultPassed, Integrity: report.ResultPassed,
-			Strict: report.ResultPassed, Threshold: report.ResultFailed,
+		wantResults := analysis.RunResults{
+			Test: analysis.ResultFailed, Measurement: analysis.ResultPassed, Integrity: analysis.ResultPassed,
+			Strict: analysis.ResultPassed, Threshold: analysis.ResultFailed,
 		}
 		if built.Run.Status != cover.RunFailed || built.Run.FailureKind != cover.RunFailureTest || built.Run.Complete || built.Run.Results != wantResults {
 			t.Fatalf("failed run = %#v", built.Run)
 		}
-		assertCombinedFailureEvidence(t, built, report.ProducerIntegrityValid, report.ProducerUsabilityAcceptedPartial, true)
+		assertCombinedFailureEvidence(t, built, analysis.ProducerIntegrityValid, analysis.ProducerUsabilityAcceptedPartial, true)
 		assertPartialDecisionEvidence(t, built)
 		for _, code := range []string{"go-test-test", "coverage-threshold-failed"} {
 			if !hasReportErrorCode(built, code) {
@@ -648,10 +639,10 @@ func TestFailedAndInterruptedRunsRetainEvidenceAndIndependentResults(t *testing.
 		if code != ExitTestsFailed {
 			t.Fatalf("exit=%d, want %d\nstderr:\n%s", code, ExitTestsFailed, stderr)
 		}
-		if built.Run.Results.Test != report.ResultFailed || built.Run.Results.Integrity != report.ResultPassed {
+		if built.Run.Results.Test != analysis.ResultFailed || built.Run.Results.Integrity != analysis.ResultPassed {
 			t.Fatalf("truncated-tail results = %#v", built.Run.Results)
 		}
-		assertCombinedFailureEvidence(t, built, report.ProducerIntegrityValidPrefix, report.ProducerUsabilityAcceptedPartial, true)
+		assertCombinedFailureEvidence(t, built, analysis.ProducerIntegrityValidPrefix, analysis.ProducerUsabilityAcceptedPartial, true)
 		assertPartialDecisionEvidence(t, built)
 		if !hasReportErrorCode(built, "runtime-recoverable-interruption") {
 			t.Fatalf("recoverable diagnostic is missing: %#v", built.Errors)
@@ -667,14 +658,14 @@ func TestFailedAndInterruptedRunsRetainEvidenceAndIndependentResults(t *testing.
 		if code != ExitMeasurementFailed {
 			t.Fatalf("exit=%d, want %d\nstderr:\n%s", code, ExitMeasurementFailed, stderr)
 		}
-		wantResults := report.RunResults{
-			Test: report.ResultFailed, Measurement: report.ResultPassed, Integrity: report.ResultFailed,
-			Strict: report.ResultNotRequested, Threshold: report.ResultFailed,
+		wantResults := analysis.RunResults{
+			Test: analysis.ResultFailed, Measurement: analysis.ResultPassed, Integrity: analysis.ResultFailed,
+			Strict: analysis.ResultNotRequested, Threshold: analysis.ResultFailed,
 		}
 		if built.Run.Results != wantResults {
 			t.Fatalf("integrity-failure results = %#v", built.Run.Results)
 		}
-		assertCombinedFailureEvidence(t, built, report.ProducerIntegrityInvalid, report.ProducerUsabilityRejected, true)
+		assertCombinedFailureEvidence(t, built, analysis.ProducerIntegrityInvalid, analysis.ProducerUsabilityRejected, true)
 		if built.Summary.Decision.Covered != 0 || built.Summary.Decision.Total != 0 || built.Summary.Decision.Unknown != 2 {
 			t.Fatalf("corrupt evidence was reported as coverage: %#v", built.Summary.Decision)
 		}
@@ -695,14 +686,14 @@ func TestFailedAndInterruptedRunsRetainEvidenceAndIndependentResults(t *testing.
 		if code != ExitTestsFailed {
 			t.Fatalf("exit=%d, want %d\nstderr:\n%s", code, ExitTestsFailed, stderr)
 		}
-		wantResults := report.RunResults{
-			Test: report.ResultTimeout, Measurement: report.ResultPassed, Integrity: report.ResultPassed,
-			Strict: report.ResultPassed, Threshold: report.ResultFailed,
+		wantResults := analysis.RunResults{
+			Test: analysis.ResultTimeout, Measurement: analysis.ResultPassed, Integrity: analysis.ResultPassed,
+			Strict: analysis.ResultPassed, Threshold: analysis.ResultFailed,
 		}
 		if built.Run.Status != cover.RunTimeout || built.Run.FailureKind != cover.RunFailureTimeout || built.Run.Results != wantResults {
 			t.Fatalf("timeout run = %#v", built.Run)
 		}
-		assertCombinedFailureEvidence(t, built, report.ProducerIntegrityValid, report.ProducerUsabilityAcceptedPartial, true)
+		assertCombinedFailureEvidence(t, built, analysis.ProducerIntegrityValid, analysis.ProducerUsabilityAcceptedPartial, true)
 		assertPartialDecisionEvidence(t, built)
 		if !hasReportErrorCode(built, "go-test-timeout") {
 			t.Fatalf("timeout error is missing: %#v", built.Errors)
@@ -718,7 +709,7 @@ func TestFailedAndInterruptedRunsRetainEvidenceAndIndependentResults(t *testing.
 		if built.Run.Status != cover.RunFailed || built.Run.FailureKind != cover.RunFailureTest || built.Run.Complete {
 			t.Fatalf("panic run = %#v", built.Run)
 		}
-		assertCombinedFailureEvidence(t, built, report.ProducerIntegrityValid, report.ProducerUsabilityAcceptedPartial, false)
+		assertCombinedFailureEvidence(t, built, analysis.ProducerIntegrityValid, analysis.ProducerUsabilityAcceptedPartial, false)
 		assertPartialDecisionEvidence(t, built)
 	})
 
@@ -750,7 +741,7 @@ func TestFailedAndInterruptedRunsRetainEvidenceAndIndependentResults(t *testing.
 			"test", "--timeout=2m", "--coverage=statement,decision", "--format=json", "./unstable",
 		}, &stdout, &stderr)
 		<-canceled
-		var built report.Report
+		var built analysis.Result
 		if err := json.Unmarshal(stdout.Bytes(), &built); err != nil {
 			t.Fatalf("decode interrupted report (exit %d): %v\nstdout:\n%s\nstderr:\n%s", code, err, stdout.String(), stderr.String())
 		}
@@ -760,11 +751,11 @@ func TestFailedAndInterruptedRunsRetainEvidenceAndIndependentResults(t *testing.
 		if built.Run.Status != cover.RunFailed || built.Run.FailureKind != cover.RunFailureInterrupted || built.Run.Complete {
 			t.Fatalf("interrupted run = %#v", built.Run)
 		}
-		if built.MeasurementMode != report.MeasurementSingleRun || len(built.Measurements) != 1 || built.Measurements[0].Name != "combined" {
+		if built.MeasurementMode != analysis.MeasurementSingleRun || len(built.Measurements) != 1 || built.Measurements[0].Name != "combined" {
 			t.Fatalf("interrupted measurement provenance = %#v", built.Measurements)
 		}
-		astOutcome := findProducerOutcome(t, built, report.ProducerASTRuntime)
-		if astOutcome.Mapping != report.ProducerMappingComplete || astOutcome.Usability != report.ProducerUsabilityAcceptedPartial {
+		astOutcome := findProducerOutcome(t, built, analysis.ProducerASTRuntime)
+		if astOutcome.Mapping != analysis.ProducerMappingComplete || astOutcome.Usability != analysis.ProducerUsabilityAcceptedPartial {
 			t.Fatalf("interrupted AST outcome = %#v", astOutcome)
 		}
 		assertPartialDecisionEvidence(t, built)
@@ -773,27 +764,27 @@ func TestFailedAndInterruptedRunsRetainEvidenceAndIndependentResults(t *testing.
 
 func assertCombinedFailureEvidence(
 	t *testing.T,
-	built report.Report,
-	astIntegrity report.ProducerIntegrity,
-	astUsability report.ProducerUsability,
+	built analysis.Result,
+	astIntegrity analysis.ProducerIntegrity,
+	astUsability analysis.ProducerUsability,
 	wantC0Evidence bool,
 ) {
 	t.Helper()
-	if built.MeasurementMode != report.MeasurementSingleRun || len(built.Measurements) != 1 || built.Measurements[0].Name != "combined" {
+	if built.MeasurementMode != analysis.MeasurementSingleRun || len(built.Measurements) != 1 || built.Measurements[0].Name != "combined" {
 		t.Fatalf("combined measurement provenance = mode %q runs %#v", built.MeasurementMode, built.Measurements)
 	}
-	goCover := findProducerOutcome(t, built, report.ProducerGoCover)
-	if goCover != (report.ProducerOutcome{
-		Producer: report.ProducerGoCover, Integrity: report.ProducerIntegrityValid,
-		Completeness: report.ProducerCompletenessPartial, Mapping: report.ProducerMappingComplete,
-		Usability: report.ProducerUsabilityAcceptedPartial,
+	goCover := findProducerOutcome(t, built, analysis.ProducerGoCover)
+	if goCover != (analysis.ProducerOutcome{
+		Producer: analysis.ProducerGoCover, Integrity: analysis.ProducerIntegrityValid,
+		Completeness: analysis.ProducerCompletenessPartial, Mapping: analysis.ProducerMappingComplete,
+		Usability: analysis.ProducerUsabilityAcceptedPartial,
 	}) {
 		t.Fatalf("partial Go cover outcome = %#v", goCover)
 	}
-	ast := findProducerOutcome(t, built, report.ProducerASTRuntime)
-	if ast != (report.ProducerOutcome{
-		Producer: report.ProducerASTRuntime, Integrity: astIntegrity,
-		Completeness: report.ProducerCompletenessPartial, Mapping: report.ProducerMappingComplete,
+	ast := findProducerOutcome(t, built, analysis.ProducerASTRuntime)
+	if ast != (analysis.ProducerOutcome{
+		Producer: analysis.ProducerASTRuntime, Integrity: astIntegrity,
+		Completeness: analysis.ProducerCompletenessPartial, Mapping: analysis.ProducerMappingComplete,
 		Usability: astUsability,
 	}) {
 		t.Fatalf("partial AST outcome = %#v", ast)
@@ -807,14 +798,14 @@ func assertCombinedFailureEvidence(
 	}
 }
 
-func assertPartialDecisionEvidence(t *testing.T, built report.Report) {
+func assertPartialDecisionEvidence(t *testing.T, built analysis.Result) {
 	t.Helper()
 	if built.Summary.Decision.Covered != 1 || built.Summary.Decision.Total != 2 || built.Summary.Decision.Unknown != 0 {
 		t.Fatalf("partial decision evidence = %#v", built.Summary.Decision)
 	}
 }
 
-func hasReportErrorCode(built report.Report, code string) bool {
+func hasReportErrorCode(built analysis.Result, code string) bool {
 	for _, item := range built.Errors {
 		if item.Code == code {
 			return true
@@ -838,7 +829,7 @@ func TestEvidenceVerificationDropsImpossibleCompletedEvidence(t *testing.T) {
 		Conditions: []cover.ConditionState{cover.ConditionFalse, cover.ConditionTrue},
 		Result:     false, Status: cover.EvaluationCompleted,
 	}}}
-	validated, err := acceptRuntimeEvidence(t.Context(), []cover.DecisionMetadata{decision}, nil, recorded, "run", nil)
+	validated, err := evidence.AcceptRuntime(t.Context(), []cover.DecisionMetadata{decision}, nil, recorded, "run", nil)
 	if err == nil || len(validated.Evaluations) != 0 {
 		t.Fatalf("validated=%#v err=%v; impossible vector became coverage evidence", validated, err)
 	}
@@ -866,7 +857,7 @@ func TestEvidenceVerificationKeepsConditionlessSwitchNotEvaluatedEvidence(t *tes
 		{ID: 10, Package: "example.test/p", GroupID: 100, Kind: cover.ClauseConditionlessSwitch, Role: cover.ClauseCase, Index: 0, DecisionIDs: []cover.DecisionID{1}},
 		{ID: 11, Package: "example.test/p", GroupID: 100, Kind: cover.ClauseConditionlessSwitch, Role: cover.ClauseCase, Index: 1, DecisionIDs: []cover.DecisionID{2}},
 	}
-	validated, err := acceptRuntimeEvidence(t.Context(),
+	validated, err := evidence.AcceptRuntime(t.Context(),
 		[]cover.DecisionMetadata{first, second},
 		clauses,
 		runtimecov.RecordedEvidence{Evaluations: []cover.DecisionEvaluation{evaluation}, NotEvaluatedDecisions: []cover.DecisionNotEvaluatedObservation{observation}},
@@ -876,7 +867,7 @@ func TestEvidenceVerificationKeepsConditionlessSwitchNotEvaluatedEvidence(t *tes
 	if err != nil || len(validated.NotEvaluatedDecisions) != 1 {
 		t.Fatalf("validated=%#v err=%v", validated, err)
 	}
-	withoutSuffix, err := acceptRuntimeEvidence(t.Context(),
+	withoutSuffix, err := evidence.AcceptRuntime(t.Context(),
 		[]cover.DecisionMetadata{first, second},
 		clauses,
 		runtimecov.RecordedEvidence{Evaluations: []cover.DecisionEvaluation{evaluation}},
@@ -921,7 +912,7 @@ func TestEvidenceVerificationRejectsInvalidEvaluationIdentityAndShape(t *testing
 			if test.mutate != nil {
 				test.mutate(&evaluation)
 			}
-			validated, err := acceptRuntimeEvidence(t.Context(),
+			validated, err := evidence.AcceptRuntime(t.Context(),
 				[]cover.DecisionMetadata{metadata}, nil,
 				runtimecov.RecordedEvidence{Evaluations: []cover.DecisionEvaluation{evaluation}}, "run", nil,
 			)
@@ -957,7 +948,7 @@ func TestEvaluationEvidenceIsVerifiedBeforeSemanticDeduplication(t *testing.T) {
 	validDuplicate.ProcessID = 10
 	validDuplicate.TestID = "TestNamed"
 
-	accepted, err := acceptRuntimeEvidence(t.Context(),
+	accepted, err := evidence.AcceptRuntime(t.Context(),
 		[]cover.DecisionMetadata{metadata}, nil,
 		runtimecov.RecordedEvidence{Evaluations: []cover.DecisionEvaluation{valid, invalidDuplicate, validDuplicate}},
 		"run", nil,
@@ -1037,7 +1028,7 @@ func TestEvidenceVerificationRejectsInvalidConditionlessSwitchSkipEvidence(t *te
 			if test.mutate != nil {
 				test.mutate(decisions, clauses, &collection)
 			}
-			validated, err := acceptRuntimeEvidence(t.Context(), decisions, clauses, collection, "run", nil)
+			validated, err := evidence.AcceptRuntime(t.Context(), decisions, clauses, collection, "run", nil)
 			if test.wantErr == "" {
 				if err != nil || len(validated.NotEvaluatedDecisions) != 2 {
 					t.Fatalf("valid skip suffix rejected: validated=%#v err=%v", validated, err)
@@ -1079,7 +1070,7 @@ func TestEvidenceVerificationRejectsInvalidClauseEvidence(t *testing.T) {
 		{name: "unsupported event", observation: cover.ClauseObservation{ClauseID: 10, Event: cover.ClauseEventKind("invented")}, wantErr: "unsupported event"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			validated, err := acceptRuntimeEvidence(t.Context(),
+			validated, err := evidence.AcceptRuntime(t.Context(),
 				nil, clauses, runtimecov.RecordedEvidence{ClauseEvents: []runtimecov.RecordedClauseEvent{recordedClauseEvent(test.observation)}}, "run", noMatches,
 			)
 			if test.wantErr == "" {
@@ -1131,7 +1122,7 @@ func TestClauseEvidenceRequiresValidProvenanceBeforeDeduplication(t *testing.T) 
 		t.Run(test.name, func(t *testing.T) {
 			event := valid
 			test.mutate(&event)
-			accepted, err := acceptRuntimeEvidence(t.Context(), nil, metadata, runtimecov.RecordedEvidence{ClauseEvents: []runtimecov.RecordedClauseEvent{event}}, "run", nil)
+			accepted, err := evidence.AcceptRuntime(t.Context(), nil, metadata, runtimecov.RecordedEvidence{ClauseEvents: []runtimecov.RecordedClauseEvent{event}}, "run", nil)
 			if err == nil || !strings.Contains(err.Error(), test.wantErr) || len(accepted.ClauseObservations) != 0 {
 				t.Fatalf("accepted=%#v err=%v, want rejection containing %q", accepted, err, test.wantErr)
 			}
@@ -1140,7 +1131,7 @@ func TestClauseEvidenceRequiresValidProvenanceBeforeDeduplication(t *testing.T) 
 
 	secondProcess := valid
 	secondProcess.ProcessID++
-	accepted, err := acceptRuntimeEvidence(t.Context(), nil, metadata, runtimecov.RecordedEvidence{ClauseEvents: []runtimecov.RecordedClauseEvent{valid, secondProcess}}, "run", nil)
+	accepted, err := evidence.AcceptRuntime(t.Context(), nil, metadata, runtimecov.RecordedEvidence{ClauseEvents: []runtimecov.RecordedClauseEvent{valid, secondProcess}}, "run", nil)
 	if err != nil || len(accepted.ClauseObservations) != 1 {
 		t.Fatalf("valid cross-process duplicate was not projected idempotently: accepted=%#v err=%v", accepted, err)
 	}
@@ -1154,14 +1145,14 @@ func TestProcessFileProvenanceIsVerified(t *testing.T) {
 		{Path: "/tmp/zero-process", RunID: "run", PackagePath: "example.test/p"},
 		{Path: "/tmp/unknown-package", RunID: "run", PackagePath: "example.test/other", ProcessID: 1},
 	} {
-		accepted, err := acceptRuntimeEvidence(t.Context(), nil, nil, runtimecov.RecordedEvidence{Files: []runtimecov.ProcessFile{file}}, "run", nil)
+		accepted, err := evidence.AcceptRuntime(t.Context(), nil, nil, runtimecov.RecordedEvidence{Files: []runtimecov.ProcessFile{file}}, "run", nil)
 		if err == nil || !strings.Contains(err.Error(), "invalid provenance") || len(accepted.Files) != 1 {
 			t.Fatalf("file=%#v accepted=%#v err=%v", file, accepted, err)
 		}
 	}
 	metadata := []cover.DecisionMetadata{{ID: 1, Package: "example.test/p"}}
 	valid := runtimecov.ProcessFile{Path: "/tmp/valid", RunID: "run", PackagePath: "example.test/p", ProcessID: 1}
-	if _, err := acceptRuntimeEvidence(t.Context(), metadata, nil, runtimecov.RecordedEvidence{Files: []runtimecov.ProcessFile{valid}}, "run", nil); err != nil {
+	if _, err := evidence.AcceptRuntime(t.Context(), metadata, nil, runtimecov.RecordedEvidence{Files: []runtimecov.ProcessFile{valid}}, "run", nil); err != nil {
 		t.Fatalf("valid process file provenance was rejected: %v", err)
 	}
 }
@@ -1234,7 +1225,7 @@ func TestValue(t *testing.T) {
 			if code != ExitSuccess {
 				t.Fatalf("value-aware go test args exit=%d\nstderr:\n%s", code, stderr)
 			}
-			if built.Run.Results.Test != report.ResultPassed || built.Run.Results.Measurement != report.ResultPassed {
+			if built.Run.Results.Test != analysis.ResultPassed || built.Run.Results.Measurement != analysis.ResultPassed {
 				t.Fatalf("value-aware go test args run = %#v", built.Run)
 			}
 		})
@@ -1292,8 +1283,8 @@ func TestRuntimeDiagnosticReportMessageDoesNotExposeEventDetails(t *testing.T) {
 // standard-cover + AST two-execution model only as a semantic comparison
 // oracle; production code must never call it or fall back to it.
 type v1DualRunOracle struct {
-	c0  report.Report
-	ast report.Report
+	c0  analysis.Result
+	ast analysis.Result
 }
 
 func runV1DualRunOracle(t *testing.T, root string) v1DualRunOracle {
@@ -1302,7 +1293,7 @@ func runV1DualRunOracle(t *testing.T, root string) v1DualRunOracle {
 	if code != ExitSuccess {
 		t.Fatalf("v1 C0 oracle exit = %d\nstderr:\n%s", code, c0Stderr)
 	}
-	if c0Report.MeasurementMode != report.MeasurementStandardCover || len(c0Report.Measurements) != 1 || c0Report.Measurements[0].Name != "standard-cover" {
+	if c0Report.MeasurementMode != analysis.MeasurementStandardCover || len(c0Report.Measurements) != 1 || c0Report.Measurements[0].Name != "standard-cover" {
 		t.Fatalf("v1 C0 oracle provenance = mode %q runs %#v", c0Report.MeasurementMode, c0Report.Measurements)
 	}
 	astReport, astStderr, code := runFixture(
@@ -1315,15 +1306,15 @@ func runV1DualRunOracle(t *testing.T, root string) v1DualRunOracle {
 	if code != ExitSuccess {
 		t.Fatalf("v1 AST oracle exit = %d\nstderr:\n%s", code, astStderr)
 	}
-	if astReport.MeasurementMode != report.MeasurementSingleRun || len(astReport.Measurements) != 1 || astReport.Measurements[0].Name != "ast" {
+	if astReport.MeasurementMode != analysis.MeasurementSingleRun || len(astReport.Measurements) != 1 || astReport.Measurements[0].Name != "ast" {
 		t.Fatalf("v1 AST oracle provenance = mode %q runs %#v", astReport.MeasurementMode, astReport.Measurements)
 	}
 	return v1DualRunOracle{c0: c0Report, ast: astReport}
 }
 
 type c0OracleSummary struct {
-	Statement report.MetricSummary
-	Function  report.MetricSummary
+	Statement analysis.MetricSummary
+	Function  analysis.MetricSummary
 }
 
 type c0OracleProjection struct {
@@ -1348,10 +1339,10 @@ type c0OracleFunction struct {
 	Name       string
 	Location   *cover.SourceLocation
 	Summary    c0OracleSummary
-	Statements []report.StatementReport
+	Statements []analysis.StatementReport
 }
 
-func projectC0Semantics(built report.Report) c0OracleProjection {
+func projectC0Semantics(built analysis.Result) c0OracleProjection {
 	projected := c0OracleProjection{Summary: c0Summary(built.Summary)}
 	for _, packageReport := range built.Packages {
 		projectedPackage := c0OraclePackage{
@@ -1366,7 +1357,7 @@ func projectC0Semantics(built report.Report) c0OracleProjection {
 				}
 				projectedFile.Functions = append(projectedFile.Functions, c0OracleFunction{
 					Name: function.Name, Location: function.Location, Summary: c0Summary(function.Summary),
-					Statements: append([]report.StatementReport(nil), function.Statements...),
+					Statements: append([]analysis.StatementReport(nil), function.Statements...),
 				})
 			}
 			projectedPackage.Files = append(projectedPackage.Files, projectedFile)
@@ -1376,24 +1367,24 @@ func projectC0Semantics(built report.Report) c0OracleProjection {
 	return projected
 }
 
-func c0Summary(summary report.Summary) c0OracleSummary {
+func c0Summary(summary analysis.Summary) c0OracleSummary {
 	return c0OracleSummary{Statement: summary.Statement, Function: summary.Function}
 }
 
-func metricHasObligation(metric report.MetricSummary) bool {
+func metricHasObligation(metric analysis.MetricSummary) bool {
 	return metric.Total != 0 || metric.Unsupported != 0 || metric.Unknown != 0 || metric.Infeasible != 0 || metric.AnalysisIncomplete != 0
 }
 
 type astOracleSummary struct {
-	Decision                  report.MetricSummary
-	SwitchClauseBody          report.MetricSummary
-	TypeSwitchClauseBody      report.MetricSummary
-	SelectClauseBody          report.MetricSummary
-	SwitchClauseSelection     report.MetricSummary
-	TypeSwitchClauseSelection report.MetricSummary
-	Condition                 report.MetricSummary
-	MCDCUnique                report.MetricSummary
-	MCDCMasking               report.MetricSummary
+	Decision                  analysis.MetricSummary
+	SwitchClauseBody          analysis.MetricSummary
+	TypeSwitchClauseBody      analysis.MetricSummary
+	SelectClauseBody          analysis.MetricSummary
+	SwitchClauseSelection     analysis.MetricSummary
+	TypeSwitchClauseSelection analysis.MetricSummary
+	Condition                 analysis.MetricSummary
+	MCDCUnique                analysis.MetricSummary
+	MCDCMasking               analysis.MetricSummary
 }
 
 type astOracleProjection struct {
@@ -1418,12 +1409,12 @@ type astOracleFunction struct {
 	Name      string
 	Location  *cover.SourceLocation
 	Summary   astOracleSummary
-	Decisions []report.DecisionReport
-	Clauses   []report.ClauseReport
-	NoMatches []report.NoMatchReport
+	Decisions []analysis.DecisionReport
+	Clauses   []analysis.ClauseReport
+	NoMatches []analysis.NoMatchReport
 }
 
-func projectASTSemantics(built report.Report) astOracleProjection {
+func projectASTSemantics(built analysis.Result) astOracleProjection {
 	projected := astOracleProjection{Summary: astSummary(built.Summary)}
 	for _, packageReport := range built.Packages {
 		projectedPackage := astOraclePackage{
@@ -1436,15 +1427,15 @@ func projectASTSemantics(built report.Report) astOracleProjection {
 				if len(function.Decisions) == 0 && len(function.Clauses) == 0 && len(function.NoMatches) == 0 {
 					continue
 				}
-				decisions := make([]report.DecisionReport, len(function.Decisions))
+				decisions := make([]analysis.DecisionReport, len(function.Decisions))
 				for index, decision := range function.Decisions {
 					decisions[index] = normalizeOracleDecision(decision)
 				}
 				projectedFile.Functions = append(projectedFile.Functions, astOracleFunction{
 					Name: function.Name, Location: function.Location, Summary: astSummary(function.Summary),
 					Decisions: decisions,
-					Clauses:   append([]report.ClauseReport(nil), function.Clauses...),
-					NoMatches: append([]report.NoMatchReport(nil), function.NoMatches...),
+					Clauses:   append([]analysis.ClauseReport(nil), function.Clauses...),
+					NoMatches: append([]analysis.NoMatchReport(nil), function.NoMatches...),
 				})
 			}
 			projectedPackage.Files = append(projectedPackage.Files, projectedFile)
@@ -1454,7 +1445,7 @@ func projectASTSemantics(built report.Report) astOracleProjection {
 	return projected
 }
 
-func astSummary(summary report.Summary) astOracleSummary {
+func astSummary(summary analysis.Summary) astOracleSummary {
 	return astOracleSummary{
 		Decision: summary.Decision, SwitchClauseBody: summary.SwitchClauseBody,
 		TypeSwitchClauseBody: summary.TypeSwitchClauseBody, SelectClauseBody: summary.SelectClauseBody,
@@ -1463,13 +1454,13 @@ func astSummary(summary report.Summary) astOracleSummary {
 	}
 }
 
-func normalizeOracleDecision(decision report.DecisionReport) report.DecisionReport {
-	decision.Summary.Statement = report.MetricSummary{}
-	decision.Summary.Function = report.MetricSummary{}
+func normalizeOracleDecision(decision analysis.DecisionReport) analysis.DecisionReport {
+	decision.Summary.Statement = analysis.MetricSummary{}
+	decision.Summary.Function = analysis.MetricSummary{}
 	decision.Evaluations = normalizeOracleEvaluations(decision.Evaluations)
 	decision.MCDCUnique = normalizeOracleMCDCAnalysis(decision.MCDCUnique)
 	decision.MCDCMasking = normalizeOracleMCDCAnalysis(decision.MCDCMasking)
-	decision.Conditions = append([]report.ConditionReport(nil), decision.Conditions...)
+	decision.Conditions = append([]analysis.ConditionReport(nil), decision.Conditions...)
 	for index := range decision.Conditions {
 		decision.Conditions[index].MCDCUnique = normalizeOracleMCDCCondition(decision.Conditions[index].MCDCUnique)
 		decision.Conditions[index].MCDCMasking = normalizeOracleMCDCCondition(decision.Conditions[index].MCDCMasking)
@@ -1477,20 +1468,20 @@ func normalizeOracleDecision(decision report.DecisionReport) report.DecisionRepo
 	return decision
 }
 
-func normalizeOracleMCDCAnalysis(analysis report.MCDCAnalysisReport) report.MCDCAnalysisReport {
-	analysis.Conditions = append([]report.MCDCConditionReport(nil), analysis.Conditions...)
-	for index := range analysis.Conditions {
-		analysis.Conditions[index] = normalizeOracleMCDCCondition(analysis.Conditions[index])
+func normalizeOracleMCDCAnalysis(value analysis.MCDCAnalysisReport) analysis.MCDCAnalysisReport {
+	value.Conditions = append([]analysis.MCDCConditionReport(nil), value.Conditions...)
+	for index := range value.Conditions {
+		value.Conditions[index] = normalizeOracleMCDCCondition(value.Conditions[index])
 	}
-	return analysis
+	return value
 }
 
-func normalizeOracleMCDCCondition(condition report.MCDCConditionReport) report.MCDCConditionReport {
+func normalizeOracleMCDCCondition(condition analysis.MCDCConditionReport) analysis.MCDCConditionReport {
 	condition.Witness = normalizeOracleWitness(condition.Witness)
 	return condition
 }
 
-func normalizeOracleWitness(witness *report.WitnessReport) *report.WitnessReport {
+func normalizeOracleWitness(witness *analysis.WitnessReport) *analysis.WitnessReport {
 	if witness == nil {
 		return nil
 	}
@@ -1508,8 +1499,8 @@ func normalizeOracleWitness(witness *report.WitnessReport) *report.WitnessReport
 	return &normalized
 }
 
-func normalizeOracleEvaluations(evaluations []report.EvaluationReport) []report.EvaluationReport {
-	normalized := make([]report.EvaluationReport, len(evaluations))
+func normalizeOracleEvaluations(evaluations []analysis.EvaluationReport) []analysis.EvaluationReport {
+	normalized := make([]analysis.EvaluationReport, len(evaluations))
 	for index, evaluation := range evaluations {
 		normalized[index] = normalizeOracleEvaluation(evaluation)
 	}
@@ -1519,7 +1510,7 @@ func normalizeOracleEvaluations(evaluations []report.EvaluationReport) []report.
 	return normalized
 }
 
-func normalizeOracleEvaluation(evaluation report.EvaluationReport) report.EvaluationReport {
+func normalizeOracleEvaluation(evaluation analysis.EvaluationReport) analysis.EvaluationReport {
 	evaluation.EvaluationID = ""
 	evaluation.RunID = ""
 	evaluation.ProcessID = 0
@@ -1528,7 +1519,7 @@ func normalizeOracleEvaluation(evaluation report.EvaluationReport) report.Evalua
 	return evaluation
 }
 
-func oracleEvaluationKey(evaluation report.EvaluationReport) string {
+func oracleEvaluationKey(evaluation analysis.EvaluationReport) string {
 	return evaluation.DecisionID + "\x00" + evaluation.Status + "\x00" + evaluation.PackagePath + "\x00" +
 		strings.Join(evaluation.Conditions, "\x00") + "\x00" + strconv.FormatBool(evaluation.Result)
 }
@@ -1576,7 +1567,7 @@ func firstSemanticDifference(got, want reflect.Value, path string) string {
 	return ""
 }
 
-func runFixture(t *testing.T, root string, arguments ...string) (report.Report, string, int) {
+func runFixture(t *testing.T, root string, arguments ...string) (analysis.Result, string, int) {
 	t.Helper()
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -1584,7 +1575,7 @@ func runFixture(t *testing.T, root string, arguments ...string) (report.Report, 
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 	defer cancel()
 	code := runAt(ctx, root, args, &stdout, &stderr)
-	var built report.Report
+	var built analysis.Result
 	if err := json.Unmarshal(stdout.Bytes(), &built); err != nil {
 		t.Fatalf("decode report (exit %d): %v\nstdout:\n%s\nstderr:\n%s", code, err, stdout.String(), stderr.String())
 	}
@@ -1694,8 +1685,8 @@ func writeModuleProxy(t *testing.T, root, module, version string, files map[stri
 	}
 }
 
-func reportMetrics(summary report.Summary) map[string]report.MetricSummary {
-	return map[string]report.MetricSummary{
+func reportMetrics(summary analysis.Summary) map[string]analysis.MetricSummary {
+	return map[string]analysis.MetricSummary{
 		"statement": summary.Statement, "function": summary.Function,
 		"decision":                  summary.Decision,
 		"switchClauseBody":          summary.SwitchClauseBody,
@@ -1708,7 +1699,7 @@ func reportMetrics(summary report.Summary) map[string]report.MetricSummary {
 	}
 }
 
-func assertPackageSums(t *testing.T, built report.Report) {
+func assertPackageSums(t *testing.T, built analysis.Result) {
 	t.Helper()
 	for name, moduleMetric := range reportMetrics(built.Summary) {
 		covered, total := 0, 0
@@ -1723,7 +1714,7 @@ func assertPackageSums(t *testing.T, built report.Report) {
 	}
 }
 
-func findDecision(t *testing.T, built report.Report, expression string) report.DecisionReport {
+func findDecision(t *testing.T, built analysis.Result, expression string) analysis.DecisionReport {
 	t.Helper()
 	for _, packageReport := range built.Packages {
 		for _, file := range packageReport.Files {
@@ -1737,10 +1728,10 @@ func findDecision(t *testing.T, built report.Report, expression string) report.D
 		}
 	}
 	t.Fatalf("decision %q not found", expression)
-	return report.DecisionReport{}
+	return analysis.DecisionReport{}
 }
 
-func findFile(t *testing.T, built report.Report, path string) report.FileReport {
+func findFile(t *testing.T, built analysis.Result, path string) analysis.FileReport {
 	t.Helper()
 	for _, packageReport := range built.Packages {
 		for _, file := range packageReport.Files {
@@ -1750,10 +1741,10 @@ func findFile(t *testing.T, built report.Report, path string) report.FileReport 
 		}
 	}
 	t.Fatalf("file %q not found", path)
-	return report.FileReport{}
+	return analysis.FileReport{}
 }
 
-func findDecisionInFunction(t *testing.T, built report.Report, functionName, expression string) report.DecisionReport {
+func findDecisionInFunction(t *testing.T, built analysis.Result, functionName, expression string) analysis.DecisionReport {
 	t.Helper()
 	for _, packageReport := range built.Packages {
 		for _, file := range packageReport.Files {
@@ -1770,10 +1761,10 @@ func findDecisionInFunction(t *testing.T, built report.Report, functionName, exp
 		}
 	}
 	t.Fatalf("decision %s:%q not found", functionName, expression)
-	return report.DecisionReport{}
+	return analysis.DecisionReport{}
 }
 
-func findFunction(t *testing.T, built report.Report, name string) report.FunctionReport {
+func findFunction(t *testing.T, built analysis.Result, name string) analysis.FunctionReport {
 	t.Helper()
 	for _, packageReport := range built.Packages {
 		for _, file := range packageReport.Files {
@@ -1785,10 +1776,10 @@ func findFunction(t *testing.T, built report.Report, name string) report.Functio
 		}
 	}
 	t.Fatalf("function %q not found", name)
-	return report.FunctionReport{}
+	return analysis.FunctionReport{}
 }
 
-func hasAbortedEvaluation(built report.Report) bool {
+func hasAbortedEvaluation(built analysis.Result) bool {
 	for _, packageReport := range built.Packages {
 		for _, file := range packageReport.Files {
 			for _, function := range file.Functions {
@@ -1805,7 +1796,7 @@ func hasAbortedEvaluation(built report.Report) bool {
 	return false
 }
 
-func hasEvaluationStatus(decision report.DecisionReport, status string) bool {
+func hasEvaluationStatus(decision analysis.DecisionReport, status string) bool {
 	for _, evaluation := range decision.Evaluations {
 		if evaluation.Status == status {
 			return true
@@ -1814,7 +1805,7 @@ func hasEvaluationStatus(decision report.DecisionReport, status string) bool {
 	return false
 }
 
-func hasCoveredSelectClause(built report.Report) bool {
+func hasCoveredSelectClause(built analysis.Result) bool {
 	for _, packageReport := range built.Packages {
 		for _, file := range packageReport.Files {
 			for _, function := range file.Functions {
@@ -1829,7 +1820,7 @@ func hasCoveredSelectClause(built report.Report) bool {
 	return false
 }
 
-func findPackage(t *testing.T, built report.Report, path string) report.PackageReport {
+func findPackage(t *testing.T, built analysis.Result, path string) analysis.PackageReport {
 	t.Helper()
 	for _, packageReport := range built.Packages {
 		if packageReport.Path == path {
@@ -1837,10 +1828,10 @@ func findPackage(t *testing.T, built report.Report, path string) report.PackageR
 		}
 	}
 	t.Fatalf("package %q not found", path)
-	return report.PackageReport{}
+	return analysis.PackageReport{}
 }
 
-func findProducerOutcome(t *testing.T, built report.Report, producer report.ProducerName) report.ProducerOutcome {
+func findProducerOutcome(t *testing.T, built analysis.Result, producer analysis.ProducerName) analysis.ProducerOutcome {
 	t.Helper()
 	for _, outcome := range built.ProducerOutcomes {
 		if outcome.Producer == producer {
@@ -1848,5 +1839,5 @@ func findProducerOutcome(t *testing.T, built report.Report, producer report.Prod
 		}
 	}
 	t.Fatalf("producer outcome %q not found in %#v", producer, built.ProducerOutcomes)
-	return report.ProducerOutcome{}
+	return analysis.ProducerOutcome{}
 }

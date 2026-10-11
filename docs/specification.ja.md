@@ -2,9 +2,6 @@
 
 本書は `gomcdc` 2.0 の意味論と適合条件を定める。日本語版を規範版とし、英語版は同じ定義番号を持つ参考訳とする。仕様バージョンは `2.0` である。
 
-`gomcdc` v2系列は本仕様を互換性契約とする。v2系列内では、既存指標、CLI optionと終了code、schema 2.0のJSON必須fieldを、それぞれの意味とともに維持する。既存データの解釈を保ちながら、opt-in capabilityとoptional fieldを追加できる。
-
-公開JSONのfield集合を変更するときは新しい `schemaVersion` とrepository内schemaを追加し、schema `1.0` と `1.1` は不変のまま保持する。
 
 ## 1. 適用範囲
 
@@ -163,8 +160,7 @@ condition `i` は、completed evaluation pair `(p,q)` と completion `(x,y) ∈ 
 両completionをexact joint searchする。condition obligationごとのdefault上限は、candidate
 evaluation pair 1,000,000件、新しく展開するjoint search state 4,000,000件、主要solver
 backing array 64 MiBである。solver byte単位にはflatten済み式、memo table、completion
-buffer、candidate evaluation indexを含め、検証済みinput data、result witness、goroutine
-stack、その他のprocess memoryは含めない。この値はprocess全体のheap、RSS、総memory上限ではない。
+buffer、candidate evaluation indexを含める。
 上限を超える探索が必要な場合は`analysis-incomplete`とし、上限ちょうどで
 witnessへ到達した場合は`covered`とする。`infeasible`は、targetがpivotalになり得ないことを
 別の構造検査で証明した場合だけ使用する。
@@ -248,7 +244,6 @@ runtime は各評価に一意なEvaluationIDを割り当て、そのidentityご�
 
 各 test process は package import path の衝突不能なencoding、PID、run ID、nonceを含む固有 file へ evidence を書く。同一file内の全recordは同じ `(runID, packagePath, PID)` provenanceを持つ。CLIはraw Decision eventとClause eventのprovenanceを、要求run、source inventory上の所有package、process identity、condition count、state、result、status、短絡規則の整合性を検証するまで保持する。検証済みeventだけをprovenance-freeで冪等なcoverage observationへ射影する。test failure、build failure、timeout、panic、truncated tail、異常終了時も取得済み evidence と静的 inventory から partial report を構成する。
 
-このpartial recoveryはtest processまたはtool processの異常終了を対象とする。hostの電源断、kernel crash、filesystem corruption、storage device故障後のdurabilityは保証しない。
 
 SIGINTとSIGTERMはactive requestをcancelする。cancellationはmeasurement所有の全subprocess groupと後続measurementの割当てを終了する。その後は時間制限付きevidence recovery、report構築、workspace cleanupだけを許可する。caller cancellationには専用の結果 `failureKind=interrupted` を使う。
 
@@ -296,7 +291,7 @@ defaultを個別に使用する。上限を増やすとconditionとdecisionの�
 
 root は `schemaVersion`、`toolVersion`、`module`、`run`、`measurementMode`、`measurements`、`producerOutcomes`、`capabilities`、`backendCapabilities`、`instrumentationCoverage`、`summary`、`packages`、`errors` を持つ。Masking MC/DC要求時は任意field `maskingAnalysisLimits`にD19で使用した3つの実効上限を記録する。通常の計測の`schemaVersion` はreport互換性契約であり `2.0` とする。tool interruptionには専用の`failureKind`値 `interrupted` を使う。`toolVersion` は `gomcdc version` が返すbuild identityである。`producerOutcomes` は要求された全producerについてD21の4 evidence軸を持つ。`capabilities` はtool全体のaggregate、`backendCapabilities` はproducer別instrumentation authorityを表す。
 
-[`schema/report-v2.0.schema.json`](../schema/report-v2.0.schema.json) は通常計測の公開field、必須・任意key、型、enum、nullabilityを定める機械可読JSON Schemaである。オフラインReport 2.1はD34で定める。Report schema 1.0と1.1は不変の旧契約としてrepositoryに保持する。
+[`schema/report-v2.0.schema.json`](../schema/report-v2.0.schema.json) は通常計測の公開field、必須・任意key、型、enum、nullabilityを定める機械可読JSON Schemaである。オフラインReport 2.1はD34で定める。
 
 summary key は `statement`、`function`、`decision`、`switchClauseBody`、`typeSwitchClauseBody`、`selectClauseBody`、`switchClauseSelection`、`typeSwitchClauseSelection`、`condition`、`mcdcUnique`、`mcdcMasking` である。
 
@@ -316,41 +311,47 @@ HTMLは各producerのintegrity、completeness、mapping、usabilityをoverall ru
 
 出力は表示用assetをすべて内包する単一のself-contained static HTMLとし、宣言的なHTMLとCSSだけで構成する。閲覧はオフラインで完結し、network requestを発生させない。source expressionとpathはHTML contextに従ってescapeする。色に加え、分子、分母、percentage、status textを併記する。
 
-### D32. Resource と trust boundary
+### D32. 実行と保存
 
-一つの計装runは一回のsource計装、compiler計装、build、testで要求されたGo cover、AST、compiler-aware evidenceをすべて収集する。event journalはwitnessを保存しながらrecordを集約・compactionし、memoryには集約済みevidenceを保持する。performance claimにはrepository内benchmarkと再現可能なprofileを必要とする。機能適合は意味論の要件で判定し、実行時間はbenchmark対象hardwareで評価する。
+一つの計測runでsource計装、compiler計装、build、testを実行し、Go cover、AST、compiler-aware evidenceを収集する。event journalは評価の出所とwitnessを保持してrecordを集約する。
 
-対象moduleは信頼済みコードとして現在ユーザー権限でbuild/testする。一時workspaceはsecurity sandboxではなく、悪意ある対象コードに対するevidence真正性を保証しない。一時directoryとevent fileは現在ユーザーだけが読み書きできるpermissionとし、source複製の書込先はsymlink/hardlinkを経由する場合もworkspace内に限定する。通常reportはmodule-relativeなsource pathを使う。
+一時directoryとevent fileは現在ユーザーだけが読み書きできるpermissionとする。source複製の書込先はworkspace内に限定する。reportのsource pathはmodule-relativeとする。
 
-本ツールはcoverage意味論だけを定義し、DO-178C適合、tool qualification、安全認証を主張しない。Windows、assembly、cgo内部、compiler IRをobligationとするcoverage、path coverage、distributed test executionはv2対象外である。
+### D33. 保存結果とreport
 
-### D33. 保存結果とオフラインreport
+`gomcdc test --save FILE`は[保存結果2.0](../schema/saved-result-v2.0.schema.json)を出力する。payloadは計測アーカイブ`measurement`と判定済み`report`からなる。元ソースと計測条件はアーカイブに保持する。test失敗や中断時も回収した証拠と結果を保存する。
 
-`gomcdc test --save <file>` は、通常のreport出力に加え、判定済みReport、HTML用の元source、計測条件を一つのJSON fileへ保存する。Reportを生成できるtest失敗、partial run、strict失敗、threshold未達でも保存する。既存のtest終了codeの意味を維持し、保存失敗は終了code 2とする。
+保存fileは`format`、`version`、`sha256`、payloadを持つ。checksumは整数精度を保持し、object keyを整列したcompact JSONのSHA-256とする。必須field、version、checksum、元ソースのhashと所有関係を検証する。permission 0600の一時fileからrenameで公開する。
 
-保存形式は `format=gomcdc-saved-result`、`version`、`sha256`、`result` を持つ独立の契約である。新規計測は[saved-result schema 1.1](../schema/saved-result-v1.1.schema.json)を使い、計測前に128-bit乱数の`settings.invocationId`を付けて、同じ観測結果になった独立のC0実行も区別する。[schema 1.0](../schema/saved-result-v1.0.schema.json)も引き続き読める。通常の計測は引き続きReport schema 2.0を使う。`result`は`settings`、`report`、`sources`を持ち、D34の派生結果は`inputs`も持つ。
+`gomcdc report [--format=text|json|html] [--output=PATH] FILE`は保存結果を表示する。defaultはtext／stdout、HTMLは指定directoryのindex.htmlへ出力する。元のtest・policy結果を表示し、出力成功で0を返す。入力と出力は別fileを要求し、symlink・hardlinkも同一性の判定に含める。
 
-settingsにはmodule-relativeな実行directory、要求package patternと解決後package、指標、path再配置前のtest引数とGOFLAGS、include-tests、除外pattern、timeout、strict、各閾値、Goのversion・GOOS・GOARCH・CGO・experiment・architecture設定を記録する。sourceDigestsは選択されたactive Go sourceとtest sourceの計装前SHA-256を保持し、除外・generated sourceも含む。moduleConfigDigestsは元のgo.mod、使用時のgo.work／go.work.sum、alternate.mod／alternate.sum snapshotのSHA-256をrole別に持つ。保存対象はreportの再表示・再解析に使う上記のsourceと設定である。実行の再現には外部依存source、test data、その他の環境変数を別途用意する必要がある。
+### D34. MC/DC再解析
 
-sourcesはReport用の元sourceをpackage pathとmodule-relative pathで識別し、byte列をbase64で保存する。source hashはsourceDigestsと一致する。Report内の全fileに、記録済みhashと一致する元sourceを要求する。保存はpermission 0600の一時fileとrenameで公開し、公開前の失敗では既存保存fileを保持する。sha256はresultをJSON decode（整数の精度を保持）し、Go encoding/jsonでobject keyをsortしてcompact marshalしたbyte列に対して計算する。これは破損検出用であり、署名ではない。
+`gomcdc reanalyze --output FILE [解析上限] INPUT`は保存結果の計測アーカイブから被覆を再計算する。D19の3つの上限を指定でき、未指定値は入力の実効上限を引き継ぐ。
 
-`gomcdc report [--format=text|json|html] [--output=<path>] <saved-result>` は同じrendererで保存結果を出力する。defaultはtext／stdout、HTMLにはdirectory指定が必要である。描画に使う結果と元sourceはすべて保存fileから読み、test／strict／threshold／partial等の結果と測定時toolVersionを保持する。通常のReport JSON、未対応version、checksum不一致、必須field欠落、source欠落・hash不一致は拒否する。入力保存fileと出力file（HTMLではindex.html）は、symlink／hardlink経由も含め、別々のfileを指定する必要がある。testのsaveとoutputも別々のfileを要求する。
+複数実行の解析と再解析は[Report 2.1](../schema/report-v2.1.schema.json)の`contributingRuns`に元実行の結果、policy判定、producer結果、診断を保持する。複数実行では`measurementMode=merged`とし、`measurements`に各実計測を列挙する。全体のtest・measurement・integrityは元の失敗を引き継ぎ、`complete`は全実行がcompleteの場合にtrueとなる。解析操作のstrict・閾値判定は`not-requested`とする。
 
-reportの終了codeは出力成功0、不正usage4、読出し・検証・出力失敗2とする。保存されたtestやpolicyの成否は元の判定を保持する。signalによる終了codeはD28に従う。reportは再表示のみを行う。統合と再解析はD34の明示的な操作とする。
+### D35. 計測アーカイブとCLI操作
 
-### D34. オフライン統合とMC/DC再解析
+[計測アーカイブ1.0](../schema/measurement-v1.0.schema.json)は共通のPlanと実行ごとのRunからなる。
 
-`gomcdc merge --output <saved-file> [limits] INPUT INPUT...`は2入力以上、`gomcdc reanalyze --output <saved-file> [limits] INPUT`は1入力を受ける。Maskingを選択済みならD19の3つの正の`--mcdc-masking-max-*`を指定できる。mergeの未指定上限は既定値、reanalyzeは入力の実効上限を使う。保存済みの指標選択を引き継ぎ、記録済みevidenceを使ってオフラインで処理する。入力fileは元の内容を保持する。出力は全入力と異なるfileとし、symlink／hardlinkによる同一指定も拒否する。
+- Plan: 元ソース、build条件、module・tool・計測定義、Decision／Condition／Clauseのmetadata、Boolean構造、byte offset。
+- Run: invocation・runtime ID、元の設定、テスト結果、producerの採否、生成probeの対象ID、runtime記録、元ソースへ対応済みのcounter、診断。
 
-統合にはmodule・計測時toolVersion、source／module設定hash、解決済みpackage集合、working directory、指標、include-tests、exclude、保存済みGo環境、measurement mode、非runtimeのGo flagsの一致を要求する。package patternの表記、timeout、strict／閾値、テスト選択・実行設定のflags（`run`、`skip`、`count`、`shuffle`、`parallel`、`cpu`、`timeout`、`failfast`、`short`、`bench`、`benchtime`、`benchmem`、`v`、`json`、`list`、`fullpath`と登録済みtest alias）は異なってよい。未知flagsとbinary引数は一致が必要である。互換性検査の対象は保存済み設定であり、保存対象外の依存source・test data・任意環境変数はこの検査の対象外とする。同じinventoryに対するテスト分割を扱い、異なるinventoryは互換性エラーとする。静的entityやcapabilityの欠落・相違は元の分母を保持してエラーにする。
+| 操作 | 入力と出力 |
+| --- | --- |
+| `record --output FILE PACKAGE... [-- test引数]` | テストを実行して計測アーカイブを保存 |
+| `merge --output FILE [--expect-runs N] MEASUREMENT...` | 共通Planの実行記録を統合 |
+| `analyze --output FILE [--expect-runs N] [解析上限] MEASUREMENT...` | 証拠を統合して被覆を判定し、保存結果を出力 |
+| `require [--complete] [--METRIC PERCENT] ANALYSIS` | 保存結果と明示された要求の充足を判定 |
 
-派生saved-result 1.1の`inputs`は元のsettingsとReport 2.0を保持し、source bytesは共通に1組保存する。input IDは`settings`と`report`からなるobjectのcanonical JSONのSHA-256とする。派生結果の再統合では元inputに展開し、同じIDは1回だけ、ID順に処理する。invocation IDまたは観測されたruntime run IDを共有する異なるsnapshotは競合として拒否する。旧1.0はcanonical内容でsnapshotを識別する。同じ内容のsnapshotは重複として扱い、独立したC0-only実行も内容が同じなら一つにまとめる。新規保存ではinvocation IDで独立実行を区別する。
+各CIジョブは同じ元ソース・package集合・計測指標・Go/build条件でrecordを実行し、別fileへ保存する。テスト選択・実行設定はジョブごとに指定できる。mergeはinvocation IDで重複を除き、ID順に保存する。同一IDの内容の相違、異なるPlan、重複する物理runtime IDはエラーとする。正の`--expect-runs N`は独立した実行数との一致を要求する。
 
-集計は採用済みのentity別evidenceから行う。statement／function／clauseのobligationは1回だけ数え、BodyとSelectionは独立に統合する。counter加算のoverflowは拒否する。診断用のraw hitはproducerが決定した採否を保持する。DecisionのBoolean構造はinstrumenterと共通のoccurrence分解から復元し、保存したcondition順序・式の一致と評価vectorの妥当性を検査する。選択済みの両MC/DCは統合vectorを再解析し、実行を跨ぐwitnessにもrun／package／process／test／evaluationの出所を保持する。棄却vectorは診断用に元inputへ保持し、被覆には採用済みvectorを使う。ある実行のunknownは別の実行の採用済み観測で解消できるが、元の失敗・integrity結果は残す。
+analyzeはPlanのBoolean構造と受理された評価を使い、実行を跨ぐMC/DC証拠ペアを求める。C0の各RunはPlan内の全ソースのinventoryを持ち、統合は元ソースのstatement単位で行う。counter加算のoverflowはエラーとする。元実行の失敗と証拠の出所を保持する。
 
-オフラインReport [schema 2.1](../schema/report-v2.1.schema.json)は`contributingRuns`に元input ID、実行・policy結果、measurement、producer結果、errorを持つ。複数の異なるinputでは`measurementMode=merged`、`measurements`には各実計測を列挙する。1 inputの再解析では元modeを保持する。採否は各実行に属するためtop-levelの`producerOutcomes`は空配列とする。test／measurement／integrityの失敗は全体にも保持し、`complete`は全inputがcompleteの場合のみtrue。top-levelのstrict／閾値は`not-requested`とし、各元実行に保存時のpolicy判定と失敗を表示する。top-levelのtoolVersionはオフライン処理を行ったtoolのversion、計測時versionは元inputに保持する。summaryと新witnessは指定上限で再計算する。text／HTMLも各元実行の結果を表示する。
+requireの`--complete`は実行・証拠・計装・解析の完全性を要求する。指標の最低率は、計測済みで実現可能な対象が1個以上あり、unknown・unsupported・analysis-incompleteが0、丸め前の達成率が指定値以上の場合に満たす。指定値は0〜100の有限数とする。
 
-両コマンドはatomicに保存する。保存成功は0（元test／policy失敗やMC/DCの未完了が残っても0）、usage不正4、入力・互換性・解析・出力失敗2。cancelは130で、公開済みの結果を保持する。公開前の失敗では元入力と既存出力を保持する。
+recordはtest失敗で1、計測失敗で2を返す。merge・analyze・reanalyze・reportは処理成功で0、requireは全充足で0、未充足で3を返す。引数の誤りは4、読出し・解析・出力失敗は2、中断は130とする。保存はatomicに公開し、公開前の失敗では既存出力を保持する。recordとtestにはcheckoutとGo環境が必要で、以降の処理は保存fileだけで実行する。
 
 ## 9. 適合条件
 

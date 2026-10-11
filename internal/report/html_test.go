@@ -5,25 +5,26 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
 	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
 )
 
 func TestWriteHTMLRendersGoHierarchyAndEscapesSourceText(t *testing.T) {
 	t.Parallel()
 	location := cover.SourceLocation{File: "pkg/value.go", Start: cover.Position{Line: 7, Column: 2}, End: cover.Position{Line: 7, Column: 20}}
-	metric := MetricSummary{Enabled: true, Covered: 1, Total: 2}
+	metric := analysis.MetricSummary{Enabled: true, Covered: 1, Total: 2}
 	percentage := 50.0
 	metric.Percentage = &percentage
-	value := Report{
-		SchemaVersion: SchemaVersion, ToolVersion: "v2.0.0", Module: "example.test/<script>alert(1)</script>",
-		Run: Run{Status: cover.RunPassed, Complete: true}, MeasurementMode: MeasurementSingleRun,
-		ProducerOutcomes: []ProducerOutcome{{
-			Producer: ProducerGoCover, Integrity: ProducerIntegrityValid,
-			Completeness: ProducerCompletenessPartial, Mapping: ProducerMappingComplete,
-			Usability: ProducerUsabilityAcceptedPartial,
+	value := analysis.Result{
+		SchemaVersion: analysis.SchemaVersion, ToolVersion: "v2.0.0", Module: "example.test/<script>alert(1)</script>",
+		Run: analysis.Run{Status: cover.RunPassed, Complete: true}, MeasurementMode: analysis.MeasurementSingleRun,
+		ProducerOutcomes: []analysis.ProducerOutcome{{
+			Producer: analysis.ProducerGoCover, Integrity: analysis.ProducerIntegrityValid,
+			Completeness: analysis.ProducerCompletenessPartial, Mapping: analysis.ProducerMappingComplete,
+			Usability: analysis.ProducerUsabilityAcceptedPartial,
 		}},
-		Summary:  Summary{Statement: metric},
-		Packages: []PackageReport{{Path: "example.test/mod/pkg", Status: "passed", Evidence: true, Summary: Summary{Statement: metric}, Files: []FileReport{{Path: "pkg/value.go", Summary: Summary{Statement: metric}, Functions: []FunctionReport{{Name: "Check<script>", Location: &location, Summary: Summary{Statement: metric}, Decisions: []DecisionReport{{Expression: "a < b && <script>", Location: location, DecisionCoverage: DecisionCoverage{True: true}, Conditions: []ConditionReport{{Expression: "a < b", Location: location}}}}}}}}}},
+		Summary:  analysis.Summary{Statement: metric},
+		Packages: []analysis.PackageReport{{Path: "example.test/mod/pkg", Status: "passed", Evidence: true, Summary: analysis.Summary{Statement: metric}, Files: []analysis.FileReport{{Path: "pkg/value.go", Summary: analysis.Summary{Statement: metric}, Functions: []analysis.FunctionReport{{Name: "Check<script>", Location: &location, Summary: analysis.Summary{Statement: metric}, Decisions: []analysis.DecisionReport{{Expression: "a < b && <script>", Location: location, DecisionCoverage: analysis.DecisionCoverage{True: true}, Conditions: []analysis.ConditionReport{{Expression: "a < b", Location: location}}}}}}}}}},
 	}
 	var first, second bytes.Buffer
 	if err := writeHTMLReport(&first, value); err != nil {
@@ -49,7 +50,7 @@ func TestWriteHTMLRendersGoHierarchyAndEscapesSourceText(t *testing.T) {
 func TestWriteHTMLMarksPartialReport(t *testing.T) {
 	t.Parallel()
 	var output bytes.Buffer
-	if err := writeHTMLReport(&output, Report{Module: "m", Run: Run{Status: cover.RunFailed}}); err != nil {
+	if err := writeHTMLReport(&output, analysis.Result{Module: "m", Run: analysis.Run{Status: cover.RunFailed}}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(output.String(), "Partial report") {
@@ -59,11 +60,11 @@ func TestWriteHTMLMarksPartialReport(t *testing.T) {
 
 func TestWriteHTMLDistinguishesAnalysisIncomplete(t *testing.T) {
 	t.Parallel()
-	metric := MetricSummary{Enabled: true, AnalysisIncomplete: 1}
+	metric := analysis.MetricSummary{Enabled: true, AnalysisIncomplete: 1}
 	var output bytes.Buffer
-	if err := writeHTMLReport(&output, Report{
-		Module: "m", Run: Run{Status: cover.RunPassed, Complete: true},
-		Summary: Summary{MCDCUnique: metric},
+	if err := writeHTMLReport(&output, analysis.Result{
+		Module: "m", Run: analysis.Run{Status: cover.RunPassed, Complete: true},
+		Summary: analysis.Summary{MCDCUnique: metric},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -77,17 +78,17 @@ func TestWriteHTMLDistinguishesAnalysisIncomplete(t *testing.T) {
 
 func TestReportsExposeClauseSelectionEvidence(t *testing.T) {
 	t.Parallel()
-	metric := MetricSummary{Enabled: true, Covered: 1, Total: 1}
-	value := Report{
+	metric := analysis.MetricSummary{Enabled: true, Covered: 1, Total: 1}
+	value := analysis.Result{
 		Module: "m",
-		Run:    Run{Status: cover.RunPassed, Complete: true},
-		Packages: []PackageReport{{
+		Run:    analysis.Run{Status: cover.RunPassed, Complete: true},
+		Packages: []analysis.PackageReport{{
 			Path: "m/p",
-			Files: []FileReport{{
+			Files: []analysis.FileReport{{
 				Path: "p.go",
-				Functions: []FunctionReport{{
+				Functions: []analysis.FunctionReport{{
 					Name: "Switch",
-					Clauses: []ClauseReport{{
+					Clauses: []analysis.ClauseReport{{
 						Kind:                 cover.ClauseExpressionSwitch,
 						Role:                 cover.ClauseCase,
 						DirectSelections:     2,
@@ -113,13 +114,13 @@ func TestReportsExposeClauseSelectionEvidence(t *testing.T) {
 func TestWriteHTMLPresentsHumanReadableTriageHierarchy(t *testing.T) {
 	t.Parallel()
 	percentage := 75.0
-	metric := MetricSummary{Enabled: true, Covered: 3, Total: 4, Percentage: &percentage}
-	value := Report{
+	metric := analysis.MetricSummary{Enabled: true, Covered: 3, Total: 4, Percentage: &percentage}
+	value := analysis.Result{
 		Module: "example.test/module",
-		Run:    Run{Status: cover.RunPassed, Complete: true},
-		Summary: Summary{Statement: metric, Decision: metric, Condition: metric,
+		Run:    analysis.Run{Status: cover.RunPassed, Complete: true},
+		Summary: analysis.Summary{Statement: metric, Decision: metric, Condition: metric,
 			MCDCUnique: metric, MCDCMasking: metric},
-		Packages: []PackageReport{{Path: "example.test/module/pkg", Status: "passed", Summary: Summary{Statement: metric, Decision: metric, Condition: metric}, Files: []FileReport{{Path: "pkg/value.go", Functions: []FunctionReport{{Name: "Check", Summary: Summary{Statement: metric, Decision: metric}}}}}}},
+		Packages: []analysis.PackageReport{{Path: "example.test/module/pkg", Status: "passed", Summary: analysis.Summary{Statement: metric, Decision: metric, Condition: metric}, Files: []analysis.FileReport{{Path: "pkg/value.go", Functions: []analysis.FunctionReport{{Name: "Check", Summary: analysis.Summary{Statement: metric, Decision: metric}}}}}}},
 	}
 	var output bytes.Buffer
 	if err := writeHTMLReport(&output, value); err != nil {
