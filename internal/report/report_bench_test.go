@@ -4,41 +4,41 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
 	"github.com/shrydev2020/gomcdc/v2/internal/config"
 	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
-	"github.com/shrydev2020/gomcdc/v2/internal/report"
 )
 
-var benchmarkReportSink report.Report
+var benchmarkReportSink analysis.Result
 
 func BenchmarkReportPolicyFinalization(b *testing.B) {
 	input := reportBuildBenchmarkInput()
-	results := report.RunResults{
-		Test:        report.ResultPassed,
-		Measurement: report.ResultPassed,
-		Integrity:   report.ResultPassed,
-		Strict:      report.ResultFailed,
-		Threshold:   report.ResultPassed,
+	results := analysis.RunResults{
+		Test:        analysis.ResultPassed,
+		Measurement: analysis.ResultPassed,
+		Integrity:   analysis.ResultPassed,
+		Strict:      analysis.ResultFailed,
+		Threshold:   analysis.ResultPassed,
 	}
-	errors := []report.ReportError{{
+	errors := []analysis.ReportError{{
 		Phase: "validation", Code: "strict-coverage-gap", Message: "requested coverage contains a gap",
 	}}
 
 	b.Run("rebuild-coverage-hierarchy", func(b *testing.B) {
 		b.ReportAllocs()
 		for range b.N {
-			benchmarkReportSink = report.Build(input)
+			benchmarkReportSink = analysis.Analyze(withGeneratedProbes(input))
 			updated := input
 			updated.Results = results
 			updated.Errors = errors
-			benchmarkReportSink = report.Build(updated)
+			benchmarkReportSink = analysis.Analyze(withGeneratedProbes(updated))
 		}
 	})
 	b.Run("update-run-results-and-errors", func(b *testing.B) {
 		b.ReportAllocs()
 		for range b.N {
-			built := report.Build(input)
-			benchmarkReportSink = report.WithRunResultsAndErrors(built, results, errors)
+			built := analysis.Analyze(withGeneratedProbes(input))
+			benchmarkReportSink = analysis.WithRunResultsAndErrors(built, results, errors)
 		}
 	})
 }
@@ -70,7 +70,7 @@ func BenchmarkReportBuildMetricSelection(b *testing.B) {
 			input.Coverage = test.coverage
 			b.ReportAllocs()
 			for range b.N {
-				benchmarkReportSink = report.Build(input)
+				benchmarkReportSink = analysis.Analyze(withGeneratedProbes(input))
 			}
 		})
 	}
@@ -86,13 +86,13 @@ func BenchmarkReportBuildMaskingDecisionParallelism(b *testing.B) {
 			input.MaxMaskingDecisionWorkers = workers
 			b.ReportAllocs()
 			for range b.N {
-				benchmarkReportSink = report.Build(input)
+				benchmarkReportSink = analysis.Analyze(withGeneratedProbes(input))
 			}
 		})
 	}
 }
 
-func reportBuildBenchmarkInput() report.Input {
+func reportBuildBenchmarkInput() analysis.Input {
 	const (
 		decisionCount  = 24
 		conditionCount = 8
@@ -134,7 +134,7 @@ func reportBuildBenchmarkInput() report.Input {
 			})
 		}
 	}
-	return report.Input{
+	return analysis.Input{
 		ModulePath: "example.com/benchmark", Coverage: config.AllCoverage(),
 		Decisions: decisions, Evaluations: evaluations, RunStatus: cover.RunPassed, Complete: true,
 		PackageStatuses:    map[string]string{packagePath: "passed"},

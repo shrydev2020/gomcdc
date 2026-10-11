@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
 	"github.com/shrydev2020/gomcdc/v2/internal/report"
 	"github.com/shrydev2020/gomcdc/v2/internal/resultfile"
 )
@@ -67,13 +68,13 @@ func TestMeasure(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if saved.Settings.GOFLAGS != "-tags=saved_result_fixture" || !saved.Settings.IncludeTests || !saved.Settings.Strict || !reflect.DeepEqual(saved.Settings.GoTestArgs, []string{"-run", "TestMeasure"}) || len(saved.Settings.SourceDigests) != 2 {
-				t.Fatalf("wrong saved settings: %+v", saved.Settings)
+			if saved.Measurement.Runs[0].Settings.GOFLAGS != "-tags=saved_result_fixture" || !saved.Measurement.Runs[0].Settings.IncludeTests || !saved.Measurement.Runs[0].Settings.Strict || !reflect.DeepEqual(saved.Measurement.Runs[0].Settings.GoTestArgs, []string{"-run", "TestMeasure"}) || len(saved.Measurement.Runs[0].Settings.SourceDigests) != 2 {
+				t.Fatalf("wrong saved settings: %+v", saved.Measurement.Runs[0].Settings)
 			}
-			if test.failure != "" && (saved.Report.Run.Results.Test != report.ResultFailed || saved.Report.Run.Results.Threshold != report.ResultFailed || saved.Settings.FailUnder["decision"] != 100) {
+			if test.failure != "" && (saved.Report.Run.Results.Test != analysis.ResultFailed || saved.Report.Run.Results.Threshold != analysis.ResultFailed || saved.Measurement.Runs[0].Settings.FailUnder["decision"] != 100) {
 				t.Fatalf("failed outcomes were not preserved: %+v", saved.Report.Run)
 			}
-			if saved.Settings.ModuleConfigDigests["go.mod"] != resultfile.Digest([]byte("module example.test/saved\n\ngo 1.26\n")) {
+			if saved.Measurement.Runs[0].Settings.ModuleConfigDigests["go.mod"] != resultfile.Digest([]byte("module example.test/saved\n\ngo 1.26\n")) {
 				t.Fatal("original module configuration was not recorded")
 			}
 			// Remove both the checkout and Go from PATH before using report. This
@@ -182,8 +183,8 @@ func TestSavedReportFromWorkspaceRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if saved.Settings.WorkingDirectory != ".." || saved.Settings.ModuleConfigDigests["go.work"] != resultfile.Digest([]byte("go 1.26\n\nuse ./module\n")) {
-		t.Fatalf("workspace settings lost: %+v", saved.Settings)
+	if saved.Measurement.Runs[0].Settings.WorkingDirectory != ".." || saved.Measurement.Runs[0].Settings.ModuleConfigDigests["go.work"] != resultfile.Digest([]byte("go 1.26\n\nuse ./module\n")) {
+		t.Fatalf("workspace settings lost: %+v", saved.Measurement.Runs[0].Settings)
 	}
 }
 

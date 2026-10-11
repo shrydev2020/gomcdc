@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/shrydev2020/gomcdc/v2/internal/report"
+	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
 )
 
 func TestEvaluationTestIDsIncludeParallelSubtestsWorkersAndCleanup(t *testing.T) {
@@ -90,7 +90,7 @@ func ExampleCheck() {
 				args = append([]string{"--include-tests"}, args...)
 			}
 			built, stderr, code := runFixture(t, root, args...)
-			if code != ExitSuccess || built.Run.Results.Strict != report.ResultPassed {
+			if code != ExitSuccess || built.Run.Results.Strict != analysis.ResultPassed {
 				t.Fatalf("attribution failed: exit=%d results=%+v\n%s", code, built.Run.Results, stderr)
 			}
 			got := make(map[string]map[bool]bool)

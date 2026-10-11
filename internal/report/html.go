@@ -7,27 +7,27 @@ import (
 	"io"
 	"strings"
 
+	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
 	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
 )
 
 type htmlMetric struct {
 	Name, Short string
-	Summary     MetricSummary
-}
-
-// WriteHTML writes one self-contained static HTML report.
-func WriteHTML(w io.Writer, input Input) error {
-	built := WithSourceViews(Build(input), input.SourceFiles)
-	return WriteHTMLReport(w, built)
+	Summary     analysis.MetricSummary
 }
 
 // WriteHTMLReport renders an already-built report without consulting the
 // measurement input or executing additional analysis, builds, or tests.
-func WriteHTMLReport(w io.Writer, report Report) error {
+func WriteHTMLReport(w io.Writer, report analysis.Result) error {
 	return writeHTMLReport(w, report)
 }
 
-func writeHTMLReport(w io.Writer, value Report) error {
+func writeHTMLReport(w io.Writer, value analysis.Result) error {
+	return WriteHTMLWithSources(w, value, nil)
+}
+
+// WriteHTMLWithSources decorates an existing analysis with immutable sources.
+func WriteHTMLWithSources(w io.Writer, value analysis.Result, sources []analysis.SourceFileInput) error {
 	t, err := template.New("report").Funcs(template.FuncMap{
 		"metrics": htmlMetrics, "pct": htmlPercentage, "class": htmlMetricClass,
 		"triageMetrics": htmlTriageMetrics, "metricStatus": htmlMetricStatus,
@@ -37,7 +37,7 @@ func writeHTMLReport(w io.Writer, value Report) error {
 	if err != nil {
 		return fmt.Errorf("parse HTML report template: %w", err)
 	}
-	if err := t.Execute(w, value); err != nil {
+	if err := t.Execute(w, sourceView(value, sources)); err != nil {
 		return fmt.Errorf("render HTML report: %w", err)
 	}
 	return nil
@@ -101,7 +101,7 @@ func sourceMetricMatches(annotationMetric, viewMetric string) bool {
 	}
 }
 
-func htmlMetrics(s Summary) []htmlMetric {
+func htmlMetrics(s analysis.Summary) []htmlMetric {
 	return []htmlMetric{
 		{"Statement", "Stmt", s.Statement}, {"Function", "Func", s.Function}, {"Decision", "Decision", s.Decision},
 		{"Switch clause body", "Sw body", s.SwitchClauseBody}, {"Type switch clause body", "Type body", s.TypeSwitchClauseBody},
@@ -111,7 +111,7 @@ func htmlMetrics(s Summary) []htmlMetric {
 	}
 }
 
-func htmlTriageMetrics(s Summary) []htmlMetric {
+func htmlTriageMetrics(s analysis.Summary) []htmlMetric {
 	return []htmlMetric{
 		{"Statement", "Stmt", s.Statement}, {"Function", "Func", s.Function},
 		{"Decision", "Decision", s.Decision}, {"Condition", "Condition", s.Condition},
@@ -119,7 +119,7 @@ func htmlTriageMetrics(s Summary) []htmlMetric {
 	}
 }
 
-func htmlMetricStatus(metric MetricSummary) string {
+func htmlMetricStatus(metric analysis.MetricSummary) string {
 	switch {
 	case !metric.Enabled:
 		return "disabled"
@@ -142,7 +142,7 @@ func htmlMetricStatus(metric MetricSummary) string {
 	}
 }
 
-func htmlSummaryGaps(summary Summary) int {
+func htmlSummaryGaps(summary analysis.Summary) int {
 	gaps := 0
 	for _, metric := range htmlMetrics(summary) {
 		if !metric.Summary.Enabled {
@@ -154,7 +154,7 @@ func htmlSummaryGaps(summary Summary) int {
 	return gaps
 }
 
-func htmlSummaryState(summary Summary) string {
+func htmlSummaryState(summary analysis.Summary) string {
 	if htmlSummaryGaps(summary) > 0 {
 		return "attention"
 	}
@@ -165,13 +165,13 @@ func htmlSummaryState(summary Summary) string {
 	}
 	return "empty"
 }
-func htmlPercentage(m MetricSummary) string {
+func htmlPercentage(m analysis.MetricSummary) string {
 	if m.Percentage == nil {
 		return "n/a"
 	}
 	return fmt.Sprintf("%.2f%%", *m.Percentage)
 }
-func htmlMetricClass(m MetricSummary) string {
+func htmlMetricClass(m analysis.MetricSummary) string {
 	switch {
 	case !m.Enabled:
 		return "disabled"

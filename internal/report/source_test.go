@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
 	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
 )
 
@@ -81,10 +82,10 @@ func TestHTMLSourceSegmentsFilterMetricProjection(t *testing.T) {
 
 func TestSourceAnnotationsUseConditionOccurrenceIDs(t *testing.T) {
 	location := cover.SourceLocation{File: "p.go", StartOffset: 0, EndOffset: 1}
-	file := FileReport{Functions: []FunctionReport{{Decisions: []DecisionReport{{
+	file := analysis.FileReport{Functions: []analysis.FunctionReport{{Decisions: []analysis.DecisionReport{{
 		DecisionID: "decision-1",
-		Conditions: []ConditionReport{
-			{ConditionID: "0x0000000000000001", Index: 0, Expression: "a", Location: location, True: true, NotEvaluated: 2, MCDCUnique: MCDCConditionReport{Status: "not-covered"}, MCDCMasking: MCDCConditionReport{Status: "covered"}},
+		Conditions: []analysis.ConditionReport{
+			{ConditionID: "0x0000000000000001", Index: 0, Expression: "a", Location: location, True: true, NotEvaluated: 2, MCDCUnique: analysis.MCDCConditionReport{Status: "not-covered"}, MCDCMasking: analysis.MCDCConditionReport{Status: "covered"}},
 			{ConditionID: "0x0000000000000002", Index: 1, Expression: "b", Location: location},
 		},
 	}}}}}
@@ -124,7 +125,7 @@ func TestSourceAnnotationsUseConditionOccurrenceIDs(t *testing.T) {
 
 func TestSourceMappingFailureProducesDiagnostic(t *testing.T) {
 	location := cover.SourceLocation{File: "p.go", Start: cover.Position{Line: 9, Column: 1}, End: cover.Position{Line: 9, Column: 2}}
-	file := FileReport{Functions: []FunctionReport{{Decisions: []DecisionReport{{
+	file := analysis.FileReport{Functions: []analysis.FunctionReport{{Decisions: []analysis.DecisionReport{{
 		DecisionID: "decision-1", Location: location,
 	}}}}}
 	annotations := sourceAnnotations(file, []byte("a\n"))

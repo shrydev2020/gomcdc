@@ -1,0 +1,1364 @@
+{
+  "$defs": {
+    "c0.AcceptedBlockEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "BlockIndex": {
+          "type": "integer"
+        },
+        "Count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "Observed": {
+          "type": "boolean"
+        },
+        "Statements": {
+          "items": {
+            "$ref": "#/$defs/c0.AcceptedStatementEvidence"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "BlockIndex",
+        "Count",
+        "Observed",
+        "Statements"
+      ],
+      "type": "object"
+    },
+    "c0.AcceptedCoverEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "Excluded": {
+          "items": {
+            "$ref": "#/$defs/c0.ExcludedBlock"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "Mode": {
+          "type": "string"
+        },
+        "Sources": {
+          "items": {
+            "$ref": "#/$defs/c0.AcceptedSourceEvidence"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "Mode",
+        "Sources",
+        "Excluded"
+      ],
+      "type": "object"
+    },
+    "c0.AcceptedSourceEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "Blocks": {
+          "items": {
+            "$ref": "#/$defs/c0.AcceptedBlockEvidence"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "Inventory": {
+          "$ref": "#/$defs/c0.FileInventory"
+        },
+        "OriginalPath": {
+          "type": "string"
+        },
+        "OriginalSource": {
+          "contentEncoding": "base64",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "PackagePath": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "PackagePath",
+        "OriginalPath",
+        "OriginalSource",
+        "Inventory",
+        "Blocks"
+      ],
+      "type": "object"
+    },
+    "c0.AcceptedStatementEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "Count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "Observed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "Count",
+        "Observed"
+      ],
+      "type": "object"
+    },
+    "c0.ExcludedBlock": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "original_path": {
+          "type": "string"
+        },
+        "original_range": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/c0.SourceRange"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "profile_path": {
+          "type": "string"
+        },
+        "profile_range": {
+          "$ref": "#/$defs/c0.SourceRange"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "statements": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "profile_path",
+        "profile_range",
+        "statements",
+        "count",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "c0.FileInventory": {
+      "additionalProperties": false,
+      "properties": {
+        "blocks": {
+          "items": {
+            "$ref": "#/$defs/c0.InventoryBlock"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "blocks"
+      ],
+      "type": "object"
+    },
+    "c0.InventoryBlock": {
+      "additionalProperties": false,
+      "properties": {
+        "cover_statements": {
+          "type": "integer"
+        },
+        "physical_range": {
+          "$ref": "#/$defs/c0.SourceRange"
+        },
+        "profile_anchors": {
+          "items": {
+            "$ref": "#/$defs/c0.Position"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "profile_file": {
+          "type": "string"
+        },
+        "profile_range": {
+          "$ref": "#/$defs/c0.SourceRange"
+        },
+        "statement_units": {
+          "items": {
+            "$ref": "#/$defs/c0.InventoryStatement"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "statements": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "physical_range",
+        "profile_file",
+        "profile_range",
+        "profile_anchors",
+        "statements"
+      ],
+      "type": "object"
+    },
+    "c0.InventoryStatement": {
+      "additionalProperties": false,
+      "properties": {
+        "physical_position": {
+          "$ref": "#/$defs/c0.Position"
+        },
+        "profile_file": {
+          "type": "string"
+        },
+        "profile_position": {
+          "$ref": "#/$defs/c0.Position"
+        }
+      },
+      "required": [
+        "physical_position",
+        "profile_file",
+        "profile_position"
+      ],
+      "type": "object"
+    },
+    "c0.Position": {
+      "additionalProperties": false,
+      "properties": {
+        "column": {
+          "type": "integer"
+        },
+        "line": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "line",
+        "column"
+      ],
+      "type": "object"
+    },
+    "c0.SourceRange": {
+      "additionalProperties": false,
+      "properties": {
+        "end": {
+          "$ref": "#/$defs/c0.Position"
+        },
+        "start": {
+          "$ref": "#/$defs/c0.Position"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "type": "object"
+    },
+    "coverage.BooleanExpression": {
+      "additionalProperties": false,
+      "properties": {
+        "conditionIndex": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "constant": {
+          "type": "boolean"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "left": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/coverage.BooleanExpression"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "right": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/coverage.BooleanExpression"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "coverage.ClauseMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "decisionIds": {
+          "items": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "expressions": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "function": {
+          "type": "string"
+        },
+        "functionLocation": {
+          "$ref": "#/$defs/coverage.SourceLocation"
+        },
+        "groupId": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "index": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "location": {
+          "$ref": "#/$defs/coverage.SourceLocation"
+        },
+        "modulePath": {
+          "type": "string"
+        },
+        "package": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "switchId": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "types": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "groupId",
+        "switchId",
+        "modulePath",
+        "package",
+        "function",
+        "functionLocation",
+        "kind",
+        "role",
+        "index",
+        "location"
+      ],
+      "type": "object"
+    },
+    "coverage.ConditionMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "expression": {
+          "type": "string"
+        },
+        "id": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "index": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "location": {
+          "$ref": "#/$defs/coverage.SourceLocation"
+        }
+      },
+      "required": [
+        "id",
+        "index",
+        "expression",
+        "location"
+      ],
+      "type": "object"
+    },
+    "coverage.DecisionEvaluation": {
+      "additionalProperties": false,
+      "properties": {
+        "conditions": {
+          "contentEncoding": "base64",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "decisionId": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "evaluationId": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "packagePath": {
+          "type": "string"
+        },
+        "processId": {
+          "type": "integer"
+        },
+        "result": {
+          "type": "boolean"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "status": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "testId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "decisionId",
+        "evaluationId",
+        "testId",
+        "conditions",
+        "result",
+        "status"
+      ],
+      "type": "object"
+    },
+    "coverage.DecisionMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "Conditions": {
+          "items": {
+            "$ref": "#/$defs/coverage.ConditionMetadata"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "Expression": {
+          "type": "string"
+        },
+        "ExpressionTree": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/coverage.BooleanExpression"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "Function": {
+          "type": "string"
+        },
+        "FunctionLocation": {
+          "$ref": "#/$defs/coverage.SourceLocation"
+        },
+        "ID": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "Kind": {
+          "type": "string"
+        },
+        "Location": {
+          "$ref": "#/$defs/coverage.SourceLocation"
+        },
+        "ModulePath": {
+          "type": "string"
+        },
+        "Package": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ID",
+        "ModulePath",
+        "Package",
+        "Function",
+        "FunctionLocation",
+        "Kind",
+        "Location",
+        "Expression",
+        "Conditions",
+        "ExpressionTree"
+      ],
+      "type": "object"
+    },
+    "coverage.DecisionNotEvaluatedObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "causeDecisionId": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "causeEvaluationId": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "decisionId": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "packagePath": {
+          "type": "string"
+        },
+        "processId": {
+          "type": "integer"
+        },
+        "runId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "decisionId",
+        "causeDecisionId",
+        "causeEvaluationId"
+      ],
+      "type": "object"
+    },
+    "coverage.NoMatchMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "function": {
+          "type": "string"
+        },
+        "functionLocation": {
+          "$ref": "#/$defs/coverage.SourceLocation"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "location": {
+          "$ref": "#/$defs/coverage.SourceLocation"
+        },
+        "modulePath": {
+          "type": "string"
+        },
+        "package": {
+          "type": "string"
+        },
+        "switchId": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "switchId",
+        "modulePath",
+        "package",
+        "function",
+        "functionLocation",
+        "kind",
+        "location"
+      ],
+      "type": "object"
+    },
+    "coverage.Position": {
+      "additionalProperties": false,
+      "properties": {
+        "column": {
+          "type": "integer"
+        },
+        "line": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "line",
+        "column"
+      ],
+      "type": "object"
+    },
+    "coverage.SourceLocation": {
+      "additionalProperties": false,
+      "properties": {
+        "end": {
+          "$ref": "#/$defs/coverage.Position"
+        },
+        "file": {
+          "type": "string"
+        },
+        "start": {
+          "$ref": "#/$defs/coverage.Position"
+        }
+      },
+      "required": [
+        "file",
+        "start",
+        "end"
+      ],
+      "type": "object"
+    },
+    "evidence.ProducerOutcome": {
+      "additionalProperties": false,
+      "properties": {
+        "completeness": {
+          "type": "string"
+        },
+        "integrity": {
+          "type": "string"
+        },
+        "mapping": {
+          "type": "string"
+        },
+        "producer": {
+          "type": "string"
+        },
+        "usability": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "producer",
+        "integrity",
+        "completeness",
+        "mapping",
+        "usability"
+      ],
+      "type": "object"
+    },
+    "measurement.Archive": {
+      "additionalProperties": false,
+      "properties": {
+        "plan": {
+          "$ref": "#/$defs/measurement.Plan"
+        },
+        "runs": {
+          "items": {
+            "$ref": "#/$defs/measurement.Run"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "plan",
+        "runs"
+      ],
+      "type": "object"
+    },
+    "measurement.Diagnostic": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "package": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "phase": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "phase",
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "measurement.MeasurementRun": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "packages": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "run": {
+          "$ref": "#/$defs/measurement.TestRun"
+        }
+      },
+      "required": [
+        "name",
+        "run",
+        "packages"
+      ],
+      "type": "object"
+    },
+    "measurement.Plan": {
+      "additionalProperties": false,
+      "properties": {
+        "byteRanges": {
+          "additionalProperties": {
+            "additionalProperties": false,
+            "properties": {
+              "end": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "start": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ],
+            "type": "object"
+          },
+          "type": "object"
+        },
+        "clauses": {
+          "items": {
+            "$ref": "#/$defs/coverage.ClauseMetadata"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "decisions": {
+          "items": {
+            "$ref": "#/$defs/coverage.DecisionMetadata"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "definition": {
+          "const": "go-control-decisions/occurrences/unique-equal-state/masking-joint/v1"
+        },
+        "module": {
+          "type": "string"
+        },
+        "noMatches": {
+          "items": {
+            "$ref": "#/$defs/coverage.NoMatchMetadata"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "settings": {
+          "$ref": "#/$defs/measurement.Settings"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/measurement.Source"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "toolVersion": {
+          "type": "string"
+        },
+        "unknownSources": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "definition",
+        "toolVersion",
+        "module",
+        "settings",
+        "sources",
+        "decisions",
+        "clauses",
+        "noMatches",
+        "unknownSources",
+        "byteRanges"
+      ],
+      "type": "object"
+    },
+    "measurement.Probes": {
+      "additionalProperties": false,
+      "properties": {
+        "clauseBodies": {
+          "items": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "clauseSelections": {
+          "items": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "decisions": {
+          "items": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "noMatches": {
+          "items": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "decisions",
+        "clauseBodies",
+        "clauseSelections",
+        "noMatches"
+      ],
+      "type": "object"
+    },
+    "measurement.Run": {
+      "additionalProperties": false,
+      "properties": {
+        "astPackages": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "cover": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/c0.AcceptedCoverEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "diagnostics": {
+          "items": {
+            "$ref": "#/$defs/measurement.Diagnostic"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "executions": {
+          "items": {
+            "$ref": "#/$defs/measurement.MeasurementRun"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "failureKind": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "packages": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "probes": {
+          "$ref": "#/$defs/measurement.Probes"
+        },
+        "producers": {
+          "items": {
+            "$ref": "#/$defs/evidence.ProducerOutcome"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "results": {
+          "$ref": "#/$defs/measurement.RunResults"
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtimecov.RecordedEvidence"
+        },
+        "runtimeId": {
+          "type": "string"
+        },
+        "settings": {
+          "$ref": "#/$defs/measurement.Settings"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "runtimeId",
+        "settings",
+        "status",
+        "failureKind",
+        "complete",
+        "results",
+        "mode",
+        "executions",
+        "producers",
+        "packages",
+        "astPackages",
+        "probes",
+        "runtime",
+        "cover",
+        "diagnostics"
+      ],
+      "type": "object"
+    },
+    "measurement.RunResults": {
+      "additionalProperties": false,
+      "properties": {
+        "integrity": {
+          "type": "string"
+        },
+        "measurement": {
+          "type": "string"
+        },
+        "strict": {
+          "type": "string"
+        },
+        "test": {
+          "type": "string"
+        },
+        "threshold": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "test",
+        "measurement",
+        "integrity",
+        "strict",
+        "threshold"
+      ],
+      "type": "object"
+    },
+    "measurement.Settings": {
+      "additionalProperties": false,
+      "properties": {
+        "coverage": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "excludes": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "failUnder": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "goEnvironment": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "goFlags": {
+          "type": "string"
+        },
+        "goTestArgs": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "includeTests": {
+          "type": "boolean"
+        },
+        "invocationId": {
+          "type": "string"
+        },
+        "moduleConfigDigests": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "packagePatterns": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "packages": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "sourceDigests": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "strict": {
+          "type": "boolean"
+        },
+        "timeout": {
+          "type": "string"
+        },
+        "workingDirectory": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workingDirectory",
+        "packagePatterns",
+        "packages",
+        "coverage",
+        "goTestArgs",
+        "goFlags",
+        "goEnvironment",
+        "includeTests",
+        "excludes",
+        "timeout",
+        "strict",
+        "failUnder",
+        "sourceDigests",
+        "moduleConfigDigests"
+      ],
+      "type": "object"
+    },
+    "measurement.Source": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "contentEncoding": "base64",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "packagePath": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "packagePath",
+        "path",
+        "content",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "measurement.TestRun": {
+      "additionalProperties": false,
+      "properties": {
+        "complete": {
+          "type": "boolean"
+        },
+        "failureKind": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "failureKind",
+        "complete"
+      ],
+      "type": "object"
+    },
+    "runtimecov.Diagnostic": {
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer"
+        },
+        "message": {
+          "type": "string"
+        },
+        "severity": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "message",
+        "severity"
+      ],
+      "type": "object"
+    },
+    "runtimecov.ProcessFile": {
+      "additionalProperties": false,
+      "properties": {
+        "packagePath": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "processId": {
+          "type": "integer"
+        },
+        "runId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "runtimecov.RecordedClauseEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "AlternativeIndex": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "AlternativeKnown": {
+          "type": "boolean"
+        },
+        "ClauseID": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "Event": {
+          "type": "string"
+        },
+        "PackagePath": {
+          "type": "string"
+        },
+        "ProcessID": {
+          "type": "integer"
+        },
+        "RunID": {
+          "type": "string"
+        },
+        "SwitchID": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "RunID",
+        "PackagePath",
+        "ProcessID",
+        "SwitchID",
+        "ClauseID",
+        "Event",
+        "AlternativeIndex",
+        "AlternativeKnown"
+      ],
+      "type": "object"
+    },
+    "runtimecov.RecordedEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "clauseEvents": {
+          "items": {
+            "$ref": "#/$defs/runtimecov.RecordedClauseEvent"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "diagnostics": {
+          "items": {
+            "$ref": "#/$defs/runtimecov.Diagnostic"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "evaluations": {
+          "items": {
+            "$ref": "#/$defs/coverage.DecisionEvaluation"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "files": {
+          "items": {
+            "$ref": "#/$defs/runtimecov.ProcessFile"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "notEvaluatedDecisions": {
+          "items": {
+            "$ref": "#/$defs/coverage.DecisionNotEvaluatedObservation"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "evaluations",
+        "clauseEvents"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/shrydev2020/gomcdc/schema/measurement-v1.0.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "format": {
+      "const": "gomcdc-measurement"
+    },
+    "measurement": {
+      "$ref": "#/$defs/measurement.Archive"
+    },
+    "sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "version": {
+      "const": "1.0"
+    }
+  },
+  "required": [
+    "format",
+    "version",
+    "sha256",
+    "measurement"
+  ],
+  "title": "gomcdc measurement archive 1.0",
+  "type": "object"
+}

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/shrydev2020/gomcdc/v2/internal/report"
+	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
 )
 
 func TestHTMLOutputRequiresDirectory(t *testing.T) {
@@ -25,8 +25,8 @@ func TestWriteHTMLReportCreatesIndex(t *testing.T) {
 	t.Parallel()
 	directory := t.TempDir()
 	opts := options{format: "html", output: "coverage-html"}
-	input := report.Input{ModulePath: "example.test/m"}
-	if err := writeReport(opts, report.Build(input), directory, &bytes.Buffer{}); err != nil {
+	input := analysis.Input{ModulePath: "example.test/m"}
+	if err := writeReport(opts, analysis.Analyze(input), directory, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	contents, err := os.ReadFile(filepath.Join(directory, "coverage-html", "index.html"))
@@ -159,14 +159,14 @@ func TestThresholdRejectsDisabledMetric(t *testing.T) {
 
 func TestThresholdFailsForEmptyDenominator(t *testing.T) {
 	t.Parallel()
-	if !belowThreshold(report.MetricSummary{Enabled: true}, 0) {
+	if !belowThreshold(analysis.MetricSummary{Enabled: true}, 0) {
 		t.Fatal("empty denominator passed a threshold")
 	}
 }
 
 func TestThresholdUsesExactCountsRatherThanRoundedPercentage(t *testing.T) {
 	t.Parallel()
-	metric := report.MetricSummary{Enabled: true, Covered: 2, Total: 3}
+	metric := analysis.MetricSummary{Enabled: true, Covered: 2, Total: 3}
 	if !belowThreshold(metric, 66.669) {
 		t.Fatal("2/3 incorrectly passed 66.669% because of display rounding")
 	}
@@ -179,19 +179,19 @@ func TestEveryCanonicalMetricHasAnIndependentThreshold(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name    string
-		summary report.Summary
+		summary analysis.Summary
 	}{
-		{"statement", report.Summary{Statement: passingMetric()}},
-		{"function", report.Summary{Function: passingMetric()}},
-		{"decision", report.Summary{Decision: passingMetric()}},
-		{"switch-clause-body", report.Summary{SwitchClauseBody: passingMetric()}},
-		{"type-switch-clause-body", report.Summary{TypeSwitchClauseBody: passingMetric()}},
-		{"select-clause-body", report.Summary{SelectClauseBody: passingMetric()}},
-		{"switch-clause-selection", report.Summary{SwitchClauseSelection: passingMetric()}},
-		{"type-switch-clause-selection", report.Summary{TypeSwitchClauseSelection: passingMetric()}},
-		{"condition", report.Summary{Condition: passingMetric()}},
-		{"mcdc-unique", report.Summary{MCDCUnique: passingMetric()}},
-		{"mcdc-masking", report.Summary{MCDCMasking: passingMetric()}},
+		{"statement", analysis.Summary{Statement: passingMetric()}},
+		{"function", analysis.Summary{Function: passingMetric()}},
+		{"decision", analysis.Summary{Decision: passingMetric()}},
+		{"switch-clause-body", analysis.Summary{SwitchClauseBody: passingMetric()}},
+		{"type-switch-clause-body", analysis.Summary{TypeSwitchClauseBody: passingMetric()}},
+		{"select-clause-body", analysis.Summary{SelectClauseBody: passingMetric()}},
+		{"switch-clause-selection", analysis.Summary{SwitchClauseSelection: passingMetric()}},
+		{"type-switch-clause-selection", analysis.Summary{TypeSwitchClauseSelection: passingMetric()}},
+		{"condition", analysis.Summary{Condition: passingMetric()}},
+		{"mcdc-unique", analysis.Summary{MCDCUnique: passingMetric()}},
+		{"mcdc-masking", analysis.Summary{MCDCMasking: passingMetric()}},
 	}
 	for _, test := range tests {
 		test := test
@@ -205,7 +205,7 @@ func TestEveryCanonicalMetricHasAnIndependentThreshold(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parseOptions: %v", err)
 			}
-			failures := thresholdFailures(opts, report.Summary{})
+			failures := thresholdFailures(opts, analysis.Summary{})
 			if len(failures) != 1 || !strings.Contains(failures[0], test.name) {
 				t.Fatalf("threshold flag did not produce its own failure: %v", failures)
 			}
@@ -216,7 +216,7 @@ func TestEveryCanonicalMetricHasAnIndependentThreshold(t *testing.T) {
 	}
 }
 
-func passingMetric() report.MetricSummary {
+func passingMetric() analysis.MetricSummary {
 	percentage := 100.0
-	return report.MetricSummary{Enabled: true, Covered: 1, Total: 1, Percentage: &percentage}
+	return analysis.MetricSummary{Enabled: true, Covered: 1, Total: 1, Percentage: &percentage}
 }

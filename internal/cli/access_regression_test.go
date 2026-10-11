@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
 	"github.com/shrydev2020/gomcdc/v2/internal/c0"
-	"github.com/shrydev2020/gomcdc/v2/internal/report"
 )
 
 func TestAccessReportAllMetricsIdentifiesMissingExpiredCase(t *testing.T) {
@@ -40,10 +40,10 @@ func TestAccess(t *testing.T) {
 	if code != ExitSuccess {
 		t.Fatalf("all-metric access report exit=%d\n%s", code, stderr)
 	}
-	if built.Run.Results.Integrity != report.ResultPassed || built.Run.Results.Strict != report.ResultPassed {
+	if built.Run.Results.Integrity != analysis.ResultPassed || built.Run.Results.Strict != analysis.ResultPassed {
 		t.Fatalf("access evidence was not fully accepted: %#v", built.Run.Results)
 	}
-	for name, metric := range map[string]report.MetricSummary{
+	for name, metric := range map[string]analysis.MetricSummary{
 		"statement": built.Summary.Statement, "function": built.Summary.Function,
 		"decision": built.Summary.Decision, "condition": built.Summary.Condition,
 		"unique": built.Summary.MCDCUnique, "masking": built.Summary.MCDCMasking,

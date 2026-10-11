@@ -125,6 +125,10 @@ type Options struct {
 	// IncludeEmptyFunctions includes AST functions with no owned profile
 	// statements. They contribute one uncovered function and zero statements.
 	IncludeEmptyFunctions bool
+	// SeparateStatements projects each original statement unit independently.
+	// Accepted-evidence merges use this to keep source ranges identical across
+	// runs even when adjacent statements have different counts or availability.
+	SeparateStatements bool
 }
 
 // Counts is a coverage numerator and denominator.

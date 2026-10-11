@@ -3,20 +3,21 @@ package cli
 import (
 	"context"
 
+	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
 	"github.com/shrydev2020/gomcdc/v2/internal/backend"
 	"github.com/shrydev2020/gomcdc/v2/internal/c0"
 	"github.com/shrydev2020/gomcdc/v2/internal/config"
 	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
+	"github.com/shrydev2020/gomcdc/v2/internal/evidence"
 	"github.com/shrydev2020/gomcdc/v2/internal/gotest"
 	"github.com/shrydev2020/gomcdc/v2/internal/loader"
 	"github.com/shrydev2020/gomcdc/v2/internal/mcdc"
-	"github.com/shrydev2020/gomcdc/v2/internal/report"
 )
 
-// reportAssembly is the validated boundary between measurement orchestration
-// and report construction. It contains no workspace or writer ownership: the
+// analysisAssembly is the validated boundary between measurement orchestration
+// and coverage analysis.It contains no workspace or writer ownership: the
 // caller owns those resources and supplies only their results here.
-type reportAssembly struct {
+type analysisAssembly struct {
 	context                context.Context
 	toolVersion            string
 	loaded                 loader.Result
@@ -26,24 +27,24 @@ type reportAssembly struct {
 	decisions              []cover.DecisionMetadata
 	clauses                []cover.ClauseMetadata
 	noMatches              []cover.NoMatchMetadata
-	evidence               acceptedRuntimeEvidence
+	evidence               evidence.Runtime
 	c0                     *c0.Report
 	testResult             *gotest.Result
 	measurementName        string
 	standardCoverRequested bool
 	astRequested           bool
-	producerOutcomes       []report.ProducerOutcome
+	producerOutcomes       []analysis.ProducerOutcome
 	instrumentationUnknown int
-	results                report.RunResults
+	results                analysis.RunResults
 	interrupted            bool
-	errors                 []report.ReportError
+	errors                 []analysis.ReportError
 	measurementDiagnostics []measurementDiagnostic
 }
 
-// assembleReportInput turns measurement results into the canonical report
+// assembleAnalysisInput turns measurement results into the canonical analysis
 // input. Package status merging and measurement-mode selection belong here so
 // runCoverage remains responsible for sequencing and exit-code policy only.
-func assembleReportInput(assembly reportAssembly) report.Input {
+func assembleAnalysisInput(assembly analysisAssembly) analysis.Input {
 	overallStatus := cover.RunPassed
 	overallFailure := cover.RunFailureNone
 	if assembly.testResult != nil {
@@ -61,16 +62,16 @@ func assembleReportInput(assembly reportAssembly) report.Input {
 		measurementName = requestedMeasurementName(assembly.standardCoverRequested, assembly.astRequested)
 	}
 
-	errors := append([]report.ReportError(nil), assembly.errors...)
+	errors := append([]analysis.ReportError(nil), assembly.errors...)
 	for _, diagnostic := range assembly.measurementDiagnostics {
-		errors = append(errors, report.ReportError{
+		errors = append(errors, analysis.ReportError{
 			Phase: diagnostic.phase, Code: diagnostic.code, Message: diagnostic.message,
 		})
 	}
 	errors = append(errors, measurementRunErrors(measurementName, assembly.testResult)...)
 	results := assembly.results
 
-	return report.Input{
+	return analysis.Input{
 		Context:                assembly.context,
 		ToolVersion:            assembly.toolVersion,
 		ModulePath:             assembly.loaded.ModulePath,
@@ -94,36 +95,36 @@ func assembleReportInput(assembly reportAssembly) report.Input {
 		BackendProducers:       backend.OrchestratedProducers(),
 		InstrumentationUnknown: assembly.instrumentationUnknown,
 		Errors:                 errors,
-		Complete:               overallStatus == cover.RunPassed && results.Measurement == report.ResultPassed && results.Integrity == report.ResultPassed,
+		Complete:               overallStatus == cover.RunPassed && results.Measurement == analysis.ResultPassed && results.Integrity == analysis.ResultPassed,
 		PackageStatuses:        packageStatuses,
 		ASTPackageStatuses:     astPackageStatuses,
 	}
 }
 
-func testResultStatus(result *gotest.Result) report.ResultStatus {
+func testResultStatus(result *gotest.Result) analysis.ResultStatus {
 	if result == nil {
-		return report.ResultNotRun
+		return analysis.ResultNotRun
 	}
 	switch result.Status {
 	case cover.RunPassed:
-		return report.ResultPassed
+		return analysis.ResultPassed
 	case cover.RunFailed:
-		return report.ResultFailed
+		return analysis.ResultFailed
 	case cover.RunTimeout:
-		return report.ResultTimeout
+		return analysis.ResultTimeout
 	default:
-		return report.ResultNotRun
+		return analysis.ResultNotRun
 	}
 }
 
-func passFailResult(passed bool) report.ResultStatus {
+func passFailResult(passed bool) analysis.ResultStatus {
 	if passed {
-		return report.ResultPassed
+		return analysis.ResultPassed
 	}
-	return report.ResultFailed
+	return analysis.ResultFailed
 }
 
-func measurementRunErrors(name string, result *gotest.Result) []report.ReportError {
+func measurementRunErrors(name string, result *gotest.Result) []analysis.ReportError {
 	if result == nil || result.Status == cover.RunPassed {
 		return nil
 	}
@@ -134,18 +135,18 @@ func measurementRunErrors(name string, result *gotest.Result) []report.ReportErr
 	} else if result.Status == cover.RunTimeout {
 		message = name + " go test timed out"
 	}
-	return []report.ReportError{{Phase: "test", Code: code, Message: message}}
+	return []analysis.ReportError{{Phase: "test", Code: code, Message: message}}
 }
 
-func measurementMode(standardCoverRequested, astRequested bool) report.MeasurementMode {
+func measurementMode(standardCoverRequested, astRequested bool) analysis.MeasurementMode {
 	switch {
 	case standardCoverRequested:
 		if astRequested {
-			return report.MeasurementSingleRun
+			return analysis.MeasurementSingleRun
 		}
-		return report.MeasurementStandardCover
+		return analysis.MeasurementStandardCover
 	default:
-		return report.MeasurementSingleRun
+		return analysis.MeasurementSingleRun
 	}
 }
 

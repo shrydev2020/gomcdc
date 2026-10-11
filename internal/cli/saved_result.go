@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/shrydev2020/gomcdc/v2/internal/measurement"
 	"io"
 	"os"
 	"os/exec"
@@ -60,17 +61,14 @@ func runReport(ctx context.Context, workingDir string, args []string, stdout, st
 	saved, err := resultfile.Decode(input)
 	input.Close()
 	if err != nil {
-		fmt.Fprintf(stderr, "gomcdc: %v\n", err)
+		fmt.Fprintf(stderr, "gomcdc: report: read analysis %q: %v\n", inputPath, err)
 		return ExitMeasurementFailed
 	}
 	if ctx.Err() != nil {
 		return ExitInterrupted
 	}
 	built := saved.Report
-	if opts.format == "html" {
-		built = saved.WithSources()
-	}
-	if err := writeReport(opts, built, workingDir, stdout); err != nil {
+	if err := writeReport(opts, built, workingDir, stdout, saved.SourceFiles()); err != nil {
 		fmt.Fprintf(stderr, "gomcdc: report generation failed: %v\n", err)
 		return ExitMeasurementFailed
 	}
@@ -98,11 +96,11 @@ func checkDistinctOutput(savedPath string, opts options, workingDir string) erro
 	}
 	left, err := canonicalDestination(savedPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve input %q: %w", savedPath, err)
 	}
 	right, err := canonicalDestination(outputPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve output %q: %w", outputPath, err)
 	}
 	same := left == right
 	if a, err := os.Stat(savedPath); err == nil {
@@ -111,7 +109,7 @@ func checkDistinctOutput(savedPath string, opts options, workingDir string) erro
 		}
 	}
 	if same {
-		return errors.New("saved result and report output must be different files")
+		return fmt.Errorf("saved result %q and report output %q must be different files", savedPath, outputPath)
 	}
 	return nil
 }
@@ -150,14 +148,14 @@ func canonicalDestination(path string) (string, error) {
 // captureResultSettings runs before source instrumentation and test execution.
 // Only a fixed list of Go build environment values is read; unrelated process
 // environment values (including credentials) are never archived.
-func captureResultSettings(ctx context.Context, opts options, loaded loader.Result, work *workspace.Workspace, goFlags string) (resultfile.Settings, error) {
+func captureResultSettings(ctx context.Context, opts options, loaded loader.Result, work *workspace.Workspace, goFlags string) (measurement.Settings, error) {
 	goWork := work.GoWorkPath
 	if goWork == "" {
 		goWork = "off"
 	}
 	queryFlags, err := goflags.Without(goFlags, map[string]bool{"modfile": true})
 	if err != nil {
-		return resultfile.Settings{}, err
+		return measurement.Settings{}, fmt.Errorf("prepare GOFLAGS for build environment query: %w", err)
 	}
 	if work.ModFilePath != "" {
 		queryFlags += " " + goflags.Join([]string{"-modfile=" + work.ModFilePath})
@@ -168,22 +166,22 @@ func captureResultSettings(ctx context.Context, opts options, loaded loader.Resu
 	processgroup.ConfigureCancellation(command)
 	output, err := command.Output()
 	if err != nil {
-		return resultfile.Settings{}, fmt.Errorf("capture Go measurement settings: %w", err)
+		return measurement.Settings{}, fmt.Errorf("capture Go measurement settings: %w", err)
 	}
 	var environment map[string]string
 	if err := json.Unmarshal(output, &environment); err != nil {
-		return resultfile.Settings{}, err
+		return measurement.Settings{}, fmt.Errorf("decode Go build environment: %w", err)
 	}
 	workingDir, err := filepath.Rel(work.ModuleDir, work.WorkingDir)
 	if err != nil {
-		return resultfile.Settings{}, err
+		return measurement.Settings{}, fmt.Errorf("relativize working directory %q to module %q: %w", work.WorkingDir, work.ModuleDir, err)
 	}
 	arguments := opts.goTestArgs.Prefix()
 	if binaryArgs, boundary := opts.goTestArgs.BinaryArgs(); boundary {
 		arguments = append(arguments, "-args")
 		arguments = append(arguments, binaryArgs...)
 	}
-	settings := resultfile.Settings{
+	settings := measurement.Settings{
 		WorkingDirectory: filepath.ToSlash(workingDir),
 		PackagePatterns:  slices.Clone(opts.patterns), Packages: slices.Clone(loaded.PackageImportSet),
 		Coverage: opts.metrics.Names(), GoTestArgs: arguments, GOFLAGS: goFlags,
@@ -193,7 +191,7 @@ func captureResultSettings(ctx context.Context, opts options, loaded loader.Resu
 	}
 	settings.InvocationID, err = newRunID()
 	if err != nil {
-		return resultfile.Settings{}, fmt.Errorf("identify saved invocation: %w", err)
+		return measurement.Settings{}, fmt.Errorf("identify saved invocation: %w", err)
 	}
 	for _, threshold := range thresholdSettings(opts) {
 		if threshold.value.set {
@@ -203,11 +201,11 @@ func captureResultSettings(ctx context.Context, opts options, loaded loader.Resu
 	for _, files := range [][]loader.File{loaded.Files, loaded.TestFiles} {
 		for _, file := range files {
 			if ctx.Err() != nil {
-				return resultfile.Settings{}, ctx.Err()
+				return measurement.Settings{}, ctx.Err()
 			}
 			path, err := filepath.Rel(work.ModuleDir, file.Path)
 			if err != nil {
-				return resultfile.Settings{}, err
+				return measurement.Settings{}, fmt.Errorf("relativize source %q to module %q: %w", file.Path, work.ModuleDir, err)
 			}
 			path = filepath.ToSlash(path)
 			if _, exists := settings.SourceDigests[path]; exists {
@@ -215,7 +213,7 @@ func captureResultSettings(ctx context.Context, opts options, loaded loader.Resu
 			}
 			contents, err := os.ReadFile(file.Path)
 			if err != nil {
-				return resultfile.Settings{}, err
+				return measurement.Settings{}, fmt.Errorf("hash source %q: %w", file.Path, err)
 			}
 			settings.SourceDigests[path] = resultfile.Digest(contents)
 		}

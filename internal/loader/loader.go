@@ -230,6 +230,9 @@ func addPackageFiles(
 		if pkg.Module == nil || !pkg.Module.Main || pkg.Module.Path != modulePath {
 			continue
 		}
+		if collectImports {
+			imports[pkg.PkgPath] = struct{}{}
+		}
 		for _, name := range pkg.GoFiles {
 			isTest := strings.HasSuffix(name, "_test.go")
 			if testsOnly != isTest {
@@ -254,9 +257,6 @@ func addPackageFiles(
 				}
 			}
 			dst[abs] = file
-			if collectImports {
-				imports[pkg.PkgPath] = struct{}{}
-			}
 		}
 	}
 }

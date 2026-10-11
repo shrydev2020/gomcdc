@@ -2,10 +2,6 @@
 
 This document defines the semantics and conformance requirements of `gomcdc` 2.0. The Japanese edition is normative; this English edition is a reference translation with identical definition numbers. The specification version is `2.0`.
 
-The `gomcdc` v2 series treats this specification as its compatibility contract. The v2 series preserves existing metrics, CLI options and exit codes, and required schema-2.0 JSON fields with their established meanings. It may add opt-in capabilities and optional fields while preserving the interpretation of existing data.
-
-A public JSON field-set change uses a new `schemaVersion` and a new checked-in schema; schemas `1.0` and `1.1` remain immutable.
-
 ## 1. Scope
 
 For one logical `gomcdc test` measurement request, the tool aggregates eleven metrics over one source model: Statement, Function, Decision, Switch Clause Body, Type Switch Clause Body, Select Clause Body, Switch Clause Selection, Type Switch Clause Selection, Condition, Unique-Cause MC/DC, and Masking MC/DC.
@@ -164,10 +160,7 @@ an exact joint search for both completions using shared search states. Each
 condition obligation has default limits of 1,000,000 candidate
 evaluation pairs, 4,000,000 newly expanded joint-search states, and 64 MiB for
 the primary solver backing arrays (the flattened expression, memo table,
-completion buffers, and candidate evaluation indexes). Validated input data,
-result witnesses, goroutine stack space, and all other process memory are
-outside solver-byte accounting. The value is not a process-wide heap, RSS, or
-total-memory limit. A search that would exceed a limit is
+completion buffers, and candidate evaluation indexes). A search that would exceed a limit is
 `analysis-incomplete`; reaching a witness
 at the exact limit is `covered`. `infeasible` is used only when a separate
 structure-only check proves that the target can never be pivotal.
@@ -275,7 +268,6 @@ Instrumentation preserves Go evaluation order, short-circuiting, evaluation and 
 
 Each test process writes to a distinct file whose name contains a collision-free encoding of package import path, PID, run ID, and nonce. Every record in one file has the same `(runID, packagePath, PID)` provenance. The CLI retains provenance on raw Decision and Clause events until it verifies the requested run, source-inventory ownership, process identity, condition count, states, result, status, and short-circuit consistency. Only verified events are projected to provenance-free, idempotent coverage observations. It constructs a partial report after test failure, build failure, timeout, panic, a truncated tail, or abnormal termination.
 
-This partial recovery covers abnormal termination of the test or tool process. It does not guarantee durability after host power loss, a kernel crash, filesystem corruption, or storage-device failure.
 
 SIGINT and SIGTERM cancel the active request. Cancellation terminates every measurement-owned subprocess group and ends measurement scheduling. It then permits only bounded evidence recovery, report construction, and workspace cleanup. Caller cancellation uses the distinct result `failureKind=interrupted`.
 
@@ -325,7 +317,7 @@ Precedence for ordinary completion is `4 > 2 > 1 > 3 > 0`. A handled termination
 
 The root contains `schemaVersion`, `toolVersion`, `module`, `run`, `measurementMode`, `measurements`, `producerOutcomes`, `capabilities`, `backendCapabilities`, `instrumentationCoverage`, `summary`, `packages`, and `errors`. When Masking MC/DC is requested, the optional `maskingAnalysisLimits` field records the three effective D19 limits. For ordinary measurements, `schemaVersion` is the report compatibility contract and is `2.0`; tool interruption has its own `failureKind` value, `interrupted`. `toolVersion` is the build identity from `gomcdc version`. `producerOutcomes` carries the four D21 evidence axes for every requested producer. `capabilities` is the tool-wide aggregate, while `backendCapabilities` exposes per-producer instrumentation authority.
 
-[`schema/report-v2.0.schema.json`](../schema/report-v2.0.schema.json) is the machine-readable JSON Schema for ordinary measurement fields, required and optional keys, types, enums, and nullability. D34 defines the separate offline Report 2.1 contract. Report schemas 1.0 and 1.1 remain checked in as immutable preceding contracts.
+[`schema/report-v2.0.schema.json`](../schema/report-v2.0.schema.json) is the machine-readable JSON Schema for ordinary measurement fields, required and optional keys, types, enums, and nullability. D34 defines the separate offline Report 2.1 contract.
 
 The summary keys are `statement`, `function`, `decision`, `switchClauseBody`, `typeSwitchClauseBody`, `selectClauseBody`, `switchClauseSelection`, `typeSwitchClauseSelection`, `condition`, `mcdcUnique`, and `mcdcMasking`.
 
@@ -345,41 +337,47 @@ The report presents every producer's integrity, completeness, mapping, and usabi
 
 The output is one self-contained static HTML file containing all display assets and using only declarative HTML and CSS. Viewing it works entirely offline and triggers no network requests. Source expressions and paths are escaped for their HTML context. Numerator, denominator, percentage, and status text accompany the colors.
 
-### D32. Resources and trust boundary
+### D32. Execution and storage
 
-One instrumented run collects all requested Go-cover, AST, and compiler-aware evidence with one source instrumentation, compiler instrumentation, build, and test. The event journal preserves witnesses while aggregating and compacting records; memory holds the compacted evidence. Performance claims require a checked-in benchmark and a reproducible profile. Functional conformance is assessed by the semantic requirements; execution time is evaluated on the benchmark hardware.
+One measurement run instruments sources and the compiler, builds, and executes tests to collect Go-cover, AST, and compiler-aware evidence. The event journal aggregates records while preserving evaluation provenance and witnesses.
 
-The tool builds and tests a trusted target module with the current user's authority. The temporary workspace is not a security sandbox, and evidence authenticity is not guaranteed against malicious target code. Temporary directories and event files are readable and writable only by the current user. Source copying confines writes to the workspace, including writes through symlinks and hardlinks. Normal reports use module-relative source paths.
+Temporary directories and event files use owner-only permissions. Source copies remain within the workspace. Report source paths are module-relative.
 
-The tool defines coverage semantics only and claims no DO-178C compliance, tool qualification, or safety certification. Windows, assembly, cgo internals, coverage whose obligations are compiler IR, path coverage, and distributed test execution are outside v2.
+### D33. Saved results and reports
 
-### D33. Saved results and offline reports
+`gomcdc test --save FILE` writes a [saved result 2.0](../schema/saved-result-v2.0.schema.json). Its payload contains the `measurement` archive and derived `report`. The archive holds original sources and measurement settings. Failed and interrupted tests retain recovered evidence and outcomes.
 
-`gomcdc test --save <file>` saves the final Report, original sources for HTML, and measurement settings alongside the normal report output. Test failures, partial runs, strict failures, and threshold failures are saved whenever a Report can be produced. Existing test exit codes retain their meanings; save failure returns 2.
+Saved files contain `format`, `version`, `sha256`, and a payload. The checksum is SHA-256 over compact JSON with sorted object keys and exact integer precision. Readers validate required fields, versions, checksums, source hashes, and source ownership. Publication renames a temporary file with permission 0600.
 
-The separate saved-result contract contains `format=gomcdc-saved-result`, `version`, `sha256`, and `result`. New measurements use saved-result [schema 1.1](../schema/saved-result-v1.1.schema.json), adding a random 128-bit `settings.invocationId` before measurement so independent C0-only executions remain distinct. [Schema 1.0](../schema/saved-result-v1.0.schema.json) remains readable. Ordinary measurements continue to use Report schema 2.0. `result` contains `settings`, `report`, and `sources`; D34 adds `inputs` for derived analyses.
+`gomcdc report [--format=text|json|html] [--output=PATH] FILE` renders a saved result. The default is text on stdout; HTML writes index.html in the specified directory. Original test and policy outcomes appear in the report; successful rendering returns 0. Input and output must be distinct files, including through symbolic or hard links.
 
-Settings record the module-relative working directory, requested package patterns and resolved packages, metrics, test arguments and GOFLAGS before path relocation, include-tests, exclusions, timeout, strict mode, thresholds, and the measured Go version, GOOS, GOARCH, CGO, experiment, and architecture settings. `sourceDigests` identifies selected active Go and test sources before instrumentation, including excluded and generated sources. `moduleConfigDigests` identifies the original go.mod and, when used, go.work/go.work.sum and alternate.mod/alternate.sum snapshots by role. The archive covers the sources and settings listed above for report rendering and reanalysis. Replaying execution requires external dependency sources, test data, and other environment variables to be supplied separately.
+### D34. MC/DC reanalysis
 
-Sources are keyed by package and module-relative path, storing original bytes as base64. Their SHA-256 hashes must agree with sourceDigests. Every reported file requires the original source matching its recorded hash. Publication uses a mode-0600 temporary file and rename, preserving any prior file on pre-publication failure. The sha256 covers result after JSON decoding with exact integers and compact marshaling with Go encoding/json's sorted object keys. This detects corruption and is not a signature.
+`gomcdc reanalyze --output FILE [analysis limits] INPUT` recomputes coverage from the saved measurement archive. The three D19 limits may be overridden; omitted limits retain their recorded values.
 
-`gomcdc report [--format=text|json|html] [--output=<path>] <saved-result>` uses the existing renderers. Text/stdout is the default; HTML requires an output directory. Rendering reads its results and original sources entirely from the saved file. Original test, strict, threshold, partial, and tool-version information is preserved. Ordinary report JSON, unsupported versions, checksum mismatches, missing required fields, and missing or mismatched sources are rejected. The input and output file (index.html for HTML) must identify separate files, including through symlink/hardlink aliases. The test command likewise requires separate save and output files.
+Multi-run analysis and reanalysis use [Report 2.1](../schema/report-v2.1.schema.json). `contributingRuns` retains each execution's outcomes, policy decisions, producer outcomes, and diagnostics. Multiple executions use `measurementMode=merged` and list each measurement in `measurements`. Aggregate test, measurement, and integrity outcomes retain original failures; `complete` is true when every execution is complete. The analysis operation's strict and threshold outcomes are `not-requested`.
 
-Report returns 0 for successful rendering, 4 for invalid usage, and 2 for read, validation, or output failure, independently of the stored test or policy results. Signal exit codes follow D28. Rendering displays the saved result. D34 defines the explicit merge and reanalysis operations.
+### D35. Measurement archives and CLI operations
 
-### D34. Offline merge and MC/DC reanalysis
+A [measurement archive 1.0](../schema/measurement-v1.0.schema.json) contains a common Plan and individual Runs.
 
-`gomcdc merge --output <saved-file> [limits] INPUT INPUT...` requires at least two input paths. `gomcdc reanalyze --output <saved-file> [limits] INPUT` requires exactly one. Both accept D19's three positive `--mcdc-masking-max-*` flags when Masking was selected. Merge fills unspecified limits with deterministic defaults; reanalysis inherits the input report's effective limits. These operations retain the saved metric selection, process the archived evidence entirely offline, and preserve their input files. Output must be a file distinct from every input, including symlink/hardlink aliases.
+- Plan: original sources, build conditions, module/tool/measurement definition, Decision/Condition/Clause metadata, Boolean structure, and byte offsets.
+- Run: invocation/runtime IDs, original settings, test outcomes, producer acceptance, generated probe IDs, runtime observations, counters mapped to original sources, and diagnostics.
 
-Inputs must match module and measurement tool identity, source and module-configuration digests, resolved package set, working directory, selected metrics, include-tests, exclusions, captured Go environment, measurement mode, and non-runtime Go flags. Package-pattern spellings, timeout, strict/threshold policies, and test-selection/scheduling flags (`run`, `skip`, `count`, `shuffle`, `parallel`, `cpu`, `timeout`, `failfast`, `short`, `bench`, `benchtime`, `benchmem`, `v`, `json`, `list`, `fullpath`, including registered test aliases) may differ. Unknown flags and binary arguments must match. Compatibility checking covers the archived configuration; unarchived dependencies, test data, and arbitrary environment variables remain outside that check. This operation combines test shards against one inventory and reports compatibility errors for different inventories. Missing or changed static entities/capabilities produce an error while preserving the original denominator.
+| Operation | Input and output |
+| --- | --- |
+| `record --output FILE PACKAGE... [-- test arguments]` | Execute tests and save a measurement archive |
+| `merge --output FILE [--expect-runs N] MEASUREMENT...` | Combine executions with a common Plan |
+| `analyze --output FILE [--expect-runs N] [analysis limits] MEASUREMENT...` | Combine evidence, determine coverage, and save the result |
+| `require [--complete] [--METRIC PERCENT] ANALYSIS` | Evaluate explicit requirements against a saved result |
 
-Saved-result 1.1 derived archives retain `inputs`, the original snapshots with their settings and Report 2.0, and one common source-byte set. An input ID is SHA-256 over the canonical JSON object containing `settings` and `report`. Previous derived archives are flattened to these originals; matching IDs are counted once, in sorted ID order. Conflicting snapshots sharing an invocation identity or observed runtime run ID are rejected. Legacy 1.0 archives identify snapshots by canonical content: byte-equivalent canonical snapshots are treated as duplicates, even if originally produced by distinct C0-only executions. New invocation IDs distinguish those independent executions.
+Each CI job records the same sources, package set, metrics, and Go/build conditions into a separate file. Test selection and execution settings may differ between jobs. Merge deduplicates by invocation ID and sorts executions by ID. Conflicting contents for an ID, different Plans, and overlapping physical runtime IDs are errors. A positive `--expect-runs N` requires exactly N independent executions.
 
-The report is derived from accepted per-entity evidence. Statement/function/clause obligations are unioned once, keeping Clause Body and Selection independent; counters are added with overflow checks. Diagnostic raw hits retain their producer's acceptance or rejection decision. Accepted decision vectors are validated against Boolean structure reconstructed by the instrumenter's occurrence decomposition, with saved condition order and expressions checked. Both selected MC/DC strategies run against the combined vectors, retaining run/package/process/test/evaluation provenance in witnesses. Rejected vectors remain in original inputs for diagnostics; coverage uses accepted vectors. An unknown observation may be superseded by a known observation from another accepted run; original failure/integrity outcomes remain preserved.
+Analyze uses the Plan's Boolean structure and accepted evaluations to find MC/DC witnesses across executions. Each C0 Run holds inventories for all Plan sources; merging uses original-source statement units. Counter overflow is an error. Original failures and evidence provenance remain attached to each execution.
 
-Offline Report [schema 2.1](../schema/report-v2.1.schema.json) adds `contributingRuns`, carrying original snapshot IDs, execution/policy results, measurements, producer outcomes, and errors. With multiple unique inputs, `measurementMode=merged` and `measurements` lists their physical measurements. One-input reanalysis retains its original mode. Top-level `producerOutcomes` is empty because acceptance belongs to each original execution. Overall test/measurement/integrity failures are retained conservatively, and `complete` requires all originals to be complete. Top-level strict/threshold results are `not-requested`; old policy failures are shown only with their original runs. The top-level tool version identifies the tool performing offline analysis; original versions remain in input snapshots. The summary and new witnesses use the requested effective limits. Text and HTML expose input outcomes as well as aggregate coverage.
+Require's `--complete` demands complete execution, evidence, instrumentation, and analysis. A metric minimum is satisfied when at least one measured, feasible obligation exists, unknown/unsupported/analysis-incomplete counts are zero, and the unrounded percentage meets the requested minimum. Minimums are finite values from 0 to 100.
 
-Both commands publish atomically and return 0 on successful save, regardless of original test/policy failures or still-incomplete MC/DC analysis; usage errors return 4 and input, compatibility, analysis, or output errors return 2. Cancellation returns 130 and preserves the previously published result. Existing inputs and destinations survive failure before publication.
+Record returns 1 for test failure and 2 for measurement failure. Merge, analyze, reanalyze, and report return 0 on successful processing; require returns 0 for satisfied requirements and 3 otherwise. Invalid arguments return 4; read, analysis, or output errors return 2; interruption returns 130. Atomic publication preserves existing output on failure before publication. Record and test need a checkout and Go; subsequent operations use saved files.
 
 ## 9. Conformance conditions
 
