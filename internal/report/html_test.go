@@ -58,21 +58,32 @@ func TestWriteHTMLMarksPartialReport(t *testing.T) {
 	}
 }
 
-func TestWriteHTMLDistinguishesAnalysisIncomplete(t *testing.T) {
+func TestWriteHTMLDistinguishesCoverageEvidenceStates(t *testing.T) {
 	t.Parallel()
-	metric := analysis.MetricSummary{Enabled: true, AnalysisIncomplete: 1}
-	var output bytes.Buffer
-	if err := writeHTMLReport(&output, analysis.Result{
-		Module: "m", Run: analysis.Run{Status: cover.RunPassed, Complete: true},
-		Summary: analysis.Summary{MCDCUnique: metric},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	html := output.String()
-	for _, required := range []string{"status-analysis-incomplete", "analysis-incomplete 1"} {
-		if !strings.Contains(html, required) {
-			t.Fatalf("HTML omitted %q", required)
-		}
+	for _, test := range []struct {
+		name, class, status, detail string
+		metric                      analysis.MetricSummary
+	}{
+		{"covered", "covered", "complete", "1 / 1", analysis.MetricSummary{Enabled: true, Covered: 1, Total: 1, Percentage: new(100.0)}},
+		{"unknown", "attention", "unknown", "unknown 1", analysis.MetricSummary{Enabled: true, Unknown: 1}},
+		{"unsupported", "attention", "unsupported", "unsupported 1", analysis.MetricSummary{Enabled: true, Unsupported: 1}},
+		{"incomplete", "attention", "analysis-incomplete", "analysis-incomplete 1", analysis.MetricSummary{Enabled: true, AnalysisIncomplete: 1}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := WriteHTMLReport(&output, analysis.Result{
+				Module: "m", Run: analysis.Run{Status: cover.RunPassed, Complete: true},
+				Summary: analysis.Summary{MCDCUnique: test.metric},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			card := `<div class="metric ` + test.class + `"><div class="metric-top"><div class="name">Unique-Cause MC/DC</div><span class="status status-` + test.status + `">` + test.status + `</span>`
+			for _, required := range []string{card, test.detail} {
+				if !strings.Contains(output.String(), required) {
+					t.Errorf("HTML omitted %q", required)
+				}
+			}
+		})
 	}
 }
 
