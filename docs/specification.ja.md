@@ -349,7 +349,7 @@ HTMLは各producerのintegrity、completeness、mapping、usabilityをoverall ru
 
 analyzeはPlanのBoolean構造と受理された評価を使い、実行を跨ぐMC/DC証拠ペアを求める。C0の各RunはPlan内の全ソースのinventoryを持ち、統合は元ソースのstatement単位で行う。counter加算のoverflowはエラーとする。元実行の失敗と証拠の出所を保持する。
 
-requireの`--complete`は実行・証拠・計装・解析の完全性を要求する。指標の最低率は、計測済みで実現可能な対象が1個以上あり、unknown・unsupported・analysis-incompleteが0、丸め前の達成率が指定値以上の場合に満たす。指定値は0〜100の有限数とする。
+requireは計測アーカイブと保存された解析上限から被覆・完全性を再計算し、その結果で要求を判定する。保存済みreportの集計値は判定に使用せず、入力fileも変更しない。`--complete`は実行・証拠・計装・解析の完全性を要求する。指標の最低率は、計測済みで実現可能な対象が1個以上あり、unknown・unsupported・analysis-incompleteが0、丸め前の達成率が指定値以上の場合に満たす。指定値は0〜100の有限数とする。
 
 recordはtest失敗で1、計測失敗で2を返す。merge・analyze・reanalyze・reportは処理成功で0、requireは全充足で0、未充足で3を返す。引数の誤りは4、読出し・解析・出力失敗は2、中断は130とする。保存はatomicに公開し、公開前の失敗では既存出力を保持する。recordとtestにはcheckoutとGo環境が必要で、以降の処理は保存fileだけで実行する。
 

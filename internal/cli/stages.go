@@ -177,7 +177,18 @@ func runRequire(ctx context.Context, dir string, args []string, stdout, stderr i
 		fmt.Fprintf(stderr, "gomcdc: require: read analysis %q: %v\n", fs.Arg(0), err)
 		return ExitMeasurementFailed
 	}
-	satisfaction, err := requirements.Evaluate(saved.Report, requested)
+	// The saved report is a presentation snapshot. Gate on the archived
+	// evidence under its recorded analysis limits, never on cached outcomes.
+	built, err := analysis.FromMeasurement(ctx, saved.Measurement, savedAnalysisBudget(saved))
+	if ctx.Err() != nil {
+		fmt.Fprintf(stderr, "gomcdc: require: interrupted: %v\n", ctx.Err())
+		return ExitInterrupted
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "gomcdc: require: analyze measurement: %v\n", err)
+		return ExitMeasurementFailed
+	}
+	satisfaction, err := requirements.Evaluate(built, requested)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return ExitInvalidUsage

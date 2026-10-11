@@ -69,11 +69,7 @@ func runReanalysis(ctx context.Context, workingDir string, args []string, stdout
 		fmt.Fprintln(stderr, "gomcdc: Masking limits require mcdc-masking in the saved coverage selection")
 		return ExitInvalidUsage
 	}
-	budget := mcdc.AnalysisBudget{}
-	if saved.Report.MaskingAnalysisLimits != nil {
-		previous := saved.Report.MaskingAnalysisLimits
-		budget = mcdc.AnalysisBudget{MaxEvaluationPairs: previous.MaxEvaluationPairs, MaxSearchStates: previous.MaxSearchStates, MaxSolverBytes: previous.MaxSolverBytes}
-	}
+	budget := savedAnalysisBudget(saved)
 	if pairs.set {
 		budget.MaxEvaluationPairs = pairs.value
 	}
@@ -107,4 +103,11 @@ func runReanalysis(ctx context.Context, workingDir string, args []string, stdout
 	count := len(result.Measurement.Runs)
 	fmt.Fprintf(stdout, "Saved %s (%d unique executions).\n", output, count)
 	return ExitSuccess
+}
+
+func savedAnalysisBudget(saved resultfile.Result) mcdc.AnalysisBudget {
+	if limits := saved.Report.MaskingAnalysisLimits; limits != nil {
+		return mcdc.AnalysisBudget{MaxEvaluationPairs: limits.MaxEvaluationPairs, MaxSearchStates: limits.MaxSearchStates, MaxSolverBytes: limits.MaxSolverBytes}
+	}
+	return mcdc.AnalysisBudget{}
 }

@@ -375,7 +375,7 @@ Each CI job records the same sources, package set, metrics, and Go/build conditi
 
 Analyze uses the Plan's Boolean structure and accepted evaluations to find MC/DC witnesses across executions. Each C0 Run holds inventories for all Plan sources; merging uses original-source statement units. Counter overflow is an error. Original failures and evidence provenance remain attached to each execution.
 
-Require's `--complete` demands complete execution, evidence, instrumentation, and analysis. A metric minimum is satisfied when at least one measured, feasible obligation exists, unknown/unsupported/analysis-incomplete counts are zero, and the unrounded percentage meets the requested minimum. Minimums are finite values from 0 to 100.
+Require recomputes coverage and completeness from the measurement archive using the recorded analysis limits and evaluates requirements against that result. It does not use saved report summaries for the decision or modify the input file. Its `--complete` demands complete execution, evidence, instrumentation, and analysis. A metric minimum is satisfied when at least one measured, feasible obligation exists, unknown/unsupported/analysis-incomplete counts are zero, and the unrounded percentage meets the requested minimum. Minimums are finite values from 0 to 100.
 
 Record returns 1 for test failure and 2 for measurement failure. Merge, analyze, reanalyze, and report return 0 on successful processing; require returns 0 for satisfied requirements and 3 otherwise. Invalid arguments return 4; read, analysis, or output errors return 2; interruption returns 130. Atomic publication preserves existing output on failure before publication. Record and test need a checkout and Go; subsequent operations use saved files.
 
