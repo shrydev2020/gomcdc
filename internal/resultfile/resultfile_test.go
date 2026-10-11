@@ -3,8 +3,10 @@ package resultfile
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -71,32 +73,50 @@ func TestSavedResultRejectsCorruptionAndUnsupportedFormats(t *testing.T) {
 			}
 		})
 	}
-	for name, mutate := range map[string]func(map[string]any){
-		"missing count": func(v map[string]any) {
+	for _, test := range []struct {
+		name, want string
+		mutate     func(map[string]any)
+	}{
+		{"missing count", "missing fields", func(v map[string]any) {
 			delete(v["report"].(map[string]any)["summary"].(map[string]any)["decision"].(map[string]any), "covered")
-		},
-		"missing settings":    func(v map[string]any) { delete(v, "settings") },
-		"unknown property":    func(v map[string]any) { v["invented"] = true },
-		"report version":      func(v map[string]any) { v["report"].(map[string]any)["schemaVersion"] = "9.0" },
-		"missing source":      func(v map[string]any) { v["sources"] = []any{} },
-		"wrong source digest": func(v map[string]any) { v["sources"].([]any)[0].(map[string]any)["sha256"] = strings.Repeat("0", 64) },
+		}},
+		{"missing settings", "missing fields", func(v map[string]any) { delete(v, "settings") }},
+		{"unknown property", `unknown field "invented"`, func(v map[string]any) { v["invented"] = true }},
+		{"report version", "unsupported report schema", func(v map[string]any) { v["report"].(map[string]any)["schemaVersion"] = "9.0" }},
+		{"missing source", "missing original source", func(v map[string]any) { v["sources"] = []any{} }},
+		{"wrong source digest", "saved source digest mismatch", func(v map[string]any) { v["sources"].([]any)[0].(map[string]any)["sha256"] = strings.Repeat("0", 64) }},
 	} {
-		t.Run(name, func(t *testing.T) {
+		t.Run(test.name, func(t *testing.T) {
 			var saved envelope
 			if err := json.Unmarshal(encoded, &saved); err != nil {
 				t.Fatal(err)
 			}
 			var value map[string]any
-			if err := json.Unmarshal(saved.Result, &value); err != nil {
+			decoder := json.NewDecoder(bytes.NewReader(saved.Result))
+			decoder.UseNumber()
+			if err := decoder.Decode(&value); err != nil {
 				t.Fatal(err)
 			}
-			mutate(value)
-			saved.Result, _ = json.Marshal(value)
-			canonical, _ := canonicalJSON(saved.Result)
-			saved.SHA256 = Digest(canonical)
-			data, _ := json.Marshal(saved)
-			if _, err := Decode(bytes.NewReader(data)); err == nil {
-				t.Fatal("invalid payload accepted even with updated checksum")
+			seal := func() []byte {
+				payload, err := json.Marshal(value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				saved.Result, saved.SHA256 = payload, Digest(payload)
+				data, err := json.Marshal(saved)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return data
+			}
+			// A valid control ensures that integer rounding or checksum handling
+			// cannot make a malformed-input test pass for an unrelated reason.
+			if _, err := Decode(bytes.NewReader(seal())); err != nil {
+				t.Fatalf("valid control: %v", err)
+			}
+			test.mutate(value)
+			if _, err := Decode(bytes.NewReader(seal())); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("want %q after mutation, got %v", test.want, err)
 			}
 		})
 	}
@@ -121,5 +141,80 @@ func TestWriteDoesNotReplaceExistingResultOnValidationFailure(t *testing.T) {
 	info, err := os.Stat(path)
 	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("saved result permissions: %v %v", info, err)
+	}
+}
+
+func TestSavedResultPreservesCounterPrecisionAtIntegerBoundaries(t *testing.T) {
+	t.Parallel()
+	for _, count := range []uint64{0, 1<<53 - 1, 1 << 53, 1<<53 + 1, math.MaxUint64} {
+		t.Run(strconv.FormatUint(count, 10), func(t *testing.T) {
+			original := fixture()
+			original.Report.Packages[0].Files[0].Functions[0].Statements[0].Count = count
+			encoded, err := Encode(original)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := Decode(bytes.NewReader(encoded))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := decoded.Report.Packages[0].Files[0].Functions[0].Statements[0].Count; got != count {
+				t.Fatalf("counter = %d, want %d", got, count)
+			}
+			again, err := Encode(decoded)
+			if err != nil || !bytes.Equal(encoded, again) {
+				t.Fatalf("round trip changed payload or checksum: %v", err)
+			}
+		})
+	}
+}
+
+func TestFailedPublicationPreservesDestinationAndRemovesTemporaryFile(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	destination := filepath.Join(root, "existing-directory")
+	if err := os.Mkdir(destination, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(destination, "preserved.txt")
+	if err := os.WriteFile(marker, []byte("previous contents"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// An occupied directory deterministically fails the final rename after the
+	// temporary file was written, including when tests run as root.
+	if err := Write(destination, fixture()); err == nil {
+		t.Fatal("publication over a directory succeeded")
+	}
+	data, err := os.ReadFile(marker)
+	if err != nil || string(data) != "previous contents" {
+		t.Fatalf("existing destination changed: %q %v", data, err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "existing-directory" {
+		t.Fatalf("temporary publication file left behind: %v %v", entries, err)
+	}
+}
+
+func TestSavedResultChecksumDetectsAdjacentLargeCounters(t *testing.T) {
+	t.Parallel()
+	const count uint64 = 1 << 60
+	original := fixture()
+	original.Report.Packages[0].Files[0].Functions[0].Statements[0].Count = count
+	encoded, err := Encode(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Decode(bytes.NewReader(encoded)); err != nil {
+		t.Fatalf("valid original: %v", err)
+	}
+	old, changed := []byte(strconv.FormatUint(count, 10)), []byte(strconv.FormatUint(count+1, 10))
+	if bytes.Count(encoded, old) != 1 {
+		t.Fatal("fixture must contain exactly one counter to alter")
+	}
+	// These adjacent integers share one float64 representation. The checksum
+	// must still distinguish them, even though a lossy decoder would not.
+	altered := bytes.Replace(encoded, old, changed, 1)
+	if _, err := Decode(bytes.NewReader(altered)); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("counter corruption: %v", err)
 	}
 }

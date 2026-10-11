@@ -114,8 +114,77 @@ func TestOfflineUnionUsesPerObligationCoverageAndChecksCounterOverflow(t *testin
 		t.Fatalf("raw counter became accepted evidence: %+v", block)
 	}
 	first.Count = math.MaxUint64
+	second.Count = 0
+	merged, err = report.AnalyzeSnapshots(t.Context(), []report.AnalysisSnapshot{{ID: "a", Report: a}, {ID: "b", Report: b}}, input.Coverage, mcdc.AnalysisBudget{})
+	if err != nil || merged.Packages[0].Files[0].Functions[0].Statements[0].Count != math.MaxUint64 {
+		t.Fatalf("exact uint64 counter limit: %v", err)
+	}
+	second.Count = 1
 	if _, err := report.AnalyzeSnapshots(t.Context(), []report.AnalysisSnapshot{{ID: "a", Report: a}, {ID: "b", Report: b}}, input.Coverage, mcdc.AnalysisBudget{}); err == nil {
 		t.Fatal("counter overflow accepted")
+	}
+}
+
+func TestOfflineAnalysisSignedCounterBoundaries(t *testing.T) {
+	t.Parallel()
+	for _, counter := range []struct {
+		name, diagnostic string
+		field            func(*report.FunctionReport) *int
+	}{
+		{"clause body", "clause counter overflow", func(f *report.FunctionReport) *int { return &f.Clauses[0].BodyExecutions }},
+		{"clause selection", "clause counter overflow", func(f *report.FunctionReport) *int { return &f.Clauses[0].DirectSelections }},
+		{"skipped decision", "decision counter overflow", func(f *report.FunctionReport) *int { return &f.Decisions[0].NotEvaluated }},
+	} {
+		t.Run(counter.name, func(t *testing.T) {
+			for _, test := range []struct {
+				name        string
+				left, right int
+				want        int
+				invalid     bool
+			}{
+				{"below limit", math.MaxInt - 2, 1, math.MaxInt - 1, false},
+				{"exact limit", math.MaxInt - 1, 1, math.MaxInt, false},
+				{"overflow", math.MaxInt, 1, 0, true},
+				{"negative first", -1, 0, 0, true},
+				{"negative second", 0, -1, 0, true},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					var snapshots []report.AnalysisSnapshot
+					for i, runID := range []string{"a", "b"} {
+						input := offlineDecisionInput(runID, i == 0)
+						input.Decisions[0].Kind = cover.DecisionSwitchCase
+						input.Clauses = []cover.ClauseMetadata{{ID: 2, SwitchID: 3, Package: "example.com/m/a", Function: "Check", Kind: cover.ClauseExpressionSwitch, Role: cover.ClauseCase, Location: location("a.go", 20), Expressions: []string{"1"}}}
+						r := report.Build(input)
+						*counter.field(&r.Packages[0].Files[0].Functions[0]) = []int{test.left, test.right}[i]
+						snapshots = append(snapshots, report.AnalysisSnapshot{ID: runID, Report: r})
+					}
+					for range 2 {
+						before, err := json.Marshal(snapshots)
+						if err != nil {
+							t.Fatal(err)
+						}
+						merged, err := report.AnalyzeSnapshots(t.Context(), snapshots, config.AllCoverage(), mcdc.AnalysisBudget{})
+						if test.invalid {
+							if err == nil || !strings.Contains(err.Error(), counter.diagnostic) || merged.SchemaVersion != "" {
+								t.Fatalf("invalid counter produced report or wrong error: %v", err)
+							}
+						} else {
+							if err != nil {
+								t.Fatal(err)
+							}
+							if got := *counter.field(&merged.Packages[0].Files[0].Functions[0]); got != test.want {
+								t.Fatalf("counter = %d, want %d", got, test.want)
+							}
+						}
+						after, err := json.Marshal(snapshots)
+						if err != nil || string(before) != string(after) {
+							t.Fatalf("analysis changed original counters: %v", err)
+						}
+						slices.Reverse(snapshots)
+					}
+				})
+			}
+		})
 	}
 }
 
