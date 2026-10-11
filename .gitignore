@@ -89,6 +89,8 @@ out/
 # Output of the go coverage tool
 *.out
 coverage-html/
+/coverage-self-mcdc.json
+/coverage.html
 
 # Go workspace file
 go.work.sum
