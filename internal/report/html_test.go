@@ -2,6 +2,9 @@ package report
 
 import (
 	"bytes"
+	"html"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -44,6 +47,134 @@ func TestWriteHTMLRendersGoHierarchyAndEscapesSourceText(t *testing.T) {
 	}
 	if strings.Contains(html, "<script>") || strings.Contains(html, "http://") || strings.Contains(html, "https://") {
 		t.Fatalf("HTML contains executable or external content: %s", html)
+	}
+}
+
+func TestHTMLSourceAppearsOnceAndPreservesBytes(t *testing.T) {
+	t.Parallel()
+	source := "package p\n// あ <script> & unique-source-marker\nfunc Check(a bool) bool { return a }\n"
+	location := cover.SourceLocation{File: "p.go", StartOffset: 70, EndOffset: 71}
+	value := analysis.Result{Packages: []analysis.PackageReport{{Path: "m/p", Files: []analysis.FileReport{{Path: "p.go", Functions: []analysis.FunctionReport{{
+		Decisions: []analysis.DecisionReport{{DecisionID: "id", Location: location, Conditions: []analysis.ConditionReport{{Location: location, MCDCUnique: analysis.MCDCConditionReport{Status: "not-covered"}}}}},
+	}}}}}}}
+	var output bytes.Buffer
+	if err := WriteHTMLWithSources(&output, value, []analysis.SourceFileInput{{PackagePath: "m/p", Path: "p.go", Source: []byte(source)}}); err != nil {
+		t.Fatal(err)
+	}
+	pre := regexp.MustCompile(`<pre class="source-code"><code>(.*?)</code></pre>`).FindAllStringSubmatch(strings.ReplaceAll(output.String(), "\n", "\x00"), -1)
+	if len(pre) != 1 {
+		t.Fatalf("source copies = %d, want 1", len(pre))
+	}
+	got := html.UnescapeString(regexp.MustCompile(`<[^>]+>`).ReplaceAllString(pre[0][1], ""))
+	got = strings.ReplaceAll(got, "\x00", "\n")
+	if got != source {
+		t.Fatalf("source changed: %q, want %q", got, source)
+	}
+	if strings.Count(output.String(), "unique-source-marker") != 1 || strings.Contains(output.String(), "<script>") {
+		t.Fatal("source was duplicated or not escaped")
+	}
+}
+
+func TestHTMLFindingsPreserveObligationStates(t *testing.T) {
+	t.Parallel()
+	location := cover.SourceLocation{File: "auth.go", Start: cover.Position{Line: 4, Column: 18}, End: cover.Position{Line: 4, Column: 25}}
+	decision := analysis.DecisionReport{DecisionID: "stable-id", Expression: "signedIn && !expired", Location: location,
+		Summary:          analysis.Summary{Decision: analysis.MetricSummary{Enabled: true, Covered: 1, Total: 2}},
+		DecisionCoverage: analysis.DecisionCoverage{True: true},
+		MCDCUnique:       analysis.MCDCAnalysisReport{Enabled: true}, MCDCMasking: analysis.MCDCAnalysisReport{Enabled: true},
+	}
+	states := []string{"not-covered", "unknown", "unsupported-by-backend", "infeasible", "analysis-incomplete", "covered", "disabled"}
+	for index, state := range states {
+		decision.Conditions = append(decision.Conditions, analysis.ConditionReport{
+			Index: uint16(index), Expression: state + "Condition", Location: location,
+			MCDCUnique:  analysis.MCDCConditionReport{Status: state, Reason: "reason-" + state},
+			MCDCMasking: analysis.MCDCConditionReport{Status: "covered"},
+		})
+	}
+	value := analysis.Result{Packages: []analysis.PackageReport{{Path: "m/auth", Files: []analysis.FileReport{{Path: "auth.go", Functions: []analysis.FunctionReport{{Name: "Check", Decisions: []analysis.DecisionReport{decision}}}}}}}}
+	var output bytes.Buffer
+	if err := WriteHTMLReport(&output, value); err != nil {
+		t.Fatal(err)
+	}
+	findings := strings.Split(strings.Split(output.String(), `id="findings"`)[1], `id="producers"`)[0]
+	for _, required := range []string{"Function: <code>Check</code>", "auth.go:4:18-4:25", "Missing outcome: false.", "Missing evidence: an independence witness pair", "No witness pair is available."} {
+		if !strings.Contains(findings, required) {
+			t.Errorf("findings missing %q", required)
+		}
+	}
+	for _, state := range states[:5] {
+		if !strings.Contains(findings, `data-status="`+state+`"`) || !strings.Contains(findings, "reason-"+state) {
+			t.Errorf("findings lost %s or its reason", state)
+		}
+	}
+	for _, state := range states[5:] {
+		if strings.Contains(findings, "reason-"+state) {
+			t.Errorf("%s incorrectly listed as a finding", state)
+		}
+	}
+	for _, finding := range htmlFindings(value) {
+		if finding.Status != "not-covered" && strings.Contains(finding.Detail, "Missing evidence:") {
+			t.Errorf("%s incorrectly asks for missing test evidence: %s", finding.Status, finding.Detail)
+		}
+	}
+	decision.MCDCUnique.Enabled, decision.MCDCMasking.Enabled = false, false
+	decision.Summary.Decision.Enabled = false
+	value.Packages[0].Files[0].Functions[0].Decisions[0] = decision
+	if got := htmlFindings(value); len(got) != 0 {
+		t.Fatalf("disabled metrics produced findings: %#v", got)
+	}
+}
+
+func TestHTMLWitnessNamesConditionsAndSeparatesMaskingCompletions(t *testing.T) {
+	t.Parallel()
+	witness := &analysis.WitnessReport{
+		First:           analysis.EvaluationReport{Conditions: []string{"true", "not-evaluated"}, Result: false, Status: "completed", TestID: "TestExpired", EvaluationID: "eval-a", RunID: "run-a", PackagePath: "m/auth", ProcessID: 42},
+		Second:          analysis.EvaluationReport{Conditions: []string{"true", "false"}, Result: true, Status: "completed", TestID: "TestValid", EvaluationID: "eval-b", RunID: "run-b", PackagePath: "m/auth", ProcessID: 43},
+		FirstCompletion: []string{"true", "true"}, SecondCompletion: []string{"true", "false"}, MaskedConditions: []uint16{0}, UnobservedConditions: []uint16{1},
+	}
+	condition := analysis.ConditionReport{Index: 1, Expression: "expired", MCDCMasking: analysis.MCDCConditionReport{Status: "covered", Outcome: "covered", Support: "supported", Analysis: "complete", Witness: witness}}
+	decision := analysis.DecisionReport{DecisionID: "stable", Expression: "signedIn && !expired", MCDCMasking: analysis.MCDCAnalysisReport{Enabled: true},
+		Conditions:  []analysis.ConditionReport{condition, {Index: 0, Expression: "signedIn", MCDCMasking: analysis.MCDCConditionReport{Status: "not-covered"}}},
+		Evaluations: []analysis.EvaluationReport{{Conditions: []string{"true"}, Status: "aborted", TestID: "TestPanic"}},
+	}
+	view := htmlWitnessView(decision, condition, "Masking MC/DC", condition.MCDCMasking)
+	if row := view.Rows[0]; row.First != "not-evaluated" || row.FirstCompletion != "true" || !row.Target || !row.Unobserved {
+		t.Fatalf("witness values not indexed by condition occurrence: %#v", row)
+	}
+	value := analysis.Result{Packages: []analysis.PackageReport{{Path: "m/auth", Files: []analysis.FileReport{{Path: "auth.go", Functions: []analysis.FunctionReport{{Decisions: []analysis.DecisionReport{decision}}}}}}}}
+	var output bytes.Buffer
+	if err := WriteHTMLReport(&output, value); err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"Target condition: <code>expired</code>", "Evaluation A (observed)", "Completion A (analysis)", "#1 <code>expired</code></th><td>not-evaluated</td><td>false</td><td>true</td>", "Witness test", "TestExpired", "TestValid", "eval-a", "run-b", "process 42", "not available (aborted)", "not available"} {
+		if !strings.Contains(output.String(), required) {
+			t.Errorf("HTML witness missing %q", required)
+		}
+	}
+}
+
+func TestHTMLAnchorsDoNotDependOnPackageOrder(t *testing.T) {
+	t.Parallel()
+	decision := analysis.DecisionReport{DecisionID: "0x1234", Expression: "a"}
+	value := analysis.Result{Packages: []analysis.PackageReport{
+		{Path: "m/a", Files: []analysis.FileReport{{Path: "a.go", Functions: []analysis.FunctionReport{{Decisions: []analysis.DecisionReport{decision}}}}}},
+		{Path: "m/b", Files: []analysis.FileReport{{Path: "b.go", Functions: []analysis.FunctionReport{{Decisions: []analysis.DecisionReport{decision}}}}}},
+	}}
+	anchors := []string{htmlDecisionAnchor("m/a", decision), htmlDecisionAnchor("m/b", decision), htmlSourceAnchor("m/a", "a.go")}
+	if anchors[0] == anchors[1] {
+		t.Fatal("decision anchor collides across packages")
+	}
+	for range 2 {
+		var output bytes.Buffer
+		if err := WriteHTMLReport(&output, value); err != nil {
+			t.Fatal(err)
+		}
+		for _, anchor := range anchors {
+			if strings.Count(output.String(), `id="`+anchor+`"`) != 1 {
+				t.Errorf("anchor %q missing or duplicated", anchor)
+			}
+		}
+		slices.Reverse(value.Packages)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -287,11 +288,21 @@ func TestIntegratedFixtureWritesPackageCenteredHTML(t *testing.T) {
 	if stdout.Len() != 0 {
 		t.Fatalf("HTML report unexpectedly wrote stdout: %q", stdout.String())
 	}
-	contents, err := os.ReadFile(filepath.Join(output, "index.html"))
+	entry, err := os.ReadFile(filepath.Join(output, "index.html"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range [][]byte{[]byte("Package navigation"), []byte("Evidence producers"), []byte("compiler-selection"), []byte("accepted"), []byte("example.test/gomcdc-fixture/allow"), []byte("allow/allow.go"), []byte("Allow"), []byte("Original source"), []byte("source-code"), []byte("metric-condition"), []byte("No-match selection"), []byte("a &amp;&amp; b"), []byte("UC MC/DC"), []byte("Mask MC/DC"), []byte("Masking witness")} {
+	if bytes.Contains(entry, []byte("data-observation")) || bytes.Contains(entry, []byte("a &amp;&amp; b")) {
+		t.Fatal("overview eagerly contains detailed evidence")
+	}
+	var combined bytes.Buffer
+	for name, content := range readHTMLReportFiles(t, output) {
+		if strings.HasSuffix(name, ".html") {
+			combined.WriteString(content)
+		}
+	}
+	contents := combined.Bytes()
+	for _, required := range [][]byte{[]byte("Package navigation"), []byte("Evidence producers"), []byte("compiler-selection"), []byte("accepted"), []byte("example.test/gomcdc-fixture/allow"), []byte("allow/allow.go"), []byte("Allow"), []byte("Original source"), []byte("source-code"), []byte("view-condition-"), []byte("No-match selection"), []byte("a &amp;&amp; b"), []byte("UC MC/DC"), []byte("Mask MC/DC"), []byte("Masking MC/DC"), []byte("Evaluation A (observed)"), []byte("Witness test"), []byte("Uncovered obligations")} {
 		if !bytes.Contains(contents, required) {
 			t.Errorf("HTML missing %q", required)
 		}
@@ -1840,4 +1851,31 @@ func findProducerOutcome(t *testing.T, built analysis.Result, producer analysis.
 	}
 	t.Fatalf("producer outcome %q not found in %#v", producer, built.ProducerOutcomes)
 	return analysis.ProducerOutcome{}
+}
+
+func readHTMLReportFiles(t *testing.T, directory string) map[string]string {
+	t.Helper()
+	files := make(map[string]string)
+	err := filepath.WalkDir(directory, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(directory, path)
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		files[rel] = string(data)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return files
 }

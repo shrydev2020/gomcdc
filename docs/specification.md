@@ -329,13 +329,19 @@ Every enabled metric displays `covered / total = percentage` or `n/a`, with Inst
 
 ### D31. HTML
 
-`--format html --output <directory>` creates `<directory>/index.html`. HTML is rendered entirely from the same Report model.
+`--format html --output <directory>` generates static pages with `<directory>/index.html` as the entry point. Rendering uses the same Report model and embedded original sources without rerunning measurement, analysis, or tests.
 
-The module summary leads to package-centered navigation, followed by files and functions within each package. The function table presents all eleven metrics as independent columns. Function detail presents original-source Locations, Decisions, Conditions, Clause Body, Clause Selection, and both MC/DC results. Partial runs, unsupported, unknown, infeasible, and analysis-incomplete remain distinct from ordinary non-coverage.
+The overview contains all eleven metrics, run results, counts, and links to indexes. Navigation follows package → file → function → Decision → condition → witness; unopened detail is not embedded in the overview. Each HTML document is limited to 1 MiB after escaping and 5,000 elements. Indexes, findings, source, evidence, and producer diagnostics are paginated, including a single huge file, Decision, or text field. Shared CSS is a local asset in the same generation.
 
-The report presents every producer's integrity, completeness, mapping, and usability axes separately from the overall run status.
+Findings identify package, function, metric, source range, missing outcomes, status, and reason, and link directly to source and evidence. An index groups findings by metric and status. Unsupported, unknown, infeasible, and analysis-incomplete remain distinct from ordinary non-coverage. Producer integrity, completeness, mapping, and usability remain independent of the overall run result.
 
-The output is one self-contained static HTML file containing all display assets and using only declarative HTML and CSS. Viewing it works entirely offline and triggers no network requests. Source expressions and paths are escaped for their HTML context. Numerator, denominator, percentage, and status text accompany the colors.
+Evaluations appear in paginated semantic tables with named condition columns, evaluation ID, status, Decision result, and test/run/package/process provenance. All original observations retain their order and repetitions. Wide condition vectors are split into column groups using matching observation ordinals. MC/DC witness tables retain condition occurrences, observed A/B values, Decision results, provenance, and target/masked/unobserved roles. Masking completion assignments occupy separate columns from observations.
+
+Source pages cover contiguous ranges with original byte offsets and CSS modes for Statement, Decision, Condition, MC/DC, Clause, and Combined. Each page explicitly starts in Statement mode. Color generation does not retain every overlapping annotation set per interval; annotation details and mapping diagnostics have their own paginated index. A link provides all original source bytes. Missing source is never replaced with the current checkout.
+
+Pages use HTML/CSS without JavaScript, external assets, or a server, and work offline through `file://`. Expressions, paths, and metadata are escaped for their HTML context; numerator, denominator, percentage, and status text accompany colors. Copy the entire output directory, not just `index.html`. Browser find and print operate on the current page.
+
+New pages are written to a dedicated generation directory and checked for page budgets and link targets before replacing the entry point. A failed publication preserves the previous entry. Old generations are not automatically deleted, so existing tabs retain working links. Page identity derives from entities and generation identity from generated content; identical inputs and renderer produce identical output. HTML pagination metadata does not enter the public analysis JSON schema.
 
 ### D32. Execution and storage
 

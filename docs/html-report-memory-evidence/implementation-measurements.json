@@ -1,0 +1,1129 @@
+{
+  "note": "Five fresh browsers per case, JS disabled, OS instantaneous maximum renderer RSS; BFCache disabling flag removed. Same saved result, 220307 observations. Not total browser/peak/strictly tab-attributed memory.",
+  "cases": [
+    {
+      "label": "current-single-html",
+      "run": 1,
+      "browser": "154.0.8037.98",
+      "fileBytes": 63328326,
+      "loadMs": 650,
+      "initial": {
+        "stage": "blank",
+        "dom": {
+          "documents": 2,
+          "nodes": 8,
+          "jsEventListeners": 0
+        },
+        "rss": [
+          {
+            "pid": 11220,
+            "rssKiB": 98752
+          },
+          {
+            "pid": 11221,
+            "rssKiB": 119776
+          },
+          {
+            "pid": 11219,
+            "rssKiB": 167184
+          }
+        ],
+        "maxRendererMiB": 163.265625,
+        "metrics": [
+          {
+            "name": "LayoutDuration",
+            "value": 0
+          },
+          {
+            "name": "RecalcStyleDuration",
+            "value": 0
+          },
+          {
+            "name": "JSHeapUsedSize",
+            "value": 616556
+          }
+        ]
+      },
+      "loaded": {
+        "stage": "loaded",
+        "dom": {
+          "documents": 1,
+          "nodes": 571350,
+          "jsEventListeners": 0
+        },
+        "rss": [
+          {
+            "pid": 11220,
+            "rssKiB": 98752
+          },
+          {
+            "pid": 11221,
+            "rssKiB": 397488
+          },
+          {
+            "pid": 11219,
+            "rssKiB": 186624
+          }
+        ],
+        "maxRendererMiB": 388.171875,
+        "metrics": [
+          {
+            "name": "LayoutDuration",
+            "value": 0.034381
+          },
+          {
+            "name": "RecalcStyleDuration",
+            "value": 0.034658
+          },
+          {
+            "name": "JSHeapUsedSize",
+            "value": 615872
+          }
+        ]
+      },
+      "remote": [],
+      "input": "repository saved result (220307 observations)"
+    },
+    {
+      "label": "current-single-html",
+      "run": 2,
+      "browser": "154.0.8037.98",
+      "fileBytes": 63328326,
+      "loadMs": 595,
+      "initial": {
+        "stage": "blank",
+        "dom": {
+          "documents": 2,
+          "nodes": 8,
+          "jsEventListeners": 0
+        },
+        "rss": [
+          {
+            "pid": 11367,
+            "rssKiB": 98784
+          },
+          {
+            "pid": 11368,
+            "rssKiB": 119808
+          },
+          {
+            "pid": 11366,
+            "rssKiB": 164832
+          }
+        ],
+        "maxRendererMiB": 160.96875,
+        "metrics": [
+          {
+            "name": "LayoutDuration",
+            "value": 0
+          },
+          {
+            "name": "RecalcStyleDuration",
+            "value": 0
+          },
+          {
+            "name": "JSHeapUsedSize",
+            "value": 616556
+          }
+        ]
+      },
+      "loaded": {
+        "stage": "loaded",
+        "dom": {
+          "documents": 1,
+          "nodes": 571346,
+          "jsEventListeners": 0
+        },
+        "rss": [
+          {
+            "pid": 11367,
+            "rssKiB": 98784
+          },
+          {
+            "pid": 11368,
+            "rssKiB": 397136
+          },
+          {
+            "pid": 11366,
+            "rssKiB": 182928
+          }
+        ],
+        "maxRendererMiB": 387.828125,
+        "metrics": [
+          {
+            "name": "LayoutDuration",
+            "value": 0.022449
+          },
+          {
+            "name": "RecalcStyleDuration",
+            "value": 0.026461
+          },
+          {
+            "name": "JSHeapUsedSize",
+            "value": 615872
+          }
+        ]
+      },
+      "remote": [],
+      "input": "repository saved result (220307 observations)"
+    },
+    {
+      "label": "current-single-html",
+      "run": 3,
+      "browser": "154.0.8037.98",
+      "fileBytes": 63328326,
+      "loadMs": 582,
+      "initial": {
+        "stage": "blank",
+        "dom": {
+          "documents": 2,
+          "nodes": 8,
+          "jsEventListeners": 0
+        },
+        "rss": [
+          {
+            "pid": 11498,
+            "rssKiB": 98736
+          },
+          {
+            "pid": 11499,
+            "rssKiB": 119776
+          },
+          {
+            "pid": 11497,
+            "rssKiB": 164688
+          }
+        ],
+        "maxRendererMiB": 160.828125,
+        "metrics": [
+          {
+            "name": "LayoutDuration",
+            "value": 0
+          },
+          {
+            "name": "RecalcStyleDuration",
+            "value": 0
+          },
+          {
+            "name": "JSHeapUsedSize",
+            "value": 616556
+          }
+        ]
+      },
+      "loaded": {
+        "stage": "loaded",
+        "dom": {
+          "documents": 1,
+          "nodes": 571345,
+          "jsEventListeners": 0
+        },
+        "rss": [
+          {
+            "pid": 11498,
+            "rssKiB": 98736
+          },
+          {
+            "pid": 11499,
+            "rssKiB": 397104
+          },
+          {
+            "pid": 11497,
+            "rssKiB": 180736
+          }
+        ],
+        "maxRendererMiB": 387.796875,
+        "metrics": [
+          {
+            "name": "LayoutDuration",
+            "value": 0.02158
+          },
+          {
+            "name": "RecalcStyleDuration",
+            "value": 0.026358
+          },
+          {
+            "name": "JSHeapUsedSize",
+            "value": 615872
+          }
+        ]
+      },
+      "remote": [],
+      "input": "repository saved result (220307 observations)"
+    },
+    {
+      "label": "current-single-html",
+      "run": 4,
+      "browser": "154.0.8037.98",
+      "fileBytes": 63328326,
+      "loadMs": 613,
+      "initial": {
+        "stage": "blank",
+        "dom": {
+          "documents": 2,
+          "nodes": 8,
+          "jsEventListeners": 0
+        },
+        "rss": [
+          {
+            "pid": 11645,
+            "rssKiB": 98688
+          },
+          {
+            "pid": 11646,
+            "rssKiB": 119840
+          },
+          {
+            "pid": 11644,
+            "rssKiB": 168976
+          }
+        ],
+        "maxRendererMiB": 165.015625,
+        "metrics": [
+          {
+            "name": "LayoutDuration",
+            "value": 0
+          },
+          {
+            "name": "RecalcStyleDuration",
+            "value": 0
+          },
+          {
+            "name": "JSHeapUsedSize",
+            "value": 616556
+          }
+        ]
+      },
+      "loaded": {
+        "stage": "loaded",
+        "dom": {
+          "documents": 1,
+          "nodes": 571346,
+          "jsEventListeners": 0
+        },
+        "rss": [
+          {
+            "pid": 11645,
+            "rssKiB": 98688
+          },
+          {
+            "pid": 11646,
+            "rssKiB": 397552
+          },
+          {
+            "pid": 11644,
+            "rssKiB": 183552
+          }
+        ],
+        "maxRendererMiB": 388.234375,
+        "metrics": [
+          {
+            "name": "LayoutDuration",
+            "value": 0.021837
+          },
+          {
+            "name": "RecalcStyleDuration",
+            "value": 0.02638
+          },
+          {
+            "name": "JSHeapUsedSize",
+            "value": 615872
+          }
+        ]
+      },
+      "remote": [],
+      "input": "repository saved result (220307 observations)"
+    },
+    {
+      "label": "current-single-html",
+      "run": 5,
+      "browser": "154.0.8037.98",
+      "fileBytes": 63328326,
+      "loadMs": 574,
+      "initial": {
+        "stage": "blank",
+        "dom": {
+          "documents": 2,
+          "nodes": 8,
+          "jsEventListeners": 0
+        },
+        "rss": [
+          {
+            "pid": 11791,
+            "rssKiB": 98688
+          },
+          {
+            "pid": 11792,
+            "rssKiB": 119696
+          },
+          {
+            "pid": 11790,
+            "rssKiB": 167552
+          }
+        ],
+        "maxRendererMiB": 163.625,
+        "metrics": [
+          {
+            "name": "LayoutDuration",
+            "value": 0
+          },
+          {
+            "name": "RecalcStyleDuration",
+            "value": 0
+          },
+          {
+            "name": "JSHeapUsedSize",
+            "value": 616556
+          }
+        ]
+      },
+      "loaded": {
+        "stage": "loaded",
+        "dom": {
+          "documents": 1,
+          "nodes": 571345,
+          "jsEventListeners": 0
+        },
+        "rss": [
+          {
+            "pid": 11791,
+            "rssKiB": 98688
+          },
+          {
+            "pid": 11792,
+            "rssKiB": 397184
+          },
+          {
+            "pid": 11790,
+            "rssKiB": 183616
+          }
+        ],
+        "maxRendererMiB": 387.875,
+        "metrics": [
+          {
+            "name": "LayoutDuration",
+            "value": 0.022227
+          },
+          {
+            "name": "RecalcStyleDuration",
+            "value": 0.025544
+          },
+          {
+            "name": "JSHeapUsedSize",
+            "value": 615872
+          }
+        ]
+      },
+      "remote": [],
+      "input": "repository saved result (220307 observations)"
+    },
+    {
+      "label": "bounded-pages",
+      "run": 1,
+      "browser": "154.0.8037.98",
+      "fileBytes": 5621,
+      "loadMs": 19,
+      "initial": {
+        "stage": "blank",
+        "dom": {
+          "documents": 2,
+          "nodes": 8,
+          "jsEventListeners": 0
+        },
+        "rss": [
+          {
+            "pid": 11922,
+            "rssKiB": 98784
+          },
+          {
+            "pid": 11924,
+            "rssKiB": 119920
+          },
+          {
+            "pid": 11921,
+            "rssKiB": 179584
+          }
+        ],
+        "maxRendererMiB": 175.375,
+        "metrics": [
+          {
+            "name": "LayoutDuration",
+            "value": 0
+          },
+          {
+            "name": "RecalcStyleDuration",
+            "value": 0
+          },
+          {
+            "name": "JSHeapUsedSize",
+            "value": 616556
+          }
+        ]
+      },
+      "loaded": {
+        "stage": "loaded",
+        "dom": {
+          "documents": 4,
+          "nodes": 212,
+          "jsEventListeners": 0
+        },
+        "rss": [
+          {
+            "pid": 11922,
+            "rssKiB": 98784
+          },
+          {
+            "pid": 11924,
+            "rssKiB": 141344
+          },
+          {
+            "pid": 11921,
+            "rssKiB": 185360
+          }
+        ],
+        "maxRendererMiB": 181.015625,
+        "metrics": [
+          {
+            "name": "LayoutDuration",
+            "value": 0.005566
+          },
+          {
+            "name": "RecalcStyleDuration",
+            "value": 0.000569
+          },
+          {
+            "name": "JSHeapUsedSize",
+            "value": 1013536
+          }
+        ]
+      },
+      "remote": [],
+      "navigation": [
+        {
+          "stage": "navigation-10",
+          "dom": {
+            "documents": 24,
+            "nodes": 6442,
+            "jsEventListeners": 0
+          },
+          "rss": [
+            {
+              "pid": 11922,
+              "rssKiB": 98784
+            },
+            {
+              "pid": 11924,
+              "rssKiB": 177936
+            },
+            {
+              "pid": 11921,
+              "rssKiB": 186688
+            }
+          ],
+          "maxRendererMiB": 182.3125,
+          "metrics": [
+            {
+              "name": "LayoutDuration",
+              "value": 0.002007
+            },
+            {
+              "name": "RecalcStyleDuration",
+              "value": 0.000635
+            },
+            {
+              "name": "JSHeapUsedSize",
+              "value": 4870548
+            }
+          ]
+        },
+        {
+          "stage": "navigation-50",
+          "dom": {
+            "documents": 17,
+            "nodes": 16037,
+            "jsEventListeners": 0
+          },
+          "rss": [
+            {
+              "pid": 11922,
+              "rssKiB": 98784
+            },
+            {
+              "pid": 11924,
+              "rssKiB": 299776
+            },
+            {
+              "pid": 11921,
+              "rssKiB": 188448
+            }
+          ],
+          "maxRendererMiB": 292.75,
+          "metrics": [
+            {
+              "name": "LayoutDuration",
+              "value": 0.000362
+            },
+            {
+              "name": "RecalcStyleDuration",
+              "value": 0.000282
+            },
+            {
+              "name": "JSHeapUsedSize",
+              "value": 3701688
+            }
+          ]
+        },
+        {
+          "stage": "navigation-100",
+          "dom": {
+            "documents": 17,
+            "nodes": 22937,
+            "jsEventListeners": 0
+          },
+          "rss": [
+            {
+              "pid": 11922,
+              "rssKiB": 78608
+            },
+            {
+              "pid": 11924,
+              "rssKiB": 299344
+            },
+            {
+              "pid": 11921,
+              "rssKiB": 143792
+            }
+          ],
+          "maxRendererMiB": 292.328125,
+          "metrics": [
+            {
+              "name": "LayoutDuration",
+              "value": 0.008167
+            },
+            {
+              "name": "RecalcStyleDuration",
+              "value": 0.002064
+            },
+            {
+              "name": "JSHeapUsedSize",
+              "value": 2292848
+            }
+          ]
+        },
+        {
+          "stage": "back-forward",
+          "dom": {
+            "documents": 21,
+            "nodes": 30717,
+            "jsEventListeners": 0
+          },
+          "rss": [
+            {
+              "pid": 11922,
+              "rssKiB": 78608
+            },
+            {
+              "pid": 11924,
+              "rssKiB": 302368
+            },
+            {
+              "pid": 11921,
+              "rssKiB": 143872
+            }
+          ],
+          "maxRendererMiB": 295.28125,
+          "metrics": [
+            {
+              "name": "LayoutDuration",
+              "value": 0.005891
+            },
+            {
+              "name": "RecalcStyleDuration",
+              "value": 0.001519
+            },
+            {
+              "name": "JSHeapUsedSize",
+              "value": 3064212
+            }
+          ]
+        }
+      ],
+      "navigationTimesMs": [
+        16,
+        13,
+        10,
+        7,
+        9,
+        10,
+        9,
+        18,
+        10,
+        17,
+        9,
+        10,
+        11,
+        9,
+        16,
+        16,
+        17,
+        17,
+        8,
+        15,
+        10,
+        12,
+        21,
+        26,
+        17,
+        17,
+        19,
+        16,
+        15,
+        11,
+        13,
+        8,
+        12,
+        11,
+        10,
+        9,
+        19,
+        21,
+        15,
+        15,
+        14,
+        41,
+        20,
+        16,
+        11,
+        14,
+        13,
+        16,
+        13,
+        8,
+        9,
+        8,
+        10,
+        9,
+        20,
+        10,
+        9,
+        13,
+        11,
+        8,
+        9,
+        8,
+        11,
+        9,
+        7,
+        8,
+        10,
+        9,
+        13,
+        11,
+        10,
+        8,
+        7,
+        16,
+        10,
+        16,
+        13,
+        11,
+        19,
+        12,
+        23,
+        10,
+        11,
+        14,
+        13,
+        22,
+        16,
+        13,
+        11,
+        20,
+        9,
+        29,
+        16,
+        10,
+        20,
+        10,
+        14,
+        15,
+        13,
+        16
+      ],
+      "input": "repository saved result (220307 observations)"
+    },
+    {
+      "label": "bounded-pages",
+      "run": 2,
+      "browser": "154.0.8037.98",
+      "fileBytes": 5621,
+      "loadMs": 16,
+      "initial": {
+        "stage": "blank",
+        "dom": {
+          "documents": 2,
+          "nodes": 8,
+          "jsEventListeners": 0
+        },
+        "rss": [
+          {
+            "pid": 12310,
+            "rssKiB": 98848
+          },
+          {
+            "pid": 12311,
+            "rssKiB": 119824
+          },
+          {
+            "pid": 12309,
+            "rssKiB": 164224
+          }
+        ],
+        "maxRendererMiB": 160.375,
+        "metrics": [
+          {
+            "name": "LayoutDuration",
+            "value": 0
+          },
+          {
+            "name": "RecalcStyleDuration",
+            "value": 0
+          },
+          {
+            "name": "JSHeapUsedSize",
+            "value": 616556
+          }
+        ]
+      },
+      "loaded": {
+        "stage": "loaded",
+        "dom": {
+          "documents": 4,
+          "nodes": 212,
+          "jsEventListeners": 0
+        },
+        "rss": [
+          {
+            "pid": 12310,
+            "rssKiB": 98848
+          },
+          {
+            "pid": 12311,
+            "rssKiB": 141792
+          },
+          {
+            "pid": 12309,
+            "rssKiB": 180784
+          }
+        ],
+        "maxRendererMiB": 176.546875,
+        "metrics": [
+          {
+            "name": "LayoutDuration",
+            "value": 0.005767
+          },
+          {
+            "name": "RecalcStyleDuration",
+            "value": 0.000547
+          },
+          {
+            "name": "JSHeapUsedSize",
+            "value": 1013536
+          }
+        ]
+      },
+      "remote": [],
+      "input": "repository saved result (220307 observations)"
+    },
+    {
+      "label": "bounded-pages",
+      "run": 3,
+      "browser": "154.0.8037.98",
+      "fileBytes": 5621,
+      "loadMs": 15,
+      "initial": {
+        "stage": "blank",
+        "dom": {
+          "documents": 2,
+          "nodes": 8,
+          "jsEventListeners": 0
+        },
+        "rss": [
+          {
+            "pid": 12442,
+            "rssKiB": 98800
+          },
+          {
+            "pid": 12443,
+            "rssKiB": 119648
+          },
+          {
+            "pid": 12441,
+            "rssKiB": 164256
+          }
+        ],
+        "maxRendererMiB": 160.40625,
+        "metrics": [
+          {
+            "name": "LayoutDuration",
+            "value": 0
+          },
+          {
+            "name": "RecalcStyleDuration",
+            "value": 0
+          },
+          {
+            "name": "JSHeapUsedSize",
+            "value": 616556
+          }
+        ]
+      },
+      "loaded": {
+        "stage": "loaded",
+        "dom": {
+          "documents": 4,
+          "nodes": 212,
+          "jsEventListeners": 0
+        },
+        "rss": [
+          {
+            "pid": 12442,
+            "rssKiB": 98800
+          },
+          {
+            "pid": 12443,
+            "rssKiB": 141424
+          },
+          {
+            "pid": 12441,
+            "rssKiB": 180640
+          }
+        ],
+        "maxRendererMiB": 176.40625,
+        "metrics": [
+          {
+            "name": "LayoutDuration",
+            "value": 0.005912
+          },
+          {
+            "name": "RecalcStyleDuration",
+            "value": 0.000473
+          },
+          {
+            "name": "JSHeapUsedSize",
+            "value": 1013536
+          }
+        ]
+      },
+      "remote": [],
+      "input": "repository saved result (220307 observations)"
+    },
+    {
+      "label": "bounded-pages",
+      "run": 4,
+      "browser": "154.0.8037.98",
+      "fileBytes": 5621,
+      "loadMs": 20,
+      "initial": {
+        "stage": "blank",
+        "dom": {
+          "documents": 2,
+          "nodes": 8,
+          "jsEventListeners": 0
+        },
+        "rss": [
+          {
+            "pid": 12589,
+            "rssKiB": 98848
+          },
+          {
+            "pid": 12590,
+            "rssKiB": 119808
+          },
+          {
+            "pid": 12588,
+            "rssKiB": 164880
+          }
+        ],
+        "maxRendererMiB": 161.015625,
+        "metrics": [
+          {
+            "name": "LayoutDuration",
+            "value": 0
+          },
+          {
+            "name": "RecalcStyleDuration",
+            "value": 0
+          },
+          {
+            "name": "JSHeapUsedSize",
+            "value": 616556
+          }
+        ]
+      },
+      "loaded": {
+        "stage": "loaded",
+        "dom": {
+          "documents": 4,
+          "nodes": 212,
+          "jsEventListeners": 0
+        },
+        "rss": [
+          {
+            "pid": 12589,
+            "rssKiB": 98848
+          },
+          {
+            "pid": 12590,
+            "rssKiB": 142160
+          },
+          {
+            "pid": 12588,
+            "rssKiB": 182736
+          }
+        ],
+        "maxRendererMiB": 178.453125,
+        "metrics": [
+          {
+            "name": "LayoutDuration",
+            "value": 0.005829
+          },
+          {
+            "name": "RecalcStyleDuration",
+            "value": 0.000468
+          },
+          {
+            "name": "JSHeapUsedSize",
+            "value": 1013536
+          }
+        ]
+      },
+      "remote": [],
+      "input": "repository saved result (220307 observations)"
+    },
+    {
+      "label": "bounded-pages",
+      "run": 5,
+      "browser": "154.0.8037.98",
+      "fileBytes": 5621,
+      "loadMs": 13,
+      "initial": {
+        "stage": "blank",
+        "dom": {
+          "documents": 2,
+          "nodes": 8,
+          "jsEventListeners": 0
+        },
+        "rss": [
+          {
+            "pid": 12721,
+            "rssKiB": 98880
+          },
+          {
+            "pid": 12722,
+            "rssKiB": 119824
+          },
+          {
+            "pid": 12720,
+            "rssKiB": 163360
+          }
+        ],
+        "maxRendererMiB": 159.53125,
+        "metrics": [
+          {
+            "name": "LayoutDuration",
+            "value": 0
+          },
+          {
+            "name": "RecalcStyleDuration",
+            "value": 0
+          },
+          {
+            "name": "JSHeapUsedSize",
+            "value": 616556
+          }
+        ]
+      },
+      "loaded": {
+        "stage": "loaded",
+        "dom": {
+          "documents": 4,
+          "nodes": 212,
+          "jsEventListeners": 0
+        },
+        "rss": [
+          {
+            "pid": 12721,
+            "rssKiB": 98880
+          },
+          {
+            "pid": 12722,
+            "rssKiB": 141392
+          },
+          {
+            "pid": 12720,
+            "rssKiB": 180192
+          }
+        ],
+        "maxRendererMiB": 175.96875,
+        "metrics": [
+          {
+            "name": "LayoutDuration",
+            "value": 0.005871
+          },
+          {
+            "name": "RecalcStyleDuration",
+            "value": 0.000471
+          },
+          {
+            "name": "JSHeapUsedSize",
+            "value": 1013536
+          }
+        ]
+      },
+      "remote": [],
+      "input": "repository saved result (220307 observations)"
+    }
+  ],
+  "inventory": {
+    "pages": 13532,
+    "html_bytes": 136249221,
+    "max_page_bytes": 92836,
+    "max_elements": 2657,
+    "observations_first_column_group": 220307,
+    "entry_bytes": 5621
+  },
+  "browser_interaction": {
+    "browser": "154.0.8037.98",
+    "root": "small saved-result fixture",
+    "javaScriptEnabled": false,
+    "remote": [],
+    "errors": [],
+    "measurements": [
+      {
+        "view": "overview",
+        "elements": 112
+      },
+      {
+        "view": "condition-color",
+        "background": "rgb(255, 248, 197)"
+      },
+      {
+        "view": "source",
+        "elements": 459,
+        "selected": true
+      },
+      {
+        "view": "witness",
+        "elements": 106,
+        "tables": 1
+      },
+      {
+        "view": "evaluations",
+        "elements": 166,
+        "rows": 11
+      }
+    ]
+  },
+  "saved_result_file_sha256": "7bc4416ce84679887a4de6192af514edf73ceef0b78990e6a9bc39ca507bec7e",
+  "date": "2026-10-12"
+}

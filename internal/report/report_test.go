@@ -65,10 +65,13 @@ func TestBuildLeavesHTMLSourceProjectionToWriteHTML(t *testing.T) {
 	if !strings.Contains(html.String(), "package p") {
 		t.Fatal("WriteHTML omitted the source projection")
 	}
-	for _, required := range []string{"name=\"source-view-0-0\"", "source-view-combined", "source-view-mcdc", "source-view-clause"} {
+	for _, required := range []string{"name=\"source-view-0-0\"", "value=\"combined\"", "value=\"mcdc\"", "value=\"clause\""} {
 		if !strings.Contains(html.String(), required) {
 			t.Errorf("WriteHTML missing source view %q", required)
 		}
+	}
+	if got := strings.Count(html.String(), `<pre class="source-code">`); got != 1 {
+		t.Fatalf("source copies = %d, want 1", got)
 	}
 	if strings.Contains(html.String(), "source-view-$pi-$fi") {
 		t.Fatal("WriteHTML leaked unexpanded template variables into radio names")

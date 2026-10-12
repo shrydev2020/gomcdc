@@ -3,7 +3,6 @@ package report
 import (
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
 	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
@@ -72,6 +71,8 @@ func sourceAnnotations(file analysis.FileReport, source []byte) []SourceAnnotati
 			mapping := sourceRangeOffsets(statement.Location, source)
 			state := "uncovered"
 			switch {
+			case !statement.Metric.Enabled:
+				state = "disabled"
 			case statement.Metric.Unknown > 0:
 				state = "unknown"
 			case statement.Metric.Unsupported > 0:
@@ -298,6 +299,8 @@ func sourceIntervals(view SourceFileView) []sourceInterval {
 
 func metricState(metric analysis.MetricSummary) string {
 	switch {
+	case !metric.Enabled:
+		return "disabled"
 	case metric.AnalysisIncomplete > 0:
 		return "analysis-incomplete"
 	case metric.Unknown > 0:
@@ -316,6 +319,9 @@ func metricState(metric analysis.MetricSummary) string {
 }
 
 func decisionState(decision analysis.DecisionReport) string {
+	if !decision.Summary.Decision.Enabled {
+		return "disabled"
+	}
 	if decision.Summary.Decision.Unknown > 0 {
 		return "unknown"
 	}
@@ -339,6 +345,8 @@ func decisionState(decision analysis.DecisionReport) string {
 
 func conditionCoverageState(condition analysis.ConditionReport) string {
 	switch {
+	case !condition.Metric.Enabled:
+		return "disabled"
 	case condition.Metric.Unknown > 0:
 		return "unknown"
 	case condition.Metric.Unsupported > 0:
@@ -354,20 +362,4 @@ func conditionCoverageState(condition analysis.ConditionReport) string {
 	default:
 		return "not-covered"
 	}
-}
-
-func sourceClass(annotations []*SourceAnnotation) string {
-	classes := make([]string, 0, len(annotations))
-	seen := make(map[string]struct{}, len(annotations))
-	for _, annotation := range annotations {
-		metric := strings.ReplaceAll(annotation.Metric, "_", "-")
-		class := "ann-" + metric + "-" + strings.ReplaceAll(annotation.State, " ", "-")
-		if _, ok := seen[class]; ok {
-			continue
-		}
-		seen[class] = struct{}{}
-		classes = append(classes, class)
-	}
-	sort.Strings(classes)
-	return strings.Join(classes, " ")
 }

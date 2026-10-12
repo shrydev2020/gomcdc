@@ -141,6 +141,19 @@ func TestSourceMappingFailureProducesDiagnostic(t *testing.T) {
 	}
 }
 
+func TestDisabledSourceMetricsDoNotOverrideEnabledStatementColor(t *testing.T) {
+	location := cover.SourceLocation{File: "p.go", StartOffset: 0, EndOffset: 1}
+	file := analysis.FileReport{Functions: []analysis.FunctionReport{{
+		Statements: []analysis.StatementReport{{Location: location, Covered: true, Metric: analysis.MetricSummary{Enabled: true, Covered: 1, Total: 1}}},
+		Decisions:  []analysis.DecisionReport{{Location: location, Conditions: []analysis.ConditionReport{{Location: location, MCDCUnique: analysis.MCDCConditionReport{Status: "disabled"}, MCDCMasking: analysis.MCDCConditionReport{Status: "disabled"}}}}},
+	}}}
+	view := SourceFileView{Source: "a", Annotations: sourceAnnotations(file, []byte("a"))}
+	segments := htmlSourceSegments(&view, "")
+	if len(segments) != 1 || !strings.Contains(segments[0].Class, "view-combined-covered") || strings.Contains(segments[0].Class, "view-decision-") {
+		t.Fatalf("disabled metrics changed source colors: %#v", segments)
+	}
+}
+
 func BenchmarkSourceIntervalsSweepLine(b *testing.B) {
 	view := SourceFileView{Source: strings.Repeat("x", 100_000), Annotations: make([]SourceAnnotation, 2_000)}
 	for index := range view.Annotations {

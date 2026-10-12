@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"strconv"
 	"strings"
 
 	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
@@ -27,27 +28,51 @@ func writeHTMLReport(w io.Writer, value analysis.Result) error {
 }
 
 // WriteHTMLWithSources decorates an existing analysis with immutable sources.
+// It writes one self-contained document; the CLI uses WriteHTMLDirectory to
+// bound browser memory independently of report size.
 func WriteHTMLWithSources(w io.Writer, value analysis.Result, sources []analysis.SourceFileInput) error {
 	t, err := template.New("report").Funcs(template.FuncMap{
 		"metrics": htmlMetrics, "pct": htmlPercentage, "class": htmlMetricClass,
 		"triageMetrics": htmlTriageMetrics, "metricStatus": htmlMetricStatus,
 		"summaryGaps": htmlSummaryGaps, "summaryState": htmlSummaryState,
 		"loc": htmlLocation, "complete": completeness, "sourceSegments": htmlSourceSegments,
+		"sourceModes": htmlSourceModes, "decisionAnchor": htmlDecisionAnchor,
+		"sourceAnchor": htmlSourceAnchor, "locationRange": htmlLocationRange,
+		"witnessView": htmlWitnessView, "evaluationRows": htmlEvaluationRows,
+		"logField": htmlLogField,
 	}).Parse(htmlDocument)
 	if err != nil {
 		return fmt.Errorf("parse HTML report template: %w", err)
 	}
-	if err := t.Execute(w, sourceView(value, sources)); err != nil {
+	view := struct {
+		htmlReport
+		Findings []htmlFinding
+	}{sourceView(value, sources), htmlFindings(value)}
+	if err := t.Execute(w, view); err != nil {
 		return fmt.Errorf("render HTML report: %w", err)
 	}
 	return nil
 }
 
+// Keep one observation on one tab-delimited line without confusing embedded
+// tabs, newlines, quotes, or backslashes with log delimiters.
+func htmlLogField(value string) string {
+	if strings.ContainsAny(value, "\t\n\r\"\\") {
+		return strconv.Quote(value)
+	}
+	return value
+}
+
 type htmlSourceSegment struct {
-	Text    string
-	Class   string
-	Tooltip string
-	Metrics string
+	Text       string
+	Class      string
+	Tooltip    string
+	Metrics    string
+	Start, End int
+}
+
+func htmlSourceModes() []string {
+	return []string{"statement", "decision", "condition", "mcdc", "clause", "combined"}
 }
 
 func htmlSourceSegments(view *SourceFileView, metric string) []htmlSourceSegment {
@@ -65,27 +90,55 @@ func htmlSourceSegments(view *SourceFileView, metric string) []htmlSourceSegment
 	for _, interval := range sourceIntervals(filtered) {
 		annotations := interval.anns
 		var tooltipParts []string
+		seenTooltips := make(map[string]struct{})
 		var metrics []string
 		seenMetrics := make(map[string]struct{})
 		for _, annotation := range annotations {
 			if annotation.Tooltip != "" {
-				tooltipParts = append(tooltipParts, annotation.Tooltip)
+				if _, seen := seenTooltips[annotation.Tooltip]; !seen {
+					tooltipParts = append(tooltipParts, annotation.Tooltip)
+					seenTooltips[annotation.Tooltip] = struct{}{}
+				}
 			}
 			if _, seen := seenMetrics[annotation.Metric]; !seen {
 				seenMetrics[annotation.Metric] = struct{}{}
 				metrics = append(metrics, annotation.Metric)
 			}
 		}
-		class := sourceClass(annotations)
-		for _, metric := range metrics {
-			class += " metric-" + strings.ReplaceAll(metric, "_", "-")
+		var classes []string
+		for _, mode := range htmlSourceModes() {
+			if metric != "" && mode != metric && mode != "combined" {
+				continue
+			}
+			if severity := htmlSourceSeverity(annotations, mode); severity != "none" {
+				classes = append(classes, "view-"+mode+"-"+severity)
+			}
 		}
 		segments = append(segments, htmlSourceSegment{
-			Text: view.Source[interval.start:interval.end], Class: class,
+			Text: view.Source[interval.start:interval.end], Class: strings.Join(classes, " "),
 			Tooltip: strings.Join(tooltipParts, "\n"), Metrics: strings.Join(metrics, " "),
+			Start: interval.start, End: interval.end,
 		})
 	}
 	return segments
+}
+
+// Each projection chooses its own color on the same source interval. Other
+// metrics cannot override the selected projection's state.
+func htmlSourceSeverity(annotations []*SourceAnnotation, mode string) string {
+	severity := 0
+	for _, annotation := range annotations {
+		filter := mode
+		if mode == "combined" {
+			filter = ""
+		}
+		if !sourceMetricMatches(annotation.Metric, filter) {
+			continue
+		}
+		state := htmlStateSeverity(annotation.State)
+		severity = max(severity, state)
+	}
+	return []string{"none", "covered", "partial", "uncovered", "attention"}[severity]
 }
 
 func sourceMetricMatches(annotationMetric, viewMetric string) bool {
@@ -193,3 +246,18 @@ func htmlLocation(l cover.SourceLocation) string {
 
 //go:embed template/report.html
 var htmlDocument string
+
+func htmlStateSeverity(state string) int {
+	switch state {
+	case "covered", "both":
+		return 1
+	case "partial", "true-only", "false-only":
+		return 2
+	case "not-covered", "uncovered", "not-evaluated":
+		return 3
+	case "unknown", "unsupported", "unsupported-by-backend", "infeasible", "analysis-incomplete":
+		return 4
+	default:
+		return 0
+	}
+}
