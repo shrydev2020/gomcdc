@@ -1540,5 +1540,59 @@
       17,
       18
     ]
+  },
+  "readabilityVerification": {
+    "date": "2026-10-13",
+    "inventory": {
+      "pages": 13532,
+      "maxBytes": 95284,
+      "maxElements": 2678,
+      "observations": 220307
+    },
+    "browserChecks": {
+      "browser": "154.0.8037.98",
+      "javaScriptEnabled": false,
+      "remote": [],
+      "errors": [],
+      "measurements": [
+        {
+          "view": "overview",
+          "elements": 112
+        },
+        {
+          "view": "condition-color",
+          "background": "rgb(218, 251, 225)"
+        },
+        {
+          "view": "source",
+          "elements": 124,
+          "selected": true
+        },
+        {
+          "view": "witness",
+          "elements": 127,
+          "tables": 1
+        },
+        {
+          "view": "evaluations",
+          "elements": 185,
+          "rows": 12
+        }
+      ]
+    },
+    "conditionNavigation": {
+      "file": "condition-000c6805260ce98ba090cd755da71053601e28a5c3418b9e360252240865aa3e-1.html",
+      "context": [
+        "Packagegithub.com/shrydev2020/gomcdc/v2/internal/measurementFileinternal/measurement/archive.goFunctionDecode",
+        "Decisionerr != nilDecision ID0x5c06e102b202fbd6Decision locationinternal/measurement/archive.go:469:5-469:15"
+      ],
+      "observations": "Completed observations for target condition #0\nTarget value\tDecision false\tDecision true\nfalse\t17\t0\ntrue\t0\t0",
+      "target": "#0",
+      "evaluationContext": [
+        "Packagegithub.com/shrydev2020/gomcdc/v2/internal/measurementFileinternal/measurement/archive.goFunctionDecode",
+        "Decisionerr != nilDecision ID0x5c06e102b202fbd6Decision locationinternal/measurement/archive.go:469:5-469:15"
+      ],
+      "observationPage": "decision-f163c294adf8d9ce06a8ba257dd94e543c07d0eb6994bbe00d665a7a3861a57f-evaluations-cols-0-1.html"
+    }
   }
 }

@@ -42,6 +42,10 @@ RSSは、そのブラウザに属するrendererプロセス群の最大瞬時値
 
 エラーの原因保持、重複ソース・欠けたID、不正な座標、ページ参照の不整合を回帰テストへ追加し、全Goテスト・対象race検査・静的検査が成功した。
 
+## 対象情報と観測案内の追加後
+
+2026-10-13、同じ220,307観測から13,532ページを生成した。最大ページは95,284 bytes・2,678要素。Chromeで指標名、詳細ページの対象情報、未達成条件の観測集計、対象条件を含む観測表への移動を確認した。JavaScript無効で実行し、ソースの色分けとwitness表も確認した。生データの`readabilityVerification`にページ検査と操作結果を記録した。RSSとload時間は前節の測定値を参照する。
+
 ## 再現
 
 [implementation-measurements.json](html-report-memory-evidence/implementation-measurements.json)に入力digest、ページ検査、ブラウザ測定の生データを保存している。Playwrightが利用できる環境で、同じ2出力を次のように比較する。

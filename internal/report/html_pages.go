@@ -25,6 +25,7 @@ const (
 	htmlTextChunkBytes        = 16 << 10
 	htmlIndexRows             = 100
 	htmlEvaluationRowsPerPage = 200
+	htmlEvaluationColumns     = 16
 )
 
 // htmlPageWriter writes assets and retains the first output failure.

@@ -178,3 +178,79 @@ func TestHTMLLongInvalidTextReturnsError(t *testing.T) {
 		t.Fatalf("invalid text error: %v", output.err)
 	}
 }
+
+func TestHTMLGenerationValidatesAssetsAndPageLimits(t *testing.T) {
+	for _, tc := range []struct {
+		name, content, want string
+		directory           bool
+	}{
+		{name: "nested directory", directory: true, want: "must be a regular file"},
+		{name: "page bytes", content: strings.Repeat("x", htmlPageBytes+1), want: "exceeds 1048576 bytes"},
+		{name: "page elements", content: strings.Repeat("<br>", htmlPageElements+1), want: "exceeds 5000 elements"},
+		{name: "empty link", content: `<a href="#anchor">link</a>`, want: "invalid link"},
+		{name: "parent link", content: `<a href="../outside.html">link</a>`, want: "invalid link"},
+		{name: "directory link", content: `<a href="nested">link</a>`, directory: true, want: "requires a regular file"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tc.directory {
+				if err := os.Mkdir(filepath.Join(dir, "nested"), 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.content != "" {
+				if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte(tc.content), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err := htmlGenerationDigest(t.Context(), dir)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("generation validation: %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestHTMLGenerationRequiresDirectoryAndPreservesMissingCause(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "generation")
+	if _, err := htmlGenerationDigest(t.Context(), path); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("missing generation cause: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("existing file"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := htmlGenerationDigest(t.Context(), path); err == nil || !strings.Contains(err.Error(), "must be a directory") {
+		t.Fatalf("file accepted as generation: %v", err)
+	}
+	value, sources := directoryFixture(0, 0)
+	if err := WriteHTMLDirectory(t.Context(), path, value, sources); err == nil || !strings.Contains(err.Error(), "create HTML report directory") {
+		t.Fatalf("report output file accepted as directory: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "existing file" {
+		t.Fatalf("existing file changed: %q, %v", data, err)
+	}
+}
+
+func TestHTMLEntryCancellationPreservesPublishedEntry(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "index.html")
+	if err := os.WriteFile(path, []byte("existing entry"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	err := publishHTMLEntry(ctx, dir, []byte("replacement entry"))
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "publish HTML entry") {
+		t.Fatalf("entry cancellation: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "existing entry" {
+		t.Fatalf("published entry changed: %q, %v", data, err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("temporary entry retained: %v, %v", entries, err)
+	}
+}

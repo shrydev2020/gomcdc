@@ -41,7 +41,7 @@ func (s *htmlReportRenderer) metrics(summary analysis.Summary) string {
 	var b strings.Builder
 	b.WriteString(`<div class="metrics">`)
 	for _, m := range htmlMetrics(summary) {
-		fmt.Fprintf(&b, `<div class="metric %s"><div class="name" title="%s">%s</div>%s<div class="value">%s</div><div>%d / %d</div><small>unknown %d · unsupported %d · infeasible %d · analysis-incomplete %d</small></div>`, htmlMetricClass(m.Summary), m.Name, m.Short, s.output.status(htmlMetricStatus(m.Summary)), htmlPercentage(m.Summary), m.Summary.Covered, m.Summary.Total, m.Summary.Unknown, m.Summary.Unsupported, m.Summary.Infeasible, m.Summary.AnalysisIncomplete)
+		fmt.Fprintf(&b, `<div class="metric %s"><div class="name" title="%s">%s</div>%s<div class="value">%s</div><div>%d / %d</div><small>unknown %d · unsupported %d · infeasible %d · analysis-incomplete %d</small></div>`, htmlMetricClass(m.Summary), m.Name, m.Name, s.output.status(htmlMetricStatus(m.Summary)), htmlPercentage(m.Summary), m.Summary.Covered, m.Summary.Total, m.Summary.Unknown, m.Summary.Unsupported, m.Summary.Infeasible, m.Summary.AnalysisIncomplete)
 	}
 	b.WriteString(`</div>`)
 	return b.String()

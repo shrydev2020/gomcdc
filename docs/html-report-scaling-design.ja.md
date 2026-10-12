@@ -24,6 +24,10 @@
 
 witnessの観測値とcompletionは別の列で表示する。completionは解析で用いた値の割り当てを表す。全観測の順序、反復、出所を保持する。
 
+概要では指標の正式名を本文に表示する。Decision・condition・witness・evaluationsの各ページには、package・file・function、Decisionの式・ID・ソース位置を表示する。継続ページにも同じ見出し情報を含め、リンク先を直接開いた場合も対象を特定できる。
+
+MC/DCが`not-covered`の条件では、対象条件とDecisionの反転、およびUnique-Cause／Maskingそれぞれの独立性の成立条件を説明する。観測集計は対象条件のtrue/falseとDecision結果の組み合わせを数え、短絡・値が欠けた観測・未完了の観測は別に表示する。観測表へのリンクは対象条件を含む列グループに移動する。`unknown`・`unsupported`・`infeasible`・`analysis-incomplete`は、それぞれ解析結果の状態と理由を表示する。
+
 ## 読み込み量の上限
 
 | 単位 | 上限 |

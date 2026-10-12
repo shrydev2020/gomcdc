@@ -125,7 +125,8 @@ func (s *htmlReportRenderer) renderFile(id, parent, pkg string, file analysis.Fi
 	p.close()
 }
 func (s *htmlReportRenderer) renderFunction(id, parent, pkg, path string, fn analysis.FunctionReport, source htmlSourcePages) {
-	intro := s.output.paragraph("Function", fn.Name) + s.metrics(fn.Summary)
+	context := htmlFunctionContext{packagePath: pkg, filePath: path, name: fn.Name}
+	intro := s.functionContext(context) + s.metrics(fn.Summary)
 	if fn.Location != nil {
 		intro += `<p>` + s.sourceLocation(source, *fn.Location) + `</p>`
 	}
@@ -138,7 +139,7 @@ func (s *htmlReportRenderer) renderFunction(id, parent, pkg, path string, fn ana
 			break
 		}
 		did := htmlDecisionAnchor(pkg, d)
-		s.renderDecision(did, p.link(), d, source)
+		s.renderDecision(did, p.link(), context, d, source)
 		p.add(`<article><h2>Decision: ` + s.output.link(htmlPageName(did, 1), d.Expression) + `</h2>` + s.output.status(htmlMetricStatus(d.Summary.Decision)) + `<p>` + s.sourceLocation(source, d.Location) + `</p></article>`)
 	}
 	for _, c := range fn.Clauses {

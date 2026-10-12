@@ -133,6 +133,14 @@ func htmlMissingOutcomes(trueObserved, falseObserved bool) string {
 }
 
 func htmlMCDCDetail(result analysis.MCDCConditionReport) string {
+	detail := htmlMCDCStatusDetail(result)
+	if result.Reason != "" {
+		detail += " Reason: " + result.Reason
+	}
+	return strings.TrimSpace(detail)
+}
+
+func htmlMCDCStatusDetail(result analysis.MCDCConditionReport) string {
 	var detail string
 	switch result.Status {
 	case "not-covered":
@@ -148,9 +156,6 @@ func htmlMCDCDetail(result analysis.MCDCConditionReport) string {
 	}
 	if result.Witness == nil {
 		detail += " No witness pair is available."
-	}
-	if result.Reason != "" {
-		detail += " Reason: " + result.Reason
 	}
 	return strings.TrimSpace(detail)
 }

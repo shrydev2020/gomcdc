@@ -75,7 +75,7 @@ func (s *htmlReportRenderer) renderSource(pkg string, file analysis.FileReport, 
 		fmt.Fprintf(&controls, `<label><input type="radio" name="source-view" value="%s"%s>%s</label>`, mode, checked, mode)
 	}
 	controls.WriteString(`</fieldset><div class="source-panel" aria-label="Original source"><pre class="source-code"><code>`)
-	intro := s.output.paragraph("Original source", file.Path) + `<p>` + htmlLink(htmlPageName(fileID+"-annotations", 1), "Annotations and mapping diagnostics") + `</p><p class="legend">covered · partial · uncovered · unknown / unsupported / infeasible / analysis-incomplete</p>`
+	intro := s.output.paragraph("Package", pkg) + s.output.paragraph("Original source", file.Path) + `<p>` + htmlLink(htmlPageName(fileID+"-annotations", 1), "Annotations and mapping diagnostics") + `</p><p class="legend">covered · partial · uncovered · unknown / unsupported / infeasible / analysis-incomplete</p>`
 	if available {
 		s.output.write(fileID+".txt", source)
 		intro += `<p>` + `<a href="` + fileID + `.txt" download="` + escape(file.Path) + `">Download original source (all bytes)</a>` + `</p>`
@@ -147,7 +147,7 @@ func (s *htmlReportRenderer) renderSource(pkg string, file analysis.FileReport, 
 			}
 		}
 	}
-	list := s.output.pages(htmlSection{id: fileID + "-annotations", title: "Source annotations and mapping diagnostics", parent: htmlPageName(fileID, 1), intro: s.output.paragraph("File", file.Path), rowLimit: htmlIndexRows})
+	list := s.output.pages(htmlSection{id: fileID + "-annotations", title: "Source annotations and mapping diagnostics", parent: htmlPageName(fileID, 1), intro: s.output.paragraph("Package", pkg) + s.output.paragraph("File", file.Path), rowLimit: htmlIndexRows})
 	// Annotation details link color ranges to their measurement evidence.
 	for _, a := range annotations {
 		body := `<article><h2>` + escape(a.Metric) + `</h2>` + s.output.status(a.State) + s.output.paragraph("Entity", a.EntityID) + s.output.paragraph("Evidence", a.Tooltip)
