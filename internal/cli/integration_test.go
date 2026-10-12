@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -1855,8 +1856,18 @@ func findProducerOutcome(t *testing.T, built analysis.Result, producer analysis.
 
 func readHTMLReportFiles(t *testing.T, directory string) map[string]string {
 	t.Helper()
-	files := make(map[string]string)
-	err := filepath.WalkDir(directory, func(path string, d fs.DirEntry, err error) error {
+	entry, err := os.ReadFile(filepath.Join(directory, "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	match := regexp.MustCompile(`href="(report-[^/]+)/style.css"`).FindSubmatch(entry)
+	if len(match) != 2 {
+		t.Fatal("HTML entry generation missing")
+	}
+	generation := string(match[1])
+	files := map[string]string{"index.html": strings.ReplaceAll(string(entry), generation+"/", "report/")}
+	directory = filepath.Join(directory, generation)
+	err = filepath.WalkDir(directory, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

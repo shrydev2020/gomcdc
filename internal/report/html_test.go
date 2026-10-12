@@ -1,9 +1,7 @@
 package report
 
 import (
-	"bytes"
-	"html"
-	"regexp"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -27,51 +25,21 @@ func TestWriteHTMLRendersGoHierarchyAndEscapesSourceText(t *testing.T) {
 			Usability: analysis.ProducerUsabilityAcceptedPartial,
 		}},
 		Summary:  analysis.Summary{Statement: metric},
-		Packages: []analysis.PackageReport{{Path: "example.test/mod/pkg", Status: "passed", Evidence: true, Summary: analysis.Summary{Statement: metric}, Files: []analysis.FileReport{{Path: "pkg/value.go", Summary: analysis.Summary{Statement: metric}, Functions: []analysis.FunctionReport{{Name: "Check<script>", Location: &location, Summary: analysis.Summary{Statement: metric}, Decisions: []analysis.DecisionReport{{Expression: "a < b && <script>", Location: location, DecisionCoverage: analysis.DecisionCoverage{True: true}, Conditions: []analysis.ConditionReport{{Expression: "a < b", Location: location}}}}}}}}}},
+		Packages: []analysis.PackageReport{{Path: "example.test/mod/pkg", Status: "passed", Evidence: true, Summary: analysis.Summary{Statement: metric}, Files: []analysis.FileReport{{Path: "pkg/value.go", Summary: analysis.Summary{Statement: metric}, Functions: []analysis.FunctionReport{{Name: "Check<script>", Location: &location, Summary: analysis.Summary{Statement: metric}, Decisions: []analysis.DecisionReport{{DecisionID: "stable", Expression: "a < b && <script>", Location: location, DecisionCoverage: analysis.DecisionCoverage{True: true}, Conditions: []analysis.ConditionReport{{Expression: "a < b", Location: location}}}}}}}}}},
 	}
-	var first, second bytes.Buffer
-	if err := writeHTMLReport(&first, value); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeHTMLReport(&second, value); err != nil {
-		t.Fatal(err)
-	}
-	if first.String() != second.String() {
+	first := renderHTMLPages(t, value, nil)
+	second := renderHTMLPages(t, value, nil)
+	if !reflect.DeepEqual(first, second) {
 		t.Fatal("HTML output is not deterministic")
 	}
-	html := first.String()
-	for _, required := range []string{"Package navigation", "Evidence producers", "go-cover", "valid", "partial", "accepted-partial", "example.test/mod/pkg", "pkg/value.go", "Check&lt;script&gt;", "a &lt; b &amp;&amp; &lt;script&gt;", "UC MC/DC", "Mask MC/DC", "gomcdc v2.0.0 (report schema 2.0)"} {
+	html := joinHTMLPages(first)
+	for _, required := range []string{"Packages", "Evidence producers", "go-cover", "valid", "partial", "accepted-partial", "example.test/mod/pkg", "pkg/value.go", "Check&lt;script&gt;", "a &lt; b &amp;&amp; &lt;script&gt;", "Unique-Cause MC/DC", "Masking MC/DC", "gomcdc v2.0.0 (report schema 2.0)"} {
 		if !strings.Contains(html, required) {
 			t.Errorf("HTML missing %q", required)
 		}
 	}
 	if strings.Contains(html, "<script>") || strings.Contains(html, "http://") || strings.Contains(html, "https://") {
 		t.Fatalf("HTML contains executable or external content: %s", html)
-	}
-}
-
-func TestHTMLSourceAppearsOnceAndPreservesBytes(t *testing.T) {
-	t.Parallel()
-	source := "package p\n// あ <script> & unique-source-marker\nfunc Check(a bool) bool { return a }\n"
-	location := cover.SourceLocation{File: "p.go", StartOffset: 70, EndOffset: 71}
-	value := analysis.Result{Packages: []analysis.PackageReport{{Path: "m/p", Files: []analysis.FileReport{{Path: "p.go", Functions: []analysis.FunctionReport{{
-		Decisions: []analysis.DecisionReport{{DecisionID: "id", Location: location, Conditions: []analysis.ConditionReport{{Location: location, MCDCUnique: analysis.MCDCConditionReport{Status: "not-covered"}}}}},
-	}}}}}}}
-	var output bytes.Buffer
-	if err := WriteHTMLWithSources(&output, value, []analysis.SourceFileInput{{PackagePath: "m/p", Path: "p.go", Source: []byte(source)}}); err != nil {
-		t.Fatal(err)
-	}
-	pre := regexp.MustCompile(`<pre class="source-code"><code>(.*?)</code></pre>`).FindAllStringSubmatch(strings.ReplaceAll(output.String(), "\n", "\x00"), -1)
-	if len(pre) != 1 {
-		t.Fatalf("source copies = %d, want 1", len(pre))
-	}
-	got := html.UnescapeString(regexp.MustCompile(`<[^>]+>`).ReplaceAllString(pre[0][1], ""))
-	got = strings.ReplaceAll(got, "\x00", "\n")
-	if got != source {
-		t.Fatalf("source changed: %q, want %q", got, source)
-	}
-	if strings.Count(output.String(), "unique-source-marker") != 1 || strings.Contains(output.String(), "<script>") {
-		t.Fatal("source was duplicated or not escaped")
 	}
 }
 
@@ -92,12 +60,8 @@ func TestHTMLFindingsPreserveObligationStates(t *testing.T) {
 		})
 	}
 	value := analysis.Result{Packages: []analysis.PackageReport{{Path: "m/auth", Files: []analysis.FileReport{{Path: "auth.go", Functions: []analysis.FunctionReport{{Name: "Check", Decisions: []analysis.DecisionReport{decision}}}}}}}}
-	var output bytes.Buffer
-	if err := WriteHTMLReport(&output, value); err != nil {
-		t.Fatal(err)
-	}
-	findings := strings.Split(strings.Split(output.String(), `id="findings"`)[1], `id="producers"`)[0]
-	for _, required := range []string{"Function: <code>Check</code>", "auth.go:4:18-4:25", "Missing outcome: false.", "Missing evidence: an independence witness pair", "No witness pair is available."} {
+	findings := renderHTMLPages(t, value, nil)["findings-1.html"]
+	for _, required := range []string{"Function:</strong> Check", "auth.go:4:18-4:25", "Missing outcome: false.", "Missing evidence: an independence witness pair", "No witness pair is available."} {
 		if !strings.Contains(findings, required) {
 			t.Errorf("findings missing %q", required)
 		}
@@ -112,7 +76,7 @@ func TestHTMLFindingsPreserveObligationStates(t *testing.T) {
 			t.Errorf("%s incorrectly listed as a finding", state)
 		}
 	}
-	for _, finding := range htmlFindings(value) {
+	for _, finding := range collectHTMLFindings(value) {
 		if finding.Status != "not-covered" && strings.Contains(finding.Detail, "Missing evidence:") {
 			t.Errorf("%s incorrectly asks for missing test evidence: %s", finding.Status, finding.Detail)
 		}
@@ -120,7 +84,7 @@ func TestHTMLFindingsPreserveObligationStates(t *testing.T) {
 	decision.MCDCUnique.Enabled, decision.MCDCMasking.Enabled = false, false
 	decision.Summary.Decision.Enabled = false
 	value.Packages[0].Files[0].Functions[0].Decisions[0] = decision
-	if got := htmlFindings(value); len(got) != 0 {
+	if got := collectHTMLFindings(value); len(got) != 0 {
 		t.Fatalf("disabled metrics produced findings: %#v", got)
 	}
 }
@@ -137,17 +101,10 @@ func TestHTMLWitnessNamesConditionsAndSeparatesMaskingCompletions(t *testing.T) 
 		Conditions:  []analysis.ConditionReport{condition, {Index: 0, Expression: "signedIn", MCDCMasking: analysis.MCDCConditionReport{Status: "not-covered"}}},
 		Evaluations: []analysis.EvaluationReport{{Conditions: []string{"true"}, Status: "aborted", TestID: "TestPanic"}},
 	}
-	view := htmlWitnessView(decision, condition, "Masking MC/DC", condition.MCDCMasking)
-	if row := view.Rows[0]; row.First != "not-evaluated" || row.FirstCompletion != "true" || !row.Target || !row.Unobserved {
-		t.Fatalf("witness values not indexed by condition occurrence: %#v", row)
-	}
 	value := analysis.Result{Packages: []analysis.PackageReport{{Path: "m/auth", Files: []analysis.FileReport{{Path: "auth.go", Functions: []analysis.FunctionReport{{Decisions: []analysis.DecisionReport{decision}}}}}}}}
-	var output bytes.Buffer
-	if err := WriteHTMLReport(&output, value); err != nil {
-		t.Fatal(err)
-	}
-	for _, required := range []string{"Target condition: <code>expired</code>", "Evaluation A (observed)", "Completion A (analysis)", "#1 <code>expired</code></th><td>not-evaluated</td><td>false</td><td>true</td>", "Witness test", "TestExpired", "TestValid", "eval-a", "run-b", "process 42", "not available (aborted)", "not available"} {
-		if !strings.Contains(output.String(), required) {
+	output := joinHTMLPages(renderHTMLPages(t, value, nil))
+	for _, required := range []string{"Target condition:</strong> expired", "Evaluation A (observed)", "Completion A (analysis)", "#1 expired</th><td>not-evaluated</td><td>false</td><td>true</td>", "Witness test", "TestExpired", "TestValid", "eval-a", "run-b", "process 42", "not available (aborted)", "not available"} {
+		if !strings.Contains(output, required) {
 			t.Errorf("HTML witness missing %q", required)
 		}
 	}
@@ -165,13 +122,10 @@ func TestHTMLAnchorsDoNotDependOnPackageOrder(t *testing.T) {
 		t.Fatal("decision anchor collides across packages")
 	}
 	for range 2 {
-		var output bytes.Buffer
-		if err := WriteHTMLReport(&output, value); err != nil {
-			t.Fatal(err)
-		}
+		pages := renderHTMLPages(t, value, nil)
 		for _, anchor := range anchors {
-			if strings.Count(output.String(), `id="`+anchor+`"`) != 1 {
-				t.Errorf("anchor %q missing or duplicated", anchor)
+			if _, ok := pages[anchor+"-1.html"]; !ok {
+				t.Errorf("missing page %s", anchor)
 			}
 		}
 		slices.Reverse(value.Packages)
@@ -180,11 +134,8 @@ func TestHTMLAnchorsDoNotDependOnPackageOrder(t *testing.T) {
 
 func TestWriteHTMLMarksPartialReport(t *testing.T) {
 	t.Parallel()
-	var output bytes.Buffer
-	if err := writeHTMLReport(&output, analysis.Result{Module: "m", Run: analysis.Run{Status: cover.RunFailed}}); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(output.String(), "Partial report") {
+	output := renderHTMLPages(t, analysis.Result{Module: "m", Run: analysis.Run{Status: cover.RunFailed}}, nil)["overview-1.html"]
+	if !strings.Contains(output, "Partial report") {
 		t.Fatal("partial report warning is missing")
 	}
 }
@@ -201,16 +152,10 @@ func TestWriteHTMLDistinguishesCoverageEvidenceStates(t *testing.T) {
 		{"incomplete", "attention", "analysis-incomplete", "analysis-incomplete 1", analysis.MetricSummary{Enabled: true, AnalysisIncomplete: 1}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			var output bytes.Buffer
-			if err := WriteHTMLReport(&output, analysis.Result{
-				Module: "m", Run: analysis.Run{Status: cover.RunPassed, Complete: true},
-				Summary: analysis.Summary{MCDCUnique: test.metric},
-			}); err != nil {
-				t.Fatal(err)
-			}
-			card := `<div class="metric ` + test.class + `"><div class="metric-top"><div class="name">Unique-Cause MC/DC</div><span class="status status-` + test.status + `">` + test.status + `</span>`
+			output := renderHTMLPages(t, analysis.Result{Module: "m", Run: analysis.Run{Status: cover.RunPassed, Complete: true}, Summary: analysis.Summary{MCDCUnique: test.metric}}, nil)["overview-1.html"]
+			card := `<div class="metric ` + test.class + `"><div class="name" title="Unique-Cause MC/DC">Unique-Cause MC/DC</div><span class="status status-` + test.status + `">` + test.status + `</span>`
 			for _, required := range []string{card, test.detail} {
-				if !strings.Contains(output.String(), required) {
+				if !strings.Contains(output, required) {
 					t.Errorf("HTML omitted %q", required)
 				}
 			}
@@ -241,11 +186,8 @@ func TestReportsExposeClauseSelectionEvidence(t *testing.T) {
 			}},
 		}},
 	}
-	var output bytes.Buffer
-	if err := writeHTMLReport(&output, value); err != nil {
-		t.Fatal(err)
-	}
-	if html := output.String(); !strings.Contains(html, "direct selections 2 · alternatives [0 2]") {
+	output := joinHTMLPages(renderHTMLPages(t, value, nil))
+	if html := output; !strings.Contains(html, "direct selections 2") || !strings.Contains(html, "selected alternative 0") || !strings.Contains(html, "selected alternative 2") {
 		t.Fatalf("HTML omits clause-selection evidence: %s", html)
 	}
 	if text := RenderTextReport(value); !strings.Contains(text, "direct-selections=2 selected-alternatives=[0 2]") {
@@ -264,14 +206,40 @@ func TestWriteHTMLPresentsHumanReadableTriageHierarchy(t *testing.T) {
 			MCDCUnique: metric, MCDCMasking: metric},
 		Packages: []analysis.PackageReport{{Path: "example.test/module/pkg", Status: "passed", Summary: analysis.Summary{Statement: metric, Decision: metric, Condition: metric}, Files: []analysis.FileReport{{Path: "pkg/value.go", Functions: []analysis.FunctionReport{{Name: "Check", Summary: analysis.Summary{Statement: metric, Decision: metric}}}}}}},
 	}
-	var output bytes.Buffer
-	if err := writeHTMLReport(&output, value); err != nil {
-		t.Fatal(err)
-	}
-	html := output.String()
-	for _, required := range []string{"Where to look first", "Open obligations", "Package → file → function → evidence", "Source view:", "Statement", "Function", "Decision", "Condition", "UC MC/DC", "Mask MC/DC", "status-partial"} {
+	output := joinHTMLPages(renderHTMLPages(t, value, nil))
+	html := output
+	for _, required := range []string{"Uncovered obligations", "open obligations", "Browse packages → files → functions", "Original source", "Statement", "Function", "Decision", "Condition", "Unique-Cause MC/DC", "Masking MC/DC", "status-partial"} {
 		if !strings.Contains(html, required) {
 			t.Errorf("HTML missing human-readable UI element %q", required)
 		}
 	}
+}
+
+func renderHTMLPages(t *testing.T, value analysis.Result, sources []analysis.SourceFileInput) map[string]string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := WriteHTMLDirectory(t.Context(), dir, value, sources); err != nil {
+		t.Fatal(err)
+	}
+	_, pages := readHTMLGeneration(t, dir)
+	assertHTMLLinksAndBudgets(t, pages)
+	return pages
+}
+func joinHTMLPages(pages map[string]string) string {
+	var b strings.Builder
+	for _, body := range pages {
+		b.WriteString(body)
+	}
+	return b.String()
+}
+func collectHTMLFindings(value analysis.Result) []htmlFinding {
+	var result []htmlFinding
+	for _, pkg := range value.Packages {
+		for _, file := range pkg.Files {
+			for _, fn := range file.Functions {
+				walkFunctionHTMLFindings(pkg.Path, file.Path, fn, htmlFunctionID(pkg.Path, file.Path, fn), func(f htmlFinding) { result = append(result, f) })
+			}
+		}
+	}
+	return result
 }

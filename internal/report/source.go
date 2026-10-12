@@ -2,7 +2,6 @@ package report
 
 import (
 	"fmt"
-	"sort"
 
 	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
 	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
@@ -12,56 +11,6 @@ type sourceMapping struct {
 	start, end int
 	status     string
 	reason     string
-}
-
-type sourceInterval struct {
-	start, end int
-	// Annotations are immutable; intervals retain references instead of copying
-	// every string-bearing annotation for every overlap.
-	anns []*SourceAnnotation
-}
-
-type sourceBoundaryEvent struct {
-	starts []int
-	ends   []int
-}
-
-// htmlReport combines analysis and source annotations for HTML rendering.
-type htmlReport struct {
-	analysis.Result
-
-	Packages []htmlPackage
-}
-type htmlPackage struct {
-	analysis.PackageReport
-
-	Files []htmlFile
-}
-type htmlFile struct {
-	analysis.FileReport
-
-	Source *SourceFileView
-}
-
-func sourceView(value analysis.Result, sourceFiles []analysis.SourceFileInput) htmlReport {
-	sources := make(map[string]analysis.SourceFileInput, len(sourceFiles))
-	for _, source := range sourceFiles {
-		sources[source.PackagePath+"\x00"+source.Path] = source
-	}
-	view := htmlReport{Result: value, Packages: make([]htmlPackage, len(value.Packages))}
-	for pi, pkg := range value.Packages {
-		p := htmlPackage{PackageReport: pkg, Files: make([]htmlFile, len(pkg.Files))}
-		for fi, file := range pkg.Files {
-			f := htmlFile{FileReport: file}
-			if source, ok := sources[pkg.Path+"\x00"+file.Path]; ok {
-				annotations := sourceAnnotations(file, source.Source)
-				f.Source = &SourceFileView{Path: file.Path, Source: string(source.Source), Annotations: normalizeAnnotations(annotations, len(source.Source)), Diagnostics: sourceMappingDiagnostics(annotations)}
-			}
-			p.Files[fi] = f
-		}
-		view.Packages[pi] = p
-	}
-	return view
 }
 
 func sourceAnnotations(file analysis.FileReport, source []byte) []SourceAnnotation {
@@ -168,19 +117,6 @@ func sourceRangeOffsets(location cover.SourceLocation, source []byte) sourceMapp
 	}
 }
 
-func sourceMappingDiagnostics(annotations []SourceAnnotation) []SourceDiagnostic {
-	var diagnostics []SourceDiagnostic
-	for _, annotation := range annotations {
-		if annotation.MappingStatus != "unknown" {
-			continue
-		}
-		diagnostics = append(diagnostics, SourceDiagnostic{
-			Metric: annotation.Metric, EntityID: annotation.EntityID, Reason: annotation.MappingReason,
-		})
-	}
-	return diagnostics
-}
-
 func decisionTooltip(decision analysis.DecisionReport) string {
 	return fmt.Sprintf("Decision %s: %s\ntrue: %s\nfalse: %s\nnot evaluated: %d",
 		decision.DecisionID, decision.Expression, outcomeLabel(decision.DecisionCoverage.True),
@@ -224,82 +160,6 @@ func lineColumnOffset(source []byte, line, column int) (int, bool) {
 		}
 	}
 	return target, true
-}
-
-func normalizeAnnotations(annotations []SourceAnnotation, sourceLength int) []SourceAnnotation {
-	filtered := annotations[:0]
-	for _, annotation := range annotations {
-		if annotation.StartOffset < 0 || annotation.EndOffset <= annotation.StartOffset {
-			continue
-		}
-		if annotation.StartOffset > sourceLength {
-			continue
-		}
-		if annotation.EndOffset > sourceLength {
-			annotation.EndOffset = sourceLength
-		}
-		filtered = append(filtered, annotation)
-	}
-	return filtered
-}
-
-func sourceIntervals(view SourceFileView) []sourceInterval {
-	boundaries := []int{0, len(view.Source)}
-	events := make(map[int]sourceBoundaryEvent, len(view.Annotations)*2)
-	for index, annotation := range view.Annotations {
-		if annotation.StartOffset < 0 || annotation.EndOffset <= annotation.StartOffset ||
-			annotation.EndOffset > len(view.Source) {
-			continue
-		}
-		boundaries = append(boundaries, annotation.StartOffset, annotation.EndOffset)
-		startEvent := events[annotation.StartOffset]
-		startEvent.starts = append(startEvent.starts, index)
-		events[annotation.StartOffset] = startEvent
-		endEvent := events[annotation.EndOffset]
-		endEvent.ends = append(endEvent.ends, index)
-		events[annotation.EndOffset] = endEvent
-	}
-	sort.Ints(boundaries)
-	unique := boundaries[:0]
-	for _, boundary := range boundaries {
-		if len(unique) == 0 || unique[len(unique)-1] != boundary {
-			unique = append(unique, boundary)
-		}
-	}
-	intervals := make([]sourceInterval, 0, len(unique))
-	active := make([]int, 0, len(view.Annotations))
-	positions := make([]int, len(view.Annotations))
-	for index := range positions {
-		positions[index] = -1
-	}
-	for index := 0; index+1 < len(unique); index++ {
-		start, end := unique[index], unique[index+1]
-		if start == end {
-			continue
-		}
-		event := events[start]
-		for _, annotationIndex := range event.ends {
-			position := positions[annotationIndex]
-			if position < 0 {
-				continue
-			}
-			last := active[len(active)-1]
-			active[position] = last
-			positions[last] = position
-			active = active[:len(active)-1]
-			positions[annotationIndex] = -1
-		}
-		for _, annotationIndex := range event.starts {
-			positions[annotationIndex] = len(active)
-			active = append(active, annotationIndex)
-		}
-		activeAnnotations := make([]*SourceAnnotation, 0, len(active))
-		for _, annotationIndex := range active {
-			activeAnnotations = append(activeAnnotations, &view.Annotations[annotationIndex])
-		}
-		intervals = append(intervals, sourceInterval{start: start, end: end, anns: activeAnnotations})
-	}
-	return intervals
 }
 
 func metricState(metric analysis.MetricSummary) string {

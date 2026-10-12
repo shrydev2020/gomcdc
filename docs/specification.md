@@ -341,7 +341,7 @@ Source pages cover contiguous ranges with original byte offsets and CSS modes fo
 
 Pages use local HTML/CSS assets and work offline through `file://`. Expressions, paths, and metadata are escaped for their HTML context; numerator, denominator, percentage, and status text accompany colors. Copy the entire output directory when sharing the report. Browser find and print operate on the current page.
 
-New pages are written to a dedicated generation directory and checked for page budgets and link targets before replacing the entry point. A failed publication preserves the previous entry. Old generations remain available so existing tabs retain working links. Page identity derives from entities and generation identity from generated content; identical inputs and renderer produce identical output. Pagination metadata belongs to the HTML output.
+New pages are written to a dedicated generation directory and checked for page budgets and link targets before replacing the entry point. A failed publication preserves the previous entry. Old generations remain available so existing tabs retain working links. Page identity derives from entities. Each publication receives a fresh generation directory; identical inputs and renderer produce identical page contents within it. Pagination metadata belongs to the HTML output.
 
 ### D32. Execution and storage
 

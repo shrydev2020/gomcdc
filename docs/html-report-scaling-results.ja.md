@@ -4,7 +4,7 @@
 
 ## 条件
 
-リポジトリ全体の保存結果から、単一HTMLと分割HTMLを生成した。入力は220,307観測。単一HTMLは`WriteHTMLWithSources`によるtext log表示、分割HTMLはCLIの`WriteHTMLDirectory`による出力。
+リポジトリ全体の保存結果から、単一HTMLと分割HTMLを生成した。入力は220,307観測。測定時の単一HTMLは`WriteHTMLWithSources`によるtext log表示、分割HTMLはCLIの`WriteHTMLDirectory`による出力。
 
 Chrome headless 154.0.8037.98 / macOS / Apple M2 Pro / 1440×1000。JavaScriptを無効にし、各形式を新しいブラウザで5回開いてload時点に測定した。BFCacheはChromeの通常設定を使用し、OSのディスクキャッシュは維持した。
 
@@ -48,14 +48,14 @@ RSSは、そのブラウザに属するrendererプロセス群の最大瞬時値
 
 ## 再現
 
-[implementation-measurements.json](html-report-memory-evidence/implementation-measurements.json)に入力digest、ページ検査、ブラウザ測定の生データを保存している。Playwrightが利用できる環境で、同じ2出力を次のように比較する。
+[implementation-measurements.json](https://github.com/shrydev2020/gomcdc/blob/a3c9484bf628c23974ced60f480d0d2237c59237/docs/html-report-memory-evidence/implementation-measurements.json)に測定時の入力digest、ページ検査、ブラウザ測定の生データを保存している。リンク先は測定時のコミットに固定している。入力のSHA-256は`7bc4416ce84679887a4de6192af514edf73ceef0b78990e6a9bc39ca507bec7e`。Playwrightが利用できる環境で、同じ2出力を次のように比較する。
 
 ```sh
 node docs/html-report-memory-evidence/compare-memory.cjs \
   /absolute/path/to/single.html /absolute/path/to/paged/index.html
 ```
 
-[初期調査の再現手順](html-report-memory-evidence/reproduce.md)には、ページ分割の実装前に行った原因調査を記録している。
+[初期調査の再現手順](https://github.com/shrydev2020/gomcdc/blob/a3c9484bf628c23974ced60f480d0d2237c59237/docs/html-report-memory-evidence/reproduce.md)には、ページ分割の実装前に行った原因調査を記録している。
 
 ## 運用条件
 

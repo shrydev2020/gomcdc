@@ -3,6 +3,8 @@ package report_test
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -46,7 +48,7 @@ func TestBuildWeightedAggregationAndMergesC0Function(t *testing.T) {
 	assertMetric(t, "merged function decision", function.Summary.Decision, true, 2, 4, 50, 0, 0, 0, 0)
 }
 
-func TestBuildLeavesHTMLSourceProjectionToWriteHTML(t *testing.T) {
+func TestHTMLDirectoryRendersSourcesAfterAnalysis(t *testing.T) {
 	t.Parallel()
 	input := analysis.Input{
 		ModulePath: "example.com/m",
@@ -58,23 +60,17 @@ func TestBuildLeavesHTMLSourceProjectionToWriteHTML(t *testing.T) {
 		PackageStatuses: map[string]string{"example.com/m/p": "passed"},
 	}
 	built := analysis.Analyze(withGeneratedProbes(input))
-	var html bytes.Buffer
-	if err := report.WriteHTMLWithSources(&html, built, input.SourceFiles); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(html.String(), "package p") {
+	html := renderHTMLPages(t, built, input.SourceFiles)
+	if !strings.Contains(html, "package p") {
 		t.Fatal("WriteHTML omitted the source projection")
 	}
-	for _, required := range []string{"name=\"source-view-0-0\"", "value=\"combined\"", "value=\"mcdc\"", "value=\"clause\""} {
-		if !strings.Contains(html.String(), required) {
+	for _, required := range []string{"name=\"source-view\"", "value=\"combined\"", "value=\"mcdc\"", "value=\"clause\""} {
+		if !strings.Contains(html, required) {
 			t.Errorf("WriteHTML missing source view %q", required)
 		}
 	}
-	if got := strings.Count(html.String(), `<pre class="source-code">`); got != 1 {
+	if got := strings.Count(html, `<pre class="source-code">`); got != 1 {
 		t.Fatalf("source copies = %d, want 1", got)
-	}
-	if strings.Contains(html.String(), "source-view-$pi-$fi") {
-		t.Fatal("WriteHTML leaked unexpanded template variables into radio names")
 	}
 }
 
@@ -306,12 +302,9 @@ func TestMaskingAnalysisLimitsAreEffectiveAndReproducible(t *testing.T) {
 	if text := report.RenderTextReport(analysis.Analyze(withGeneratedProbes(input))); !strings.Contains(text, "evaluation-pairs=17 search-states=23 solver-bytes=1") {
 		t.Fatalf("text report omits effective Masking limits:\n%s", text)
 	}
-	var html bytes.Buffer
-	if err := report.WriteHTMLWithSources(&html, analysis.Analyze(withGeneratedProbes(input)), input.SourceFiles); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(html.String(), "17 evaluation pairs · 23 search states · 1 solver bytes") {
-		t.Fatalf("HTML report omits effective Masking limits:\n%s", html.String())
+	html := renderHTMLPages(t, analysis.Analyze(withGeneratedProbes(input)), input.SourceFiles)
+	if !strings.Contains(html, "17 evaluation pairs · 23 search states · 1 solver bytes") {
+		t.Fatalf("HTML report omits effective Masking limits:\n%s", html)
 	}
 }
 
@@ -342,12 +335,9 @@ func TestWriteHTMLReportsSourceMappingDiagnostics(t *testing.T) {
 		Decisions:       []cover.DecisionMetadata{{ID: 1, Package: "example.com/m/p", Function: "Check", Location: location, Expression: "a"}},
 		PackageStatuses: map[string]string{"example.com/m/p": "passed"},
 	}
-	var html bytes.Buffer
-	if err := report.WriteHTMLWithSources(&html, analysis.Analyze(withGeneratedProbes(input)), input.SourceFiles); err != nil {
-		t.Fatalf("WriteHTML: %v", err)
-	}
-	for _, required := range []string{"Source mapping diagnostics", "decision 0x0000000000000001", "cannot be mapped"} {
-		if !strings.Contains(html.String(), required) {
+	html := renderHTMLPages(t, analysis.Analyze(withGeneratedProbes(input)), input.SourceFiles)
+	for _, required := range []string{"Annotations and mapping diagnostics", "decision", "0x0000000000000001", "cannot be mapped"} {
+		if !strings.Contains(html, required) {
 			t.Errorf("HTML missing mapping diagnostic %q", required)
 		}
 	}
@@ -1105,4 +1095,31 @@ func withGeneratedProbes(input analysis.Input) analysis.Input {
 		input.Probes.NoMatches = append(input.Probes.NoMatches, n.SwitchID)
 	}
 	return input
+}
+
+func renderHTMLPages(t *testing.T, value analysis.Result, sources []analysis.SourceFileInput) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := report.WriteHTMLDirectory(t.Context(), dir, value, sources); err != nil {
+		t.Fatal(err)
+	}
+	var output strings.Builder
+	err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.HasSuffix(path, ".html") || entry.Name() == "index.html" {
+			return nil
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		output.Write(body)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return output.String()
 }

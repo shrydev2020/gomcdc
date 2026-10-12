@@ -315,7 +315,7 @@ Findingsはpackage、function、metric、source range、不足するoutcome、st
 
 表示は同梱のHTML/CSSで構成し、`file://`からオフラインで閲覧できる。式・path・metadataをHTML contextに従ってescapeし、色に加え分子、分母、percentage、status textを併記する。配布・移動にはディレクトリ全体を使う。ページ内検索と印刷は現在のページを対象とする。
 
-新しいページ群を専用generation directoryへ生成し、容量・要素数・リンク先を検査してから入口を置換する。公開失敗時は旧入口を保持する。旧generationを残すことで、既に開いたページのリンクを維持する。ページidentityはentityから、generation identityは生成内容から決定する。同じ入力とrendererで同じ出力を得る。ページ分割の情報はHTML出力内に保持する。
+新しいページ群を専用generation directoryへ生成し、容量・要素数・リンク先を検査してから入口を置換する。公開失敗時は旧入口を保持する。旧generationを残すことで、既に開いたページのリンクを維持する。ページidentityはentityから決定する。公開ごとに新しいgeneration directoryを作り、同じ入力とrendererで各ページの内容は一致する。ページ分割の情報はHTML出力内に保持する。
 
 ### D32. 実行と保存
 

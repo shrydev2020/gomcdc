@@ -1,6 +1,7 @@
 package report
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"slices"
 	"strconv"
@@ -128,4 +129,8 @@ func evaluationOutcome(e analysis.EvaluationReport) string {
 		return "not available (" + e.Status + ")"
 	}
 	return strconv.FormatBool(e.Result)
+}
+
+func htmlDecisionAnchor(pkg string, decision analysis.DecisionReport) string {
+	return fmt.Sprintf("decision-%x", sha256.Sum256([]byte(pkg+"\x00"+decision.DecisionID)))
 }
