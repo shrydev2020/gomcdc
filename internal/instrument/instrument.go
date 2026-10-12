@@ -1262,8 +1262,8 @@ func (transformer *fileTransformer) transformFunction(body *ast.BlockStmt) error
 	var prologue []ast.Stmt
 	if state.slotCount > 0 {
 		prologue = append(prologue,
-			arrayDeclaration(state.slotsName, state.slotCount, transformer.helperName+"EvaluationID"),
-			&ast.DeferStmt{Call: state.call("AbortSlots", sliceExpression(state.slotsName))},
+			arrayDeclaration(body.Lbrace, state.slotsName, state.slotCount, transformer.helperName+"EvaluationID"),
+			&ast.DeferStmt{Defer: body.Lbrace, Call: state.call(body.Lbrace, body.Lbrace, "AbortSlots", sliceExpression(state.slotsName, body.Lbrace))},
 		)
 		prologue = append(prologue, transformer.coverageBoundary(body.Lbrace)...)
 		transformer.recordGenerated("evaluation-prologue", body, uint32(len(prologue)))
@@ -1428,7 +1428,7 @@ func (state *functionState) transformCaseClauses(kind cover.ClauseKind, statemen
 		if err != nil {
 			return nil, err
 		}
-		entry := &ast.ExprStmt{X: state.call("SelectClause", idLiteral(uint64(metadata.ID)), idLiteral(uint64(metadata.SwitchID)))}
+		entry := &ast.ExprStmt{X: state.call(clause.Colon, clause.Colon, "SelectClause", idLiteral(clause.Colon, uint64(metadata.ID)), idLiteral(clause.Colon, uint64(metadata.SwitchID)))}
 		probes := []ast.Stmt{entry}
 		if state.transformer.compilerSelection && (kind == cover.ClauseExpressionSwitch || kind == cover.ClauseTypeSwitch) {
 			alternative := uint64(0)
@@ -1436,10 +1436,10 @@ func (state *functionState) transformCaseClauses(kind cover.ClauseKind, statemen
 				alternative = ^uint64(0)
 			}
 			direct := &ast.ExprStmt{X: state.call(
-				"CompilerDirectClause",
-				idLiteral(uint64(metadata.ID)),
-				idLiteral(uint64(metadata.SwitchID)),
-				idLiteral(alternative),
+				clause.Colon, clause.Colon, "CompilerDirectClause",
+				idLiteral(clause.Colon, uint64(metadata.ID)),
+				idLiteral(clause.Colon, uint64(metadata.SwitchID)),
+				idLiteral(clause.Colon, alternative),
 			)}
 			probes = append([]ast.Stmt{direct}, probes...)
 		}
@@ -1455,8 +1455,8 @@ func (state *functionState) transformCaseClauses(kind cover.ClauseKind, statemen
 			return nil, err
 		}
 		if found {
-			marker := &ast.ExprStmt{X: state.call("CompilerNoMatch", idLiteral(uint64(noMatch.SwitchID)))}
 			position := statement.End() - 1
+			marker := &ast.ExprStmt{X: state.call(position, position, "CompilerNoMatch", idLiteral(position, uint64(noMatch.SwitchID)))}
 			synthetic := &ast.CaseClause{Case: position, Colon: position, Body: []ast.Stmt{marker}}
 			switch current := statement.(type) {
 			case *ast.SwitchStmt:
@@ -1490,7 +1490,7 @@ func (state *functionState) transformSelect(statement *ast.SelectStmt) ([]ast.St
 		if err != nil {
 			return nil, err
 		}
-		probes := []ast.Stmt{&ast.ExprStmt{X: state.call("SelectClause", idLiteral(uint64(metadata.ID)), idLiteral(uint64(metadata.SwitchID)))}}
+		probes := []ast.Stmt{&ast.ExprStmt{X: state.call(clause.Colon, clause.Colon, "SelectClause", idLiteral(clause.Colon, uint64(metadata.ID)), idLiteral(clause.Colon, uint64(metadata.SwitchID)))}}
 		if len(body) > 0 {
 			probes = append(probes, state.transformer.coverageBoundary(clause.Colon)...)
 		}
@@ -1518,21 +1518,21 @@ func (state *functionState) wrapDecision(expression ast.Expr, kind cover.Decisio
 	state.transformer.matchedDec[key] = true
 	slotIndex := state.slotCount
 	state.slotCount++
-	slot := state.slotExpression(slotIndex)
+	slot := state.slotExpression(expression.Pos(), slotIndex)
 	conditions, err := state.wrapAtoms(expression, decision, slot)
 	if err != nil {
 		return nil, err
 	}
-	begin := state.call("BeginInto", address(slot), idLiteral(uint64(decision.Metadata.ID)), intLiteral(len(decision.Conditions)))
+	begin := state.call(expression.Pos(), expression.Pos(), "BeginInto", address(slot), idLiteral(expression.Pos(), uint64(decision.Metadata.ID)), intLiteral(expression.Pos(), len(decision.Conditions)))
 	endArgs := []ast.Expr{slot, conditions}
 	endMethod := "End"
 	if selection != nil {
 		endMethod = "EndSelect"
 		for _, skipped := range selection.Skipped {
-			endArgs = append(endArgs, idLiteral(uint64(skipped)))
+			endArgs = append(endArgs, idLiteral(expression.End()-1, uint64(skipped)))
 		}
 	}
-	return &ast.BinaryExpr{X: begin, Op: token.LAND, Y: state.call(endMethod, endArgs...)}, nil
+	return &ast.BinaryExpr{X: begin, OpPos: expression.Pos(), Op: token.LAND, Y: state.call(expression.Pos(), expression.End()-1, endMethod, endArgs...)}, nil
 }
 
 func (state *functionState) wrapAtoms(expression ast.Expr, decision analyzer.Decision, slot ast.Expr) (ast.Expr, error) {
@@ -1547,7 +1547,7 @@ func (state *functionState) wrapAtoms(expression ast.Expr, decision analyzer.Dec
 		end := state.transformer.fset.PositionFor(current.End(), false).Offset
 		if condition, ok := bySpan[[2]int{start, end}]; ok {
 			matched[condition.Metadata.Index] = true
-			return state.call("Condition", slot, intLiteral(int(condition.Metadata.Index)), normalizeBool(current)), nil
+			return state.call(current.Pos(), current.End()-1, "Condition", slot, intLiteral(current.Pos(), int(condition.Metadata.Index)), normalizeBool(current)), nil
 		}
 		switch node := current.(type) {
 		case *ast.ParenExpr:
@@ -1629,40 +1629,47 @@ func (transformer *fileTransformer) recordGenerated(kind string, anchor ast.Node
 	})
 }
 
-func (state *functionState) call(method string, arguments ...ast.Expr) *ast.CallExpr {
-	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: ast.NewIdent(state.transformer.helperName), Sel: ast.NewIdent(method)}, Args: arguments}
+// Generated expressions carry source anchors so the printer can order comments
+// relative to the original statements and declarations.
+func (state *functionState) call(start, end token.Pos, method string, arguments ...ast.Expr) *ast.CallExpr {
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: positionedIdent(start, state.transformer.helperName), Sel: positionedIdent(start, method)}, Lparen: start, Args: arguments, Rparen: end}
 }
 
-func (state *functionState) slotExpression(index int) ast.Expr {
-	return &ast.IndexExpr{X: ast.NewIdent(state.slotsName), Index: intLiteral(index)}
+func positionedIdent(position token.Pos, name string) *ast.Ident {
+	return &ast.Ident{NamePos: position, Name: name}
+}
+
+func (state *functionState) slotExpression(position token.Pos, index int) ast.Expr {
+	return &ast.IndexExpr{X: positionedIdent(position, state.slotsName), Lbrack: position, Index: intLiteral(position, index), Rbrack: position}
 }
 
 func normalizeBool(expression ast.Expr) ast.Expr {
-	truth := &ast.ParenExpr{X: &ast.BinaryExpr{X: intLiteral(0), Op: token.EQL, Y: intLiteral(0)}}
-	return &ast.BinaryExpr{X: &ast.ParenExpr{X: expression}, Op: token.EQL, Y: truth}
+	start, end := expression.Pos(), expression.End()-1
+	truth := &ast.ParenExpr{Lparen: end, X: &ast.BinaryExpr{X: intLiteral(end, 0), OpPos: end, Op: token.EQL, Y: intLiteral(end, 0)}, Rparen: end}
+	return &ast.BinaryExpr{X: &ast.ParenExpr{Lparen: start, X: expression, Rparen: end}, OpPos: end, Op: token.EQL, Y: truth}
 }
 
 func address(expression ast.Expr) ast.Expr {
-	return &ast.UnaryExpr{Op: token.AND, X: expression}
+	return &ast.UnaryExpr{OpPos: expression.Pos(), Op: token.AND, X: expression}
 }
 
-func intLiteral(value int) *ast.BasicLit {
-	return &ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(value)}
+func intLiteral(position token.Pos, value int) *ast.BasicLit {
+	return &ast.BasicLit{ValuePos: position, Kind: token.INT, Value: strconv.Itoa(value)}
 }
 
-func idLiteral(value uint64) *ast.BasicLit {
-	return &ast.BasicLit{Kind: token.INT, Value: fmt.Sprintf("0x%016x", value)}
+func idLiteral(position token.Pos, value uint64) *ast.BasicLit {
+	return &ast.BasicLit{ValuePos: position, Kind: token.INT, Value: fmt.Sprintf("0x%016x", value)}
 }
 
-func arrayDeclaration(name string, length int, element string) ast.Stmt {
-	return &ast.DeclStmt{Decl: &ast.GenDecl{Tok: token.VAR, Specs: []ast.Spec{&ast.ValueSpec{
-		Names: []*ast.Ident{ast.NewIdent(name)},
-		Type:  &ast.ArrayType{Len: intLiteral(length), Elt: ast.NewIdent(element)},
+func arrayDeclaration(position token.Pos, name string, length int, element string) ast.Stmt {
+	return &ast.DeclStmt{Decl: &ast.GenDecl{TokPos: position, Tok: token.VAR, Specs: []ast.Spec{&ast.ValueSpec{
+		Names: []*ast.Ident{positionedIdent(position, name)},
+		Type:  &ast.ArrayType{Lbrack: position, Len: intLiteral(position, length), Elt: positionedIdent(position, element)},
 	}}}}
 }
 
-func sliceExpression(name string) ast.Expr {
-	return &ast.SliceExpr{X: ast.NewIdent(name)}
+func sliceExpression(name string, position token.Pos) ast.Expr {
+	return &ast.SliceExpr{X: positionedIdent(position, name), Lbrack: position, Rbrack: position}
 }
 
 func (transformer *fileTransformer) coverageBoundary(position token.Pos) []ast.Stmt {
@@ -1677,14 +1684,14 @@ func (transformer *fileTransformer) coverageBoundary(position token.Pos) []ast.S
 			&ast.IfStmt{
 				If: position,
 				Init: &ast.AssignStmt{
-					Lhs:    []ast.Expr{ast.NewIdent(name)},
+					Lhs:    []ast.Expr{positionedIdent(position, name)},
 					TokPos: position,
 					Tok:    token.DEFINE,
 					Rhs: []ast.Expr{&ast.BinaryExpr{
-						X: intLiteral(0), Op: token.NEQ, Y: intLiteral(0),
+						X: intLiteral(position, 0), OpPos: position, Op: token.NEQ, Y: intLiteral(position, 0),
 					}},
 				},
-				Cond: ast.NewIdent(name),
+				Cond: positionedIdent(position, name),
 				Body: &ast.BlockStmt{Lbrace: position, Rbrace: position},
 			},
 		}
