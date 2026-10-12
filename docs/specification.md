@@ -329,19 +329,19 @@ Every enabled metric displays `covered / total = percentage` or `n/a`, with Inst
 
 ### D31. HTML
 
-`--format html --output <directory>` generates static pages with `<directory>/index.html` as the entry point. Rendering uses the same Report model and embedded original sources without rerunning measurement, analysis, or tests.
+`--format html --output <directory>` generates static pages with `<directory>/index.html` as the entry point. Rendering uses the analysis result and its embedded original sources.
 
-The overview contains all eleven metrics, run results, counts, and links to indexes. Navigation follows package → file → function → Decision → condition → witness; unopened detail is not embedded in the overview. Each HTML document is limited to 1 MiB after escaping and 5,000 elements. Indexes, findings, source, evidence, and producer diagnostics are paginated, including a single huge file, Decision, or text field. Shared CSS is a local asset in the same generation.
+The overview contains all eleven metrics, run results, counts, and links to indexes. Navigation follows package → file → function → Decision → condition → witness. Each detail opens as a separate page. Each HTML document is limited to 1 MiB after escaping and 5,000 elements. Indexes, findings, source, evidence, and producer diagnostics are paginated, including a single huge file, Decision, or text field. Shared CSS is a local asset in the same generation.
 
 Findings identify package, function, metric, source range, missing outcomes, status, and reason, and link directly to source and evidence. An index groups findings by metric and status. Unsupported, unknown, infeasible, and analysis-incomplete remain distinct from ordinary non-coverage. Producer integrity, completeness, mapping, and usability remain independent of the overall run result.
 
 Evaluations appear in paginated semantic tables with named condition columns, evaluation ID, status, Decision result, and test/run/package/process provenance. All original observations retain their order and repetitions. Wide condition vectors are split into column groups using matching observation ordinals. MC/DC witness tables retain condition occurrences, observed A/B values, Decision results, provenance, and target/masked/unobserved roles. Masking completion assignments occupy separate columns from observations.
 
-Source pages cover contiguous ranges with original byte offsets and CSS modes for Statement, Decision, Condition, MC/DC, Clause, and Combined. Each page explicitly starts in Statement mode. Color generation does not retain every overlapping annotation set per interval; annotation details and mapping diagnostics have their own paginated index. A link provides all original source bytes. Missing source is never replaced with the current checkout.
+Source pages cover contiguous ranges with original byte offsets and CSS modes for Statement, Decision, Condition, MC/DC, Clause, and Combined. Each page explicitly starts in Statement mode. Color generation uses active counts per metric and state; annotation details and mapping diagnostics have their own paginated index. A link provides all original source bytes. Source availability and coordinate errors appear as mapping diagnostics.
 
-Pages use HTML/CSS without JavaScript, external assets, or a server, and work offline through `file://`. Expressions, paths, and metadata are escaped for their HTML context; numerator, denominator, percentage, and status text accompany colors. Copy the entire output directory, not just `index.html`. Browser find and print operate on the current page.
+Pages use local HTML/CSS assets and work offline through `file://`. Expressions, paths, and metadata are escaped for their HTML context; numerator, denominator, percentage, and status text accompany colors. Copy the entire output directory when sharing the report. Browser find and print operate on the current page.
 
-New pages are written to a dedicated generation directory and checked for page budgets and link targets before replacing the entry point. A failed publication preserves the previous entry. Old generations are not automatically deleted, so existing tabs retain working links. Page identity derives from entities and generation identity from generated content; identical inputs and renderer produce identical output. HTML pagination metadata does not enter the public analysis JSON schema.
+New pages are written to a dedicated generation directory and checked for page budgets and link targets before replacing the entry point. A failed publication preserves the previous entry. Old generations remain available so existing tabs retain working links. Page identity derives from entities and generation identity from generated content; identical inputs and renderer produce identical output. Pagination metadata belongs to the HTML output.
 
 ### D32. Execution and storage
 

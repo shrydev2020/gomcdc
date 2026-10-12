@@ -17,8 +17,7 @@ type htmlMetric struct {
 	Summary     analysis.MetricSummary
 }
 
-// WriteHTMLReport renders an already-built report without consulting the
-// measurement input or executing additional analysis, builds, or tests.
+// WriteHTMLReport renders an analysis result as a self-contained HTML document.
 func WriteHTMLReport(w io.Writer, report analysis.Result) error {
 	return writeHTMLReport(w, report)
 }
@@ -27,9 +26,8 @@ func writeHTMLReport(w io.Writer, value analysis.Result) error {
 	return WriteHTMLWithSources(w, value, nil)
 }
 
-// WriteHTMLWithSources decorates an existing analysis with immutable sources.
-// It writes one self-contained document; the CLI uses WriteHTMLDirectory to
-// bound browser memory independently of report size.
+// WriteHTMLWithSources renders an analysis result and its original sources
+// as a self-contained HTML document.
 func WriteHTMLWithSources(w io.Writer, value analysis.Result, sources []analysis.SourceFileInput) error {
 	t, err := template.New("report").Funcs(template.FuncMap{
 		"metrics": htmlMetrics, "pct": htmlPercentage, "class": htmlMetricClass,
@@ -40,7 +38,7 @@ func WriteHTMLWithSources(w io.Writer, value analysis.Result, sources []analysis
 		"sourceAnchor": htmlSourceAnchor, "locationRange": htmlLocationRange,
 		"witnessView": htmlWitnessView, "evaluationRows": htmlEvaluationRows,
 		"logField": htmlLogField,
-	}).Parse(htmlDocument)
+	}).Parse(htmlDocument + `{{define "report.css"}}` + htmlStyles + `{{end}}`)
 	if err != nil {
 		return fmt.Errorf("parse HTML report template: %w", err)
 	}
@@ -54,8 +52,7 @@ func WriteHTMLWithSources(w io.Writer, value analysis.Result, sources []analysis
 	return nil
 }
 
-// Keep one observation on one tab-delimited line without confusing embedded
-// tabs, newlines, quotes, or backslashes with log delimiters.
+// htmlLogField quotes field delimiters within a tab-delimited observation.
 func htmlLogField(value string) string {
 	if strings.ContainsAny(value, "\t\n\r\"\\") {
 		return strconv.Quote(value)
@@ -123,8 +120,7 @@ func htmlSourceSegments(view *SourceFileView, metric string) []htmlSourceSegment
 	return segments
 }
 
-// Each projection chooses its own color on the same source interval. Other
-// metrics cannot override the selected projection's state.
+// htmlSourceSeverity selects the highest severity within the chosen metric.
 func htmlSourceSeverity(annotations []*SourceAnnotation, mode string) string {
 	severity := 0
 	for _, annotation := range annotations {

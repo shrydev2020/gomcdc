@@ -1125,5 +1125,420 @@
     ]
   },
   "saved_result_file_sha256": "7bc4416ce84679887a4de6192af514edf73ceef0b78990e6a9bc39ca507bec7e",
-  "date": "2026-10-12"
+  "date": "2026-10-12",
+  "refactoringVerification": {
+    "date": "2026-10-12",
+    "inventory": {
+      "pages": 13532,
+      "maxBytes": 92904,
+      "maxElements": 2657,
+      "observations": 220307,
+      "indexBytes": 5689
+    },
+    "browserChecks": {
+      "browser": "154.0.8037.98",
+      "javaScriptEnabled": false,
+      "remote": [],
+      "errors": [],
+      "measurements": [
+        {
+          "view": "overview",
+          "elements": 112
+        },
+        {
+          "view": "condition-color",
+          "background": "rgb(218, 251, 225)"
+        },
+        {
+          "view": "source",
+          "elements": 122,
+          "selected": true
+        },
+        {
+          "view": "witness",
+          "elements": 106,
+          "tables": 1
+        },
+        {
+          "view": "evaluations",
+          "elements": 164,
+          "rows": 12
+        }
+      ]
+    },
+    "runs": [
+      {
+        "label": "current-single-html",
+        "run": 1,
+        "fileBytes": 63328326,
+        "loadMs": 644,
+        "dom": {
+          "documents": 1,
+          "nodes": 571348,
+          "jsEventListeners": 0
+        },
+        "maxRendererMiB": 377.46875
+      },
+      {
+        "label": "current-single-html",
+        "run": 2,
+        "fileBytes": 63328326,
+        "loadMs": 725,
+        "dom": {
+          "documents": 1,
+          "nodes": 571348,
+          "jsEventListeners": 0
+        },
+        "maxRendererMiB": 303.3125
+      },
+      {
+        "label": "current-single-html",
+        "run": 3,
+        "fileBytes": 63328326,
+        "loadMs": 917,
+        "dom": {
+          "documents": 1,
+          "nodes": 571345,
+          "jsEventListeners": 0
+        },
+        "maxRendererMiB": 334.421875
+      },
+      {
+        "label": "current-single-html",
+        "run": 4,
+        "fileBytes": 63328326,
+        "loadMs": 721,
+        "dom": {
+          "documents": 1,
+          "nodes": 571351,
+          "jsEventListeners": 0
+        },
+        "maxRendererMiB": 360.140625
+      },
+      {
+        "label": "current-single-html",
+        "run": 5,
+        "fileBytes": 63328326,
+        "loadMs": 646,
+        "dom": {
+          "documents": 1,
+          "nodes": 571348,
+          "jsEventListeners": 0
+        },
+        "maxRendererMiB": 363.671875
+      },
+      {
+        "label": "bounded-pages",
+        "run": 1,
+        "fileBytes": 5689,
+        "loadMs": 39,
+        "dom": {
+          "documents": 4,
+          "nodes": 238,
+          "jsEventListeners": 0
+        },
+        "maxRendererMiB": 168.09375
+      },
+      {
+        "label": "bounded-pages",
+        "run": 2,
+        "fileBytes": 5689,
+        "loadMs": 46,
+        "dom": {
+          "documents": 4,
+          "nodes": 242,
+          "jsEventListeners": 0
+        },
+        "maxRendererMiB": 176.90625
+      },
+      {
+        "label": "bounded-pages",
+        "run": 3,
+        "fileBytes": 5689,
+        "loadMs": 33,
+        "dom": {
+          "documents": 4,
+          "nodes": 242,
+          "jsEventListeners": 0
+        },
+        "maxRendererMiB": 167.75
+      },
+      {
+        "label": "bounded-pages",
+        "run": 4,
+        "fileBytes": 5689,
+        "loadMs": 28,
+        "dom": {
+          "documents": 4,
+          "nodes": 238,
+          "jsEventListeners": 0
+        },
+        "maxRendererMiB": 180.578125
+      },
+      {
+        "label": "bounded-pages",
+        "run": 5,
+        "fileBytes": 5689,
+        "loadMs": 46,
+        "dom": {
+          "documents": 4,
+          "nodes": 242,
+          "jsEventListeners": 0
+        },
+        "maxRendererMiB": 181.328125
+      }
+    ],
+    "navigation": [
+      {
+        "stage": "navigation-10",
+        "dom": {
+          "documents": 24,
+          "nodes": 6783,
+          "jsEventListeners": 0
+        },
+        "rss": [
+          {
+            "pid": 43553,
+            "rssKiB": 80688
+          },
+          {
+            "pid": 43554,
+            "rssKiB": 168720
+          },
+          {
+            "pid": 43552,
+            "rssKiB": 144016
+          }
+        ],
+        "maxRendererMiB": 164.765625,
+        "metrics": [
+          {
+            "name": "LayoutDuration",
+            "value": 0.001737
+          },
+          {
+            "name": "RecalcStyleDuration",
+            "value": 0.000599
+          },
+          {
+            "name": "JSHeapUsedSize",
+            "value": 4870548
+          }
+        ]
+      },
+      {
+        "stage": "navigation-50",
+        "dom": {
+          "documents": 9,
+          "nodes": 3787,
+          "jsEventListeners": 0
+        },
+        "rss": [
+          {
+            "pid": 43553,
+            "rssKiB": 74224
+          },
+          {
+            "pid": 43554,
+            "rssKiB": 270560
+          },
+          {
+            "pid": 43552,
+            "rssKiB": 139344
+          }
+        ],
+        "maxRendererMiB": 264.21875,
+        "metrics": [
+          {
+            "name": "LayoutDuration",
+            "value": 0.000786
+          },
+          {
+            "name": "RecalcStyleDuration",
+            "value": 0.000517
+          },
+          {
+            "name": "JSHeapUsedSize",
+            "value": 2166492
+          }
+        ]
+      },
+      {
+        "stage": "navigation-100",
+        "dom": {
+          "documents": 5,
+          "nodes": 11751,
+          "jsEventListeners": 0
+        },
+        "rss": [
+          {
+            "pid": 43553,
+            "rssKiB": 74016
+          },
+          {
+            "pid": 43554,
+            "rssKiB": 226624
+          },
+          {
+            "pid": 43552,
+            "rssKiB": 131536
+          }
+        ],
+        "maxRendererMiB": 221.3125,
+        "metrics": [
+          {
+            "name": "LayoutDuration",
+            "value": 0.007257
+          },
+          {
+            "name": "RecalcStyleDuration",
+            "value": 0.001594
+          },
+          {
+            "name": "JSHeapUsedSize",
+            "value": 1377916
+          }
+        ]
+      },
+      {
+        "stage": "back-forward",
+        "dom": {
+          "documents": 9,
+          "nodes": 19589,
+          "jsEventListeners": 0
+        },
+        "rss": [
+          {
+            "pid": 43553,
+            "rssKiB": 74016
+          },
+          {
+            "pid": 43554,
+            "rssKiB": 231616
+          },
+          {
+            "pid": 43552,
+            "rssKiB": 131280
+          }
+        ],
+        "maxRendererMiB": 226.1875,
+        "metrics": [
+          {
+            "name": "LayoutDuration",
+            "value": 0.00749
+          },
+          {
+            "name": "RecalcStyleDuration",
+            "value": 0.001677
+          },
+          {
+            "name": "JSHeapUsedSize",
+            "value": 2149164
+          }
+        ]
+      }
+    ],
+    "navigationTimesMs": [
+      21,
+      19,
+      18,
+      21,
+      30,
+      59,
+      51,
+      24,
+      55,
+      13,
+      16,
+      20,
+      15,
+      15,
+      17,
+      18,
+      25,
+      22,
+      53,
+      34,
+      26,
+      22,
+      50,
+      29,
+      16,
+      29,
+      19,
+      25,
+      28,
+      28,
+      13,
+      16,
+      24,
+      21,
+      23,
+      14,
+      18,
+      18,
+      27,
+      25,
+      39,
+      16,
+      16,
+      22,
+      20,
+      48,
+      36,
+      19,
+      10,
+      21,
+      11,
+      9,
+      12,
+      12,
+      33,
+      20,
+      33,
+      31,
+      38,
+      50,
+      88,
+      24,
+      23,
+      23,
+      11,
+      17,
+      14,
+      11,
+      19,
+      15,
+      11,
+      11,
+      29,
+      21,
+      17,
+      17,
+      15,
+      16,
+      22,
+      22,
+      12,
+      34,
+      26,
+      22,
+      16,
+      13,
+      16,
+      16,
+      18,
+      29,
+      18,
+      16,
+      10,
+      11,
+      15,
+      12,
+      16,
+      14,
+      17,
+      18
+    ]
+  }
 }

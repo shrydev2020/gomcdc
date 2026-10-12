@@ -303,19 +303,19 @@ summary key は `statement`、`function`、`decision`、`switchClauseBody`、`ty
 
 ### D31. HTML
 
-`--format html --output <directory>` は `<directory>/index.html` を入口とする静的ページ群を生成する。同じReport modelと保存済み元ソースから描画し、閲覧のために計測・解析・テストを再実行しない。
+`--format html --output <directory>` は `<directory>/index.html` を入口とする静的ページ群を生成する。解析結果と保存済み元ソースから描画する。
 
-概要は全11指標、run結果、集計と索引へのリンクを表示する。package → file → function → Decision → condition → witnessの順に参照し、未閲覧の詳細を概要に埋め込まない。各HTML documentはescape後で1 MiB以下、5,000要素以下とし、索引・Findings・ソース・証拠・producer診断をページ分割する。巨大な単一file、Decision、長文fieldも継続ページに分ける。共通CSSは同じディレクトリ内から参照する。
+概要は全11指標、run結果、集計と索引へのリンクを表示する。package → file → function → Decision → condition → witnessの順に参照し、各詳細を別ページで開く。各HTML documentはescape後で1 MiB以下、5,000要素以下とし、索引・Findings・ソース・証拠・producer診断をページ分割する。巨大な単一file、Decision、長文fieldも継続ページに分ける。共通CSSは同じディレクトリ内から参照する。
 
 Findingsはpackage、function、metric、source range、不足するoutcome、status、reasonを示し、対象sourceと証拠へ直接リンクする。metric/status別索引を備える。unsupported、unknown、infeasible、analysis-incompleteを通常の未達と区別し、producerのintegrity、completeness、mapping、usabilityをoverall run statusと独立して表示する。
 
 個々のevaluationはcondition名を列見出しとするページ分割したtableに表示し、evaluation ID、status、Decision result、test/run/package/processの出所を保持する。元の順序と重複を含むすべての観測を保持する。条件列が多い場合は列群も分割し、同じ観測ordinalで対応を取る。MC/DC witnessはcondition occurrence、A/B実測値、Decision result、出所、target/masked/unobservedを示す意味論的なtableとし、Masking completion assignmentを実測値と別列にする。
 
-ソースは元のbyte offsetを保持した連続範囲として表示し、Statement、Decision、Condition、MC/DC、Clause、Combinedの6モードをCSSで切り替える。各ページはStatementから始まることを明示する。色の生成で全重複annotation集合を区間ごとに保持せず、注釈詳細とmapping診断を別の索引に表示する。全元ソースbytesへのリンクも提供する。ソース不在を現在のcheckoutで補わない。
+ソースは元のbyte offsetを保持した連続範囲として表示し、Statement、Decision、Condition、MC/DC、Clause、Combinedの6モードをCSSで切り替える。各ページはStatementから始まることを明示する。色の生成では指標・状態ごとの有効件数を使い、注釈詳細とmapping診断を別の索引に表示する。全元ソースbytesへのリンクも提供する。ソースの有無と不正な座標はmapping診断に表示する。
 
-表示はHTML/CSSだけで構成し、JavaScript・外部asset・サーバーを必要とせず、`file://`からオフラインで閲覧できる。式・path・metadataをHTML contextに従ってescapeし、色に加え分子、分母、percentage、status textを併記する。配布・移動には`index.html`だけでなくディレクトリ全体を使う。ページ内検索と印刷は現在のページを対象とする。
+表示は同梱のHTML/CSSで構成し、`file://`からオフラインで閲覧できる。式・path・metadataをHTML contextに従ってescapeし、色に加え分子、分母、percentage、status textを併記する。配布・移動にはディレクトリ全体を使う。ページ内検索と印刷は現在のページを対象とする。
 
-新しいページ群を専用generation directoryへ生成し、容量・要素数・リンク先を検査してから入口を置換する。公開失敗時に旧入口を変更せず、既に開いたページのリンクを保つため旧generationを自動削除しない。ページidentityはentityから、generation identityは生成内容から決定する。同じ入力とrendererで同じ出力を得る。HTMLの分割情報は公開analysis JSON schemaへ追加しない。
+新しいページ群を専用generation directoryへ生成し、容量・要素数・リンク先を検査してから入口を置換する。公開失敗時は旧入口を保持する。旧generationを残すことで、既に開いたページのリンクを維持する。ページidentityはentityから、generation identityは生成内容から決定する。同じ入力とrendererで同じ出力を得る。ページ分割の情報はHTML出力内に保持する。
 
 ### D32. 実行と保存
 

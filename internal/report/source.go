@@ -26,7 +26,7 @@ type sourceBoundaryEvent struct {
 	ends   []int
 }
 
-// HTML views belong to rendering and cannot be persisted as analysis evidence.
+// htmlReport combines analysis and source annotations for HTML rendering.
 type htmlReport struct {
 	analysis.Result
 
@@ -154,10 +154,13 @@ func sourceRangeOffsets(location cover.SourceLocation, source []byte) sourceMapp
 	if start >= 0 && end > start && end <= len(source) {
 		return sourceMapping{start: start, end: end, status: "mapped"}
 	}
-	fallbackStart, startOK := lineColumnOffset(source, location.Start.Line, location.Start.Column)
-	fallbackEnd, endOK := lineColumnOffset(source, location.End.Line, location.End.Column)
-	if startOK && endOK && fallbackStart >= 0 && fallbackEnd > fallbackStart && fallbackEnd <= len(source) {
-		return sourceMapping{start: fallbackStart, end: fallbackEnd, status: "mapped"}
+	if start != 0 || end != 0 {
+		return sourceMapping{status: "unknown", reason: fmt.Sprintf("source byte range [%d,%d) is invalid for %d bytes", start, end, len(source))}
+	}
+	lineStart, startOK := lineColumnOffset(source, location.Start.Line, location.Start.Column)
+	lineEnd, endOK := lineColumnOffset(source, location.End.Line, location.End.Column)
+	if startOK && endOK && lineEnd > lineStart {
+		return sourceMapping{start: lineStart, end: lineEnd, status: "mapped"}
 	}
 	return sourceMapping{
 		status: "unknown",
@@ -211,12 +214,14 @@ func lineColumnOffset(source []byte, line, column int) (int, bool) {
 	if currentLine != line {
 		return len(source), false
 	}
-	if column <= 1 {
-		return offset, true
-	}
 	target := offset + column - 1
 	if target > len(source) {
-		return len(source), false
+		return 0, false
+	}
+	for i := offset; i < target; i++ {
+		if source[i] == '\n' {
+			return 0, false
+		}
 	}
 	return target, true
 }

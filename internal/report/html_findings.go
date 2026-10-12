@@ -10,8 +10,7 @@ import (
 	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
 )
 
-// Findings are a rendering projection of existing obligations, never new
-// analysis. Non-coverage states must not imply that another test can fix them.
+// htmlFinding presents a coverage obligation with its source and evidence links.
 type htmlFinding struct {
 	ConditionIndex                                        *uint16
 	Package, Function, Metric, Expression, Status, Detail string
@@ -24,11 +23,7 @@ func htmlSourceAnchor(pkg, path string) string {
 }
 
 func htmlDecisionAnchor(pkg string, decision analysis.DecisionReport) string {
-	identity := decision.DecisionID
-	if identity == "" {
-		identity = htmlLocationRange(decision.Location) + "\x00" + decision.Expression
-	}
-	return fmt.Sprintf("decision-%x", sha256.Sum256([]byte(pkg+"\x00"+identity)))
+	return fmt.Sprintf("decision-%x", sha256.Sum256([]byte(pkg+"\x00"+decision.DecisionID)))
 }
 
 func htmlLocationRange(location cover.SourceLocation) string {
@@ -44,77 +39,81 @@ func htmlFindings(value analysis.Result) []htmlFinding {
 	return findings
 }
 
-// walkHTMLFindings projects each obligation without retaining a report-wide list.
+// walkHTMLFindings emits coverage obligations in package, file and function order.
 func walkHTMLFindings(value analysis.Result, yield func(htmlFinding)) {
 	for pi, pkg := range value.Packages {
 		for fi, file := range pkg.Files {
 			for fni, function := range file.Functions {
-				base := htmlFinding{Package: pkg.Path, Function: function.Name,
-					SourceAnchor:   htmlSourceAnchor(pkg.Path, file.Path),
-					EvidenceAnchor: fmt.Sprintf("pkg-%d-file-%d-fn-%d", pi, fi, fni)}
-				if function.Location != nil {
-					base.Location = *function.Location
-				} else {
-					base.Location.File = file.Path
-				}
-				appendMetric := func(finding htmlFinding, name string, metric analysis.MetricSummary, detail string) {
-					if !metric.Enabled || htmlSummaryMetricGaps(metric) == 0 {
-						return
-					}
-					finding.Metric, finding.Status = name, htmlMetricStatus(metric)
-					finding.Detail = fmt.Sprintf("Covered %d/%d; unknown %d; unsupported %d; infeasible %d; analysis-incomplete %d.",
-						metric.Covered, metric.Total, metric.Unknown, metric.Unsupported, metric.Infeasible, metric.AnalysisIncomplete)
-					if metric.Total > metric.Covered {
-						finding.Detail += " " + detail
-					}
-					yield(finding)
-				}
-				appendMetric(base, "Function", function.Summary.Function, "Missing evidence: function execution.")
-				for _, statement := range function.Statements {
-					finding := base
-					finding.Location = statement.Location
-					appendMetric(finding, "Statement", statement.Metric, "Missing evidence: statement block execution.")
-				}
-				for _, decision := range function.Decisions {
-					finding := base
-					finding.Location, finding.Expression, finding.DecisionID = decision.Location, decision.Expression, decision.DecisionID
-					finding.EvidenceAnchor = htmlDecisionAnchor(pkg.Path, decision)
-					appendMetric(finding, "Decision", decision.Summary.Decision, htmlMissingOutcomes(decision.DecisionCoverage.True, decision.DecisionCoverage.False))
-					for _, condition := range decision.Conditions {
-						finding.Location, finding.Expression = condition.Location, condition.Expression
-						finding.ConditionIndex = new(condition.Index)
-						appendMetric(finding, "Condition", condition.Metric, htmlMissingOutcomes(condition.True, condition.False))
-						for _, strategy := range []struct {
-							name    string
-							enabled bool
-							result  analysis.MCDCConditionReport
-						}{
-							{"Unique-Cause MC/DC", decision.MCDCUnique.Enabled, condition.MCDCUnique},
-							{"Masking MC/DC", decision.MCDCMasking.Enabled, condition.MCDCMasking},
-						} {
-							if !strategy.enabled || strategy.result.Status == "disabled" || strategy.result.Status == "covered" || strategy.result.Status == "" {
-								continue
-							}
-							f := finding
-							f.Metric, f.Status = strategy.name, strategy.result.Status
-							f.Detail = htmlMCDCDetail(strategy.result)
-							yield(f)
-						}
-					}
-				}
-				for _, clause := range function.Clauses {
-					finding := base
-					finding.Location, finding.Expression = clause.Location, string(clause.Kind)+" "+string(clause.Role)
-					appendMetric(finding, "Clause body", clause.BodyCoverage, "Missing evidence: clause body execution.")
-					appendMetric(finding, "Clause selection", clause.SelectionCoverage, "Missing evidence: direct clause selection.")
-				}
-				for _, noMatch := range function.NoMatches {
-					finding := base
-					finding.Location, finding.Expression = noMatch.Location, noMatch.SwitchID
-					appendMetric(finding, "No-match selection", noMatch.SelectionCoverage, "Missing evidence: switch selection with no matching clause.")
-				}
+				walkFunctionHTMLFindings(pkg.Path, file.Path, function, fmt.Sprintf("pkg-%d-file-%d-fn-%d", pi, fi, fni), yield)
 			}
 		}
+	}
+}
+
+func walkFunctionHTMLFindings(pkg, path string, function analysis.FunctionReport, evidenceAnchor string, yield func(htmlFinding)) {
+	base := htmlFinding{Package: pkg, Function: function.Name,
+		SourceAnchor:   htmlSourceAnchor(pkg, path),
+		EvidenceAnchor: evidenceAnchor}
+	if function.Location != nil {
+		base.Location = *function.Location
+	} else {
+		base.Location.File = path
+	}
+	appendMetric := func(finding htmlFinding, name string, metric analysis.MetricSummary, detail string) {
+		if !metric.Enabled || htmlSummaryMetricGaps(metric) == 0 {
+			return
+		}
+		finding.Metric, finding.Status = name, htmlMetricStatus(metric)
+		finding.Detail = fmt.Sprintf("Covered %d/%d; unknown %d; unsupported %d; infeasible %d; analysis-incomplete %d.",
+			metric.Covered, metric.Total, metric.Unknown, metric.Unsupported, metric.Infeasible, metric.AnalysisIncomplete)
+		if metric.Total > metric.Covered {
+			finding.Detail += " " + detail
+		}
+		yield(finding)
+	}
+	appendMetric(base, "Function", function.Summary.Function, "Missing evidence: function execution.")
+	for _, statement := range function.Statements {
+		finding := base
+		finding.Location = statement.Location
+		appendMetric(finding, "Statement", statement.Metric, "Missing evidence: statement block execution.")
+	}
+	for _, decision := range function.Decisions {
+		finding := base
+		finding.Location, finding.Expression, finding.DecisionID = decision.Location, decision.Expression, decision.DecisionID
+		finding.EvidenceAnchor = htmlDecisionAnchor(pkg, decision)
+		appendMetric(finding, "Decision", decision.Summary.Decision, htmlMissingOutcomes(decision.DecisionCoverage.True, decision.DecisionCoverage.False))
+		for _, condition := range decision.Conditions {
+			finding.Location, finding.Expression = condition.Location, condition.Expression
+			finding.ConditionIndex = new(condition.Index)
+			appendMetric(finding, "Condition", condition.Metric, htmlMissingOutcomes(condition.True, condition.False))
+			for _, strategy := range []struct {
+				name    string
+				enabled bool
+				result  analysis.MCDCConditionReport
+			}{
+				{"Unique-Cause MC/DC", decision.MCDCUnique.Enabled, condition.MCDCUnique},
+				{"Masking MC/DC", decision.MCDCMasking.Enabled, condition.MCDCMasking},
+			} {
+				if !strategy.enabled || strategy.result.Status == "disabled" || strategy.result.Status == "covered" || strategy.result.Status == "" {
+					continue
+				}
+				f := finding
+				f.Metric, f.Status = strategy.name, strategy.result.Status
+				f.Detail = htmlMCDCDetail(strategy.result)
+				yield(f)
+			}
+		}
+	}
+	for _, clause := range function.Clauses {
+		finding := base
+		finding.Location, finding.Expression = clause.Location, string(clause.Kind)+" "+string(clause.Role)
+		appendMetric(finding, "Clause body", clause.BodyCoverage, "Missing evidence: clause body execution.")
+		appendMetric(finding, "Clause selection", clause.SelectionCoverage, "Missing evidence: direct clause selection.")
+	}
+	for _, noMatch := range function.NoMatches {
+		finding := base
+		finding.Location, finding.Expression = noMatch.Location, noMatch.SwitchID
+		appendMetric(finding, "No-match selection", noMatch.SelectionCoverage, "Missing evidence: switch selection with no matching clause.")
 	}
 }
 

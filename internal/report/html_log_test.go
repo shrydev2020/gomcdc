@@ -23,8 +23,7 @@ func TestHTMLEvaluationLogRetainsAllObservationsWithoutPerEventElements(t *testi
 	for _, count := range []int{1, 10_000} {
 		decision.Evaluations = make([]analysis.EvaluationReport, count)
 		for index := range count {
-			// Every observation has a different test and process: aggregation
-			// cannot reduce this case without losing evidence boundaries.
+			// Distinct test and process identities exercise per-observation output.
 			decision.Evaluations[index] = analysis.EvaluationReport{
 				EvaluationID: fmt.Sprintf("0x%016x", index+1), Status: "completed", TestID: fmt.Sprintf("TestCase%d<script>", index),
 				Conditions: []string{"true"}, Result: true, RunID: "run", PackagePath: "m/p", ProcessID: index,

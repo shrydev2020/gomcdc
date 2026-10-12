@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{.Title}} — gomcdc</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="layout">
+<aside class="side" aria-label="Report navigation">
+  <div class="brand">gomcdc</div>
+  <div class="module">{{.Module}}</div>
+  <ul class="nav">
+    <li><a href="overview-1.html">Overview</a></li>
+    <li><a href="packages-1.html">Packages</a></li>
+    <li><a href="findings-1.html">Findings</a></li>
+    <li><a href="producers-1.html">Evidence producers</a></li>
+    {{if .Parent}}<li><a href="{{.Parent}}">Back to parent</a></li>{{end}}
+  </ul>
+</aside>
+<main class="main">
+  <header><p class="eyebrow">Coverage report</p><h1>{{.Title}}</h1></header>
+  {{.Intro}}{{.Context}}{{.Navigation}}
+  <section class="panel">{{if .Empty}}<p class="emptymsg">No entries in this section.</p>{{end}}{{.Body}}</section>
+  {{.Navigation}}
+  <footer class="footer">{{.Footer}}</footer>
+</main>
+</div>
+</body>
+</html>

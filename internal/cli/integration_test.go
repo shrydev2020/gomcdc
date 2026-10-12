@@ -302,7 +302,7 @@ func TestIntegratedFixtureWritesPackageCenteredHTML(t *testing.T) {
 		}
 	}
 	contents := combined.Bytes()
-	for _, required := range [][]byte{[]byte("Package navigation"), []byte("Evidence producers"), []byte("compiler-selection"), []byte("accepted"), []byte("example.test/gomcdc-fixture/allow"), []byte("allow/allow.go"), []byte("Allow"), []byte("Original source"), []byte("source-code"), []byte("view-condition-"), []byte("No-match selection"), []byte("a &amp;&amp; b"), []byte("UC MC/DC"), []byte("Mask MC/DC"), []byte("Masking MC/DC"), []byte("Evaluation A (observed)"), []byte("Witness test"), []byte("Uncovered obligations")} {
+	for _, required := range [][]byte{[]byte("Report navigation"), []byte("Evidence producers"), []byte("compiler-selection"), []byte("accepted"), []byte("example.test/gomcdc-fixture/allow"), []byte("allow/allow.go"), []byte("Allow"), []byte("Original source"), []byte("source-code"), []byte("view-condition-"), []byte("No-match selection"), []byte("a &amp;&amp; b"), []byte("UC MC/DC"), []byte("Mask MC/DC"), []byte("Masking MC/DC"), []byte("Evaluation A (observed)"), []byte("Witness test"), []byte("Uncovered obligations")} {
 		if !bytes.Contains(contents, required) {
 			t.Errorf("HTML missing %q", required)
 		}
