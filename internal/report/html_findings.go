@@ -1,9 +1,7 @@
 package report
 
 import (
-	"crypto/sha256"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
@@ -12,48 +10,14 @@ import (
 
 // htmlFinding presents a coverage obligation with its source and evidence links.
 type htmlFinding struct {
-	ConditionIndex                                        *uint16
-	Package, Function, Metric, Expression, Status, Detail string
-	DecisionID, EvidenceAnchor, SourceAnchor              string
-	Location                                              cover.SourceLocation
-}
-
-func htmlSourceAnchor(pkg, path string) string {
-	return fmt.Sprintf("source-%x", sha256.Sum256([]byte(pkg+"\x00"+path)))
-}
-
-func htmlDecisionAnchor(pkg string, decision analysis.DecisionReport) string {
-	return fmt.Sprintf("decision-%x", sha256.Sum256([]byte(pkg+"\x00"+decision.DecisionID)))
-}
-
-func htmlLocationRange(location cover.SourceLocation) string {
-	if location.Start.Line == 0 {
-		return location.File + " (precise location unavailable)"
-	}
-	return fmt.Sprintf("%s:%d:%d-%d:%d", location.File, location.Start.Line, location.Start.Column, location.End.Line, location.End.Column)
-}
-
-func htmlFindings(value analysis.Result) []htmlFinding {
-	var findings []htmlFinding
-	walkHTMLFindings(value, func(f htmlFinding) { findings = append(findings, f) })
-	return findings
-}
-
-// walkHTMLFindings emits coverage obligations in package, file and function order.
-func walkHTMLFindings(value analysis.Result, yield func(htmlFinding)) {
-	for pi, pkg := range value.Packages {
-		for fi, file := range pkg.Files {
-			for fni, function := range file.Functions {
-				walkFunctionHTMLFindings(pkg.Path, file.Path, function, fmt.Sprintf("pkg-%d-file-%d-fn-%d", pi, fi, fni), yield)
-			}
-		}
-	}
+	ConditionIndex                     *uint16
+	Metric, Expression, Status, Detail string
+	DecisionID, EvidenceAnchor         string
+	Location                           cover.SourceLocation
 }
 
 func walkFunctionHTMLFindings(pkg, path string, function analysis.FunctionReport, evidenceAnchor string, yield func(htmlFinding)) {
-	base := htmlFinding{Package: pkg, Function: function.Name,
-		SourceAnchor:   htmlSourceAnchor(pkg, path),
-		EvidenceAnchor: evidenceAnchor}
+	base := htmlFinding{EvidenceAnchor: evidenceAnchor}
 	if function.Location != nil {
 		base.Location = *function.Location
 	} else {
@@ -160,49 +124,9 @@ func htmlMCDCStatusDetail(result analysis.MCDCConditionReport) string {
 	return strings.TrimSpace(detail)
 }
 
-type htmlEvidenceRow struct {
-	Index                                                        uint16
-	Expression, First, Second, FirstCompletion, SecondCompletion string
-	Target, Masked, Unobserved                                   bool
-}
-
-type htmlWitness struct {
-	analysis.MCDCConditionReport
-	Strategy, Target string
-	Rows             []htmlEvidenceRow
-	HasCompletions   bool
-	Detail           string
-}
-
-func htmlWitnessView(decision analysis.DecisionReport, condition analysis.ConditionReport, strategy string, result analysis.MCDCConditionReport) htmlWitness {
-	view := htmlWitness{MCDCConditionReport: result, Strategy: strategy, Target: condition.Expression, Detail: htmlMCDCDetail(result)}
-	if result.Witness == nil {
-		return view
-	}
-	witness := result.Witness
-	view.HasCompletions = len(witness.FirstCompletion) > 0 || len(witness.SecondCompletion) > 0
-	for _, c := range decision.Conditions {
-		view.Rows = append(view.Rows, htmlEvidenceRow{
-			Index: c.Index, Expression: c.Expression, Target: c.Index == condition.Index,
-			First: htmlConditionValue(witness.First.Conditions, c.Index), Second: htmlConditionValue(witness.Second.Conditions, c.Index),
-			FirstCompletion: htmlConditionValue(witness.FirstCompletion, c.Index), SecondCompletion: htmlConditionValue(witness.SecondCompletion, c.Index),
-			Masked: slices.Contains(witness.MaskedConditions, c.Index), Unobserved: slices.Contains(witness.UnobservedConditions, c.Index),
-		})
-	}
-	return view
-}
-
 func htmlConditionValue(values []string, index uint16) string {
 	if int(index) >= len(values) {
 		return "not available"
 	}
 	return values[index]
-}
-
-func htmlEvaluationRows(conditions []analysis.ConditionReport, values []string) []htmlEvidenceRow {
-	rows := make([]htmlEvidenceRow, 0, len(conditions))
-	for _, condition := range conditions {
-		rows = append(rows, htmlEvidenceRow{Index: condition.Index, Expression: condition.Expression, First: htmlConditionValue(values, condition.Index)})
-	}
-	return rows
 }

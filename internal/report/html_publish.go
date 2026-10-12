@@ -3,11 +3,9 @@ package report
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"html"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -38,14 +36,16 @@ func WriteHTMLDirectory(ctx context.Context, directory string, value analysis.Re
 	if err := renderHTMLDirectory(ctx, stage, value, sources); err != nil {
 		return fmt.Errorf("render HTML report in %q: %w", stage, err)
 	}
-	digest, err := htmlGenerationDigest(ctx, stage)
-	if err != nil {
+	if err := validateHTMLGeneration(ctx, stage); err != nil {
 		return fmt.Errorf("validate HTML generation %q: %w", stage, err)
 	}
-	generation := "report-" + digest
+	generation := "report-" + strings.TrimPrefix(filepath.Base(stage), ".gomcdc-html-")
 	target := filepath.Join(directory, generation)
-	if err := publishHTMLGeneration(ctx, stage, target, digest); err != nil {
-		return err
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("publish HTML generation %q: %w", target, err)
+	}
+	if err := os.Rename(stage, target); err != nil {
+		return fmt.Errorf("publish HTML generation %q: %w", target, err)
 	}
 	overview := filepath.Join(target, "overview-1.html")
 	entry, err := os.ReadFile(overview)
@@ -56,28 +56,6 @@ func WriteHTMLDirectory(ctx context.Context, directory string, value analysis.Re
 	entry = bytes.ReplaceAll(entry, []byte(`href="`), []byte(`href="`+generation+`/`))
 	if err := publishHTMLEntry(ctx, directory, entry); err != nil {
 		return err
-	}
-	return nil
-}
-
-func publishHTMLGeneration(ctx context.Context, stage, target, digest string) error {
-	if _, err := os.Lstat(target); err == nil {
-		existing, err := htmlGenerationDigest(ctx, target)
-		if err != nil {
-			return fmt.Errorf("validate existing HTML generation %q: %w", target, err)
-		}
-		if existing != digest {
-			return fmt.Errorf("HTML generation %q has digest %s; expected %s", target, existing, digest)
-		}
-		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("inspect HTML generation %q: %w", target, err)
-	}
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("publish HTML generation %q: %w", target, err)
-	}
-	if err := os.Rename(stage, target); err != nil {
-		return fmt.Errorf("publish HTML generation %q: %w", target, err)
 	}
 	return nil
 }
@@ -119,17 +97,16 @@ func publishHTMLEntry(ctx context.Context, directory string, content []byte) (er
 
 var htmlHref = regexp.MustCompile(`href="([^"]+)"`)
 
-// htmlGenerationDigest validates and hashes each asset in filename order.
-func htmlGenerationDigest(ctx context.Context, dir string) (string, error) {
+// validateHTMLGeneration checks asset types, page budgets and local links.
+func validateHTMLGeneration(ctx context.Context, dir string) error {
 	info, err := os.Lstat(dir)
 	if err != nil {
-		return "", fmt.Errorf("inspect generation directory %q: %w", dir, err)
+		return fmt.Errorf("inspect generation directory %q: %w", dir, err)
 	}
 	if !info.IsDir() {
-		return "", fmt.Errorf("HTML generation %q must be a directory (mode %s)", dir, info.Mode())
+		return fmt.Errorf("HTML generation %q must be a directory (mode %s)", dir, info.Mode())
 	}
-	h := sha256.New()
-	err = filepath.WalkDir(dir, func(path string, d fs.DirEntry, walkErr error) error {
+	return filepath.WalkDir(dir, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return fmt.Errorf("visit HTML asset %q: %w", path, walkErr)
 		}
@@ -142,40 +119,11 @@ func htmlGenerationDigest(ctx context.Context, dir string) (string, error) {
 		if !d.Type().IsRegular() {
 			return fmt.Errorf("HTML asset %q must be a regular file (mode %s)", path, d.Type())
 		}
-		digest, err := htmlAssetDigest(path)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(h, "%d:%s:%s\n", len(d.Name()), d.Name(), digest)
 		if strings.HasSuffix(d.Name(), ".html") {
-			if err := validateHTMLPage(path); err != nil {
-				return err
-			}
+			return validateHTMLPage(path)
 		}
 		return nil
 	})
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%x", h.Sum(nil)), nil
-}
-
-func htmlAssetDigest(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", fmt.Errorf("open HTML asset %q: %w", path, err)
-	}
-	h := sha256.New()
-	if _, copyErr := io.Copy(h, f); copyErr != nil {
-		err = fmt.Errorf("hash HTML asset %q: %w", path, copyErr)
-	}
-	if closeErr := f.Close(); closeErr != nil {
-		err = errors.Join(err, fmt.Errorf("close HTML asset %q: %w", path, closeErr))
-	}
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }
 
 func validateHTMLPage(path string) error {

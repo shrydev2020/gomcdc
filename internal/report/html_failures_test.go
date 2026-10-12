@@ -1,7 +1,6 @@
 package report
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io/fs"
@@ -13,36 +12,26 @@ import (
 	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
 )
 
-func TestHTMLPublicationRetainsBrokenLinkCause(t *testing.T) {
+func TestHTMLGenerationRetainsBrokenLinkCause(t *testing.T) {
 	value, sources := directoryFixture(1, 1)
 	dir := t.TempDir()
 	if err := WriteHTMLDirectory(t.Context(), dir, value, sources); err != nil {
 		t.Fatal(err)
 	}
 	generation, _ := readHTMLGeneration(t, dir)
-	entry, err := os.ReadFile(filepath.Join(dir, "index.html"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	if err := os.Remove(filepath.Join(generation, "packages-1.html")); err != nil {
 		t.Fatal(err)
 	}
-	err = WriteHTMLDirectory(t.Context(), dir, value, sources)
+	err := validateHTMLGeneration(t.Context(), generation)
 	if !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("error lost missing-file cause: %v", err)
 	}
-	for _, context := range []string{"validate existing HTML generation", generation, "packages-1.html", "resolve link"} {
+	for _, context := range []string{generation, "packages-1.html", "resolve link"} {
 		if !strings.Contains(err.Error(), context) {
 			t.Errorf("error missing %q: %v", context, err)
 		}
 	}
-	after, err := os.ReadFile(filepath.Join(dir, "index.html"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(entry, after) {
-		t.Fatal("failed publication replaced entry")
-	}
+
 }
 
 func TestHTMLWriterRetainsFirstFailure(t *testing.T) {
@@ -203,7 +192,7 @@ func TestHTMLGenerationValidatesAssetsAndPageLimits(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			_, err := htmlGenerationDigest(t.Context(), dir)
+			err := validateHTMLGeneration(t.Context(), dir)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("generation validation: %v, want %q", err, tc.want)
 			}
@@ -214,13 +203,13 @@ func TestHTMLGenerationValidatesAssetsAndPageLimits(t *testing.T) {
 func TestHTMLGenerationRequiresDirectoryAndPreservesMissingCause(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "generation")
-	if _, err := htmlGenerationDigest(t.Context(), path); !errors.Is(err, fs.ErrNotExist) {
+	if err := validateHTMLGeneration(t.Context(), path); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("missing generation cause: %v", err)
 	}
 	if err := os.WriteFile(path, []byte("existing file"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := htmlGenerationDigest(t.Context(), path); err == nil || !strings.Contains(err.Error(), "must be a directory") {
+	if err := validateHTMLGeneration(t.Context(), path); err == nil || !strings.Contains(err.Error(), "must be a directory") {
 		t.Fatalf("file accepted as generation: %v", err)
 	}
 	value, sources := directoryFixture(0, 0)

@@ -1,39 +1,12 @@
 package report
 
 import (
-	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/shrydev2020/gomcdc/v2/internal/analysis"
 	cover "github.com/shrydev2020/gomcdc/v2/internal/coverage"
 )
-
-func TestSourceIntervalsSplitOverlappingRanges(t *testing.T) {
-	view := SourceFileView{
-		Source: "abcdef",
-		Annotations: []SourceAnnotation{
-			{StartOffset: 0, EndOffset: 4, Metric: "decision", State: "covered"},
-			{StartOffset: 2, EndOffset: 6, Metric: "condition", State: "both"},
-		},
-	}
-	intervals := sourceIntervals(view)
-	if len(intervals) != 3 {
-		t.Fatalf("interval count = %d, want 3", len(intervals))
-	}
-	want := [][2]int{{0, 2}, {2, 4}, {4, 6}}
-	for index, interval := range intervals {
-		if got := [2]int{interval.start, interval.end}; got != want[index] {
-			t.Fatalf("interval[%d] = %v, want %v", index, got, want[index])
-		}
-	}
-	if len(intervals[1].anns) != 2 {
-		t.Fatalf("overlap annotations = %d, want 2", len(intervals[1].anns))
-	}
-	if again := sourceIntervals(view); !reflect.DeepEqual(intervals, again) {
-		t.Fatal("source interval ordering is not deterministic")
-	}
-}
 
 func TestSourceRangeOffsetsUseByteColumns(t *testing.T) {
 	source := []byte("あa\n")
@@ -44,39 +17,6 @@ func TestSourceRangeOffsetsUseByteColumns(t *testing.T) {
 	mapping := sourceRangeOffsets(location, source)
 	if mapping.start != 0 || mapping.end != 4 || mapping.status != "mapped" {
 		t.Fatalf("mapping = %#v, want 0:4 mapped", mapping)
-	}
-}
-
-func TestHTMLSourceSegmentsEscapeTextThroughTemplate(t *testing.T) {
-	view := SourceFileView{
-		Source: "<x>\n",
-		Annotations: []SourceAnnotation{
-			{StartOffset: 0, EndOffset: 3, Metric: "statement", State: "covered", Tooltip: "safe"},
-		},
-	}
-	segments := htmlSourceSegments(&view, "")
-	if len(segments) != 2 || segments[0].Text != "<x>" || segments[0].Class == "" {
-		t.Fatalf("segments = %#v", segments)
-	}
-}
-
-func TestHTMLSourceSegmentsFilterMetricProjection(t *testing.T) {
-	view := SourceFileView{
-		Source: "abcdef",
-		Annotations: []SourceAnnotation{
-			{StartOffset: 0, EndOffset: 2, Metric: "statement", State: "covered"},
-			{StartOffset: 0, EndOffset: 2, Metric: "decision", State: "not-covered"},
-			{StartOffset: 1, EndOffset: 3, Metric: "condition", State: "true-only"},
-		},
-	}
-	segments := htmlSourceSegments(&view, "statement")
-	for _, segment := range segments {
-		if strings.Contains(segment.Class, "decision") || strings.Contains(segment.Class, "condition") {
-			t.Fatalf("statement projection leaked another metric: %#v", segments)
-		}
-	}
-	if len(htmlSourceSegments(&view, "decision")) == 0 || len(htmlSourceSegments(&view, "condition")) == 0 {
-		t.Fatal("metric projections lost their own annotations")
 	}
 }
 
@@ -129,16 +69,23 @@ func TestSourceMappingFailureProducesDiagnostic(t *testing.T) {
 		DecisionID: "decision-1", Location: location,
 	}}}}}
 	annotations := sourceAnnotations(file, []byte("a\n"))
-	diagnostics := sourceMappingDiagnostics(annotations)
-	if len(diagnostics) != 1 || diagnostics[0].Metric != "decision" || diagnostics[0].EntityID != "decision-1" {
-		t.Fatalf("diagnostics = %#v", diagnostics)
+	if len(annotations) != 1 || annotations[0].MappingStatus != "unknown" || annotations[0].MappingReason == "" {
+		t.Fatalf("mapping diagnostic: %+v", annotations)
 	}
-	if diagnostics[0].Reason == "" {
-		t.Fatal("mapping diagnostic has no reason")
+	called := false
+	if err := walkHTMLColors(2, annotations, func(_, _ int, classes string) bool {
+		called = true
+		if classes != "" {
+			t.Errorf("unmapped annotation colored source: %s", classes)
+		}
+		return true
+	}); err != nil {
+		t.Fatal(err)
 	}
-	if got := normalizeAnnotations(annotations, 2); len(got) != 0 {
-		t.Fatalf("unmapped annotations survived normalization: %#v", got)
+	if !called {
+		t.Fatal("unmapped source omitted")
 	}
+
 }
 
 func TestDisabledSourceMetricsDoNotOverrideEnabledStatementColor(t *testing.T) {
@@ -147,50 +94,13 @@ func TestDisabledSourceMetricsDoNotOverrideEnabledStatementColor(t *testing.T) {
 		Statements: []analysis.StatementReport{{Location: location, Covered: true, Metric: analysis.MetricSummary{Enabled: true, Covered: 1, Total: 1}}},
 		Decisions:  []analysis.DecisionReport{{Location: location, Conditions: []analysis.ConditionReport{{Location: location, MCDCUnique: analysis.MCDCConditionReport{Status: "disabled"}, MCDCMasking: analysis.MCDCConditionReport{Status: "disabled"}}}}},
 	}}}
-	view := SourceFileView{Source: "a", Annotations: sourceAnnotations(file, []byte("a"))}
-	segments := htmlSourceSegments(&view, "")
-	if len(segments) != 1 || !strings.Contains(segments[0].Class, "view-combined-covered") || strings.Contains(segments[0].Class, "view-decision-") {
-		t.Fatalf("disabled metrics changed source colors: %#v", segments)
-	}
-}
-
-func BenchmarkSourceIntervalsSweepLine(b *testing.B) {
-	view := SourceFileView{Source: strings.Repeat("x", 100_000), Annotations: make([]SourceAnnotation, 2_000)}
-	for index := range view.Annotations {
-		start := index * 40
-		view.Annotations[index] = SourceAnnotation{StartOffset: start, EndOffset: start + 2_000, Metric: "condition", State: "both"}
-	}
-	b.ResetTimer()
-	for range b.N {
-		_ = sourceIntervals(view)
-	}
-}
-
-func BenchmarkSourceIntervalsOutputSize(b *testing.B) {
-	for _, overlap := range []bool{false, true} {
-		name := "disjoint"
-		if overlap {
-			name = "nested"
+	err := walkHTMLColors(1, sourceAnnotations(file, []byte("a")), func(_, _ int, classes string) bool {
+		if !strings.Contains(classes, "view-combined-covered") || strings.Contains(classes, "view-decision-") {
+			t.Errorf("disabled metrics changed colors: %s", classes)
 		}
-		b.Run(name, func(b *testing.B) {
-			const count = 1000
-			view := SourceFileView{Source: strings.Repeat("x", count*2), Annotations: make([]SourceAnnotation, count)}
-			for index := range view.Annotations {
-				start, end := index*2, index*2+1
-				if overlap {
-					start, end = index, count*2-index
-				}
-				view.Annotations[index] = SourceAnnotation{StartOffset: start, EndOffset: end}
-			}
-			output := 0
-			for _, interval := range sourceIntervals(view) {
-				output += len(interval.anns)
-			}
-			b.ReportAllocs()
-			for b.Loop() {
-				_ = sourceIntervals(view)
-			}
-			b.ReportMetric(float64(output), "annotation-references/op")
-		})
+		return true
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

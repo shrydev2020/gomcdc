@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -42,21 +43,21 @@ func directoryFixture(observations, conditions int) (analysis.Result, []analysis
 }
 func readHTMLGeneration(t *testing.T, dir string) (string, map[string]string) {
 	t.Helper()
-	entries, err := os.ReadDir(dir)
+	entry, err := os.ReadFile(filepath.Join(dir, "index.html"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	generation := ""
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), "report-") {
-			generation = filepath.Join(dir, e.Name())
-		}
+	link := htmlHref.FindStringSubmatch(string(entry))
+	if len(link) != 2 {
+		t.Fatal("entry link missing")
 	}
-	if generation == "" {
-		t.Fatal("generation missing")
+	name, _, found := strings.Cut(link[1], "/")
+	if !found || !strings.HasPrefix(name, "report-") {
+		t.Fatalf("invalid generation link %q", link[1])
 	}
+	generation := filepath.Join(dir, name)
 	files := map[string]string{}
-	entries, err = os.ReadDir(generation)
+	entries, err := os.ReadDir(generation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,54 +229,53 @@ func TestHTMLDirectoryHugeSourceAndLongFieldsAreLossless(t *testing.T) {
 		t.Fatal("long reason truncated")
 	}
 }
-func TestHTMLDirectoryPublicationReuseCancellationAndCollision(t *testing.T) {
+func TestHTMLDirectoryPublishesCompleteGenerations(t *testing.T) {
 	value, sources := directoryFixture(3, 2)
 	dir := t.TempDir()
 	if err := WriteHTMLDirectory(t.Context(), dir, value, sources); err != nil {
 		t.Fatal(err)
 	}
 	generation, files := readHTMLGeneration(t, dir)
-	first, _ := os.ReadFile(filepath.Join(dir, "index.html"))
 	if err := WriteHTMLDirectory(t.Context(), dir, value, sources); err != nil {
 		t.Fatal(err)
 	}
-	second, _ := os.ReadFile(filepath.Join(dir, "index.html"))
-	if !bytes.Equal(first, second) {
-		t.Fatal("same input is nondeterministic")
+	next, again := readHTMLGeneration(t, dir)
+	if next == generation || !maps.Equal(files, again) {
+		t.Fatal("generation content or isolation changed")
+	}
+	entry, err := os.ReadFile(filepath.Join(dir, "index.html"))
+	if err != nil {
+		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if err := WriteHTMLDirectory(ctx, dir, value, sources); err == nil {
-		t.Fatal("canceled output published")
+	for _, test := range []struct {
+		ctx     context.Context
+		sources []analysis.SourceFileInput
+	}{
+		{ctx, sources}, {t.Context(), append(slices.Clone(sources), sources[0])},
+	} {
+		if err := WriteHTMLDirectory(test.ctx, dir, value, test.sources); err == nil {
+			t.Fatal("invalid publication succeeded")
+		}
+		after, err := os.ReadFile(filepath.Join(dir, "index.html"))
+		if err != nil || !bytes.Equal(entry, after) {
+			t.Fatal("failed publication replaced entry", err)
+		}
 	}
-	second, _ = os.ReadFile(filepath.Join(dir, "index.html"))
-	if !bytes.Equal(first, second) {
-		t.Fatal("cancellation replaced index")
+	for name, body := range files {
+		preserved, err := os.ReadFile(filepath.Join(generation, name))
+		if err != nil || string(preserved) != body {
+			t.Fatalf("old page %s changed: %v", name, err)
+		}
 	}
-	if err := os.WriteFile(filepath.Join(generation, "overview-1.html"), []byte("modified"), 0644); err != nil {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteHTMLDirectory(t.Context(), dir, value, sources); err == nil {
-		t.Fatal("corrupt existing generation reused")
-	}
-	second, _ = os.ReadFile(filepath.Join(dir, "index.html"))
-	if !bytes.Equal(first, second) {
-		t.Fatal("failed render replaced index")
-	}
-	if err := os.WriteFile(filepath.Join(generation, "overview-1.html"), []byte(files["overview-1.html"]), 0644); err != nil {
-		t.Fatal(err)
-	}
-	value.Module = "new module"
-	if err := WriteHTMLDirectory(t.Context(), dir, value, sources); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(generation, "overview-1.html")); err != nil {
-		t.Fatal("old generation removed")
-	}
-	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".gomcdc-html-") || strings.HasPrefix(e.Name(), ".index.html-") {
-			t.Fatal("temporary output leaked")
+		if strings.HasPrefix(e.Name(), ".") {
+			t.Fatalf("temporary output retained: %s", e.Name())
 		}
 	}
 }
@@ -340,29 +340,13 @@ func TestHTMLDirectoryOverviewDoesNotGrowWithPackageCount(t *testing.T) {
 	}
 }
 
-func TestHTMLDirectoryDoesNotFollowExistingGenerationSymlink(t *testing.T) {
-	value, sources := directoryFixture(1, 1)
-	dir := t.TempDir()
-	if err := WriteHTMLDirectory(t.Context(), dir, value, sources); err != nil {
-		t.Fatal(err)
+func htmlSourceSeverity(annotations []*SourceAnnotation, mode string) string {
+	severity := 0
+	for _, a := range annotations {
+		matches := a.Metric == mode || mode == "combined" || mode == "mcdc" && (a.Metric == "mcdc-unique" || a.Metric == "mcdc-masking") || mode == "clause" && (a.Metric == "clause-body" || a.Metric == "clause-selection")
+		if matches {
+			severity = max(severity, htmlStateSeverity(a.State))
+		}
 	}
-	generation, _ := readHTMLGeneration(t, dir)
-	outside := filepath.Join(t.TempDir(), "original")
-	if err := os.Rename(generation, outside); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(outside, generation); err != nil {
-		t.Fatal(err)
-	}
-	first, _ := os.ReadFile(filepath.Join(dir, "index.html"))
-	if err := WriteHTMLDirectory(t.Context(), dir, value, sources); err == nil {
-		t.Fatal("followed generation symlink")
-	}
-	second, _ := os.ReadFile(filepath.Join(dir, "index.html"))
-	if !bytes.Equal(first, second) {
-		t.Fatal("failed publication changed index")
-	}
-	if _, err := os.Stat(filepath.Join(outside, "overview-1.html")); err != nil {
-		t.Fatal("external generation changed")
-	}
+	return []string{"none", "covered", "partial", "uncovered", "attention"}[severity]
 }

@@ -55,10 +55,6 @@ func TestMeasure(t *testing.T) {
 			if code != test.exit {
 				t.Fatalf("exit=%d want=%d\n%s", code, test.exit, stderr.String())
 			}
-			before, err := os.ReadFile(filepath.Join(outputs, "original", "index.html"))
-			if err != nil {
-				t.Fatal(err)
-			}
 			beforeFiles := readHTMLReportFiles(t, filepath.Join(outputs, "original"))
 			file, err := os.Open(savedPath)
 			if err != nil {
@@ -88,10 +84,6 @@ func TestMeasure(t *testing.T) {
 			code = runAt(t.Context(), outputs, []string{"report", "--format=html", "--output=offline", "saved.json"}, &stdout, &stderr)
 			if code != ExitSuccess {
 				t.Fatalf("offline render exit=%d: %s", code, stderr.String())
-			}
-			after, err := os.ReadFile(filepath.Join(outputs, "offline", "index.html"))
-			if err != nil || !bytes.Equal(before, after) {
-				t.Fatalf("offline HTML differs: %v", err)
 			}
 			if !reflect.DeepEqual(beforeFiles, readHTMLReportFiles(t, filepath.Join(outputs, "offline"))) {
 				t.Fatal("offline HTML generation differs")

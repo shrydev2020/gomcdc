@@ -2,6 +2,7 @@ package report
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"slices"
 	"strings"
@@ -174,4 +175,15 @@ func (s *htmlReportRenderer) sourceContext(source htmlSourcePages, loc cover.Sou
 	end := min(len(source.source), mapping.end+160)
 	end = min(end, start+1024)
 	return out + fmt.Sprintf(`<p>Source context · bytes %d–%d</p><pre class="evidence-context">%s</pre>`, start, end, escape(string(source.source[start:end])))
+}
+
+func htmlSourceAnchor(pkg, path string) string {
+	return fmt.Sprintf("source-%x", sha256.Sum256([]byte(pkg+"\x00"+path)))
+}
+
+func htmlLocationRange(location cover.SourceLocation) string {
+	if location.Start.Line == 0 {
+		return location.File + " (precise location unavailable)"
+	}
+	return fmt.Sprintf("%s:%d:%d-%d:%d", location.File, location.Start.Line, location.Start.Column, location.End.Line, location.End.Column)
 }

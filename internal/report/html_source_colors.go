@@ -79,3 +79,22 @@ func walkHTMLColors(length int, annotations []SourceAnnotation, yield func(start
 	}
 	return nil
 }
+
+func htmlSourceModes() []string {
+	return []string{"statement", "decision", "condition", "mcdc", "clause", "combined"}
+}
+
+func htmlStateSeverity(state string) int {
+	switch state {
+	case "covered", "both":
+		return 1
+	case "partial", "true-only", "false-only":
+		return 2
+	case "not-covered", "uncovered", "not-evaluated":
+		return 3
+	case "unknown", "unsupported", "unsupported-by-backend", "infeasible", "analysis-incomplete":
+		return 4
+	default:
+		return 0
+	}
+}
