@@ -882,49 +882,20 @@ func belowThreshold(metric analysis.MetricSummary, threshold float64) bool {
 }
 
 func writeReport(opts options, built analysis.Result, workingDir string, stdout io.Writer, sources ...[]analysis.SourceFileInput) error {
+	// Measurement finalization also writes recovered evidence after interruption.
+	return writeReportContext(context.Background(), opts, built, workingDir, stdout, sources...)
+}
+func writeReportContext(ctx context.Context, opts options, built analysis.Result, workingDir string, stdout io.Writer, sources ...[]analysis.SourceFileInput) error {
 	if opts.format == "html" {
 		outputDir := opts.output
 		if !filepath.IsAbs(outputDir) {
 			outputDir = filepath.Join(workingDir, outputDir)
 		}
-		if err := os.MkdirAll(outputDir, 0o755); err != nil {
-			return fmt.Errorf("create HTML report directory %q: %w", outputDir, err)
-		}
-		outputPath := filepath.Join(outputDir, "index.html")
-		file, err := os.CreateTemp(outputDir, ".index.html-*")
-		if err != nil {
-			return fmt.Errorf("create temporary HTML report in %q: %w", outputDir, err)
-		}
-		tempPath := file.Name()
-		cleanup := func() {
-			_ = file.Close()
-			_ = os.Remove(tempPath)
-		}
 		var originals []analysis.SourceFileInput
 		if len(sources) > 0 {
 			originals = sources[0]
 		}
-		if err := report.WriteHTMLWithSources(file, built, originals); err != nil {
-			cleanup()
-			return err
-		}
-		if err := file.Sync(); err != nil {
-			cleanup()
-			return fmt.Errorf("sync HTML report %q: %w", tempPath, err)
-		}
-		if err := file.Close(); err != nil {
-			_ = os.Remove(tempPath)
-			return fmt.Errorf("close HTML report %q: %w", outputPath, err)
-		}
-		if err := os.Chmod(tempPath, 0o644); err != nil {
-			_ = os.Remove(tempPath)
-			return fmt.Errorf("set HTML report permissions %q: %w", tempPath, err)
-		}
-		if err := os.Rename(tempPath, outputPath); err != nil {
-			_ = os.Remove(tempPath)
-			return fmt.Errorf("publish HTML report %q: %w", outputPath, err)
-		}
-		return nil
+		return report.WriteHTMLDirectory(ctx, outputDir, built, originals)
 	}
 	var contents []byte
 	var err error

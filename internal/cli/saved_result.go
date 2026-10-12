@@ -68,7 +68,10 @@ func runReport(ctx context.Context, workingDir string, args []string, stdout, st
 		return ExitInterrupted
 	}
 	built := saved.Report
-	if err := writeReport(opts, built, workingDir, stdout, saved.SourceFiles()); err != nil {
+	if err := writeReportContext(ctx, opts, built, workingDir, stdout, saved.SourceFiles()); err != nil {
+		if ctx.Err() != nil {
+			return ExitInterrupted
+		}
 		fmt.Fprintf(stderr, "gomcdc: report generation failed: %v\n", err)
 		return ExitMeasurementFailed
 	}
